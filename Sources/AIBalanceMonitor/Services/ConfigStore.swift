@@ -1,0 +1,40 @@
+import Foundation
+
+final class ConfigStore {
+    private let fileURL: URL
+
+    init(fileManager: FileManager = .default) {
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let directory = appSupport.appendingPathComponent("AIBalanceMonitor", isDirectory: true)
+        self.fileURL = directory.appendingPathComponent("config.json")
+    }
+
+    func load() throws -> AppConfig {
+        let manager = FileManager.default
+        let dirURL = fileURL.deletingLastPathComponent()
+
+        if !manager.fileExists(atPath: dirURL.path) {
+            try manager.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        }
+
+        if !manager.fileExists(atPath: fileURL.path) {
+            try save(AppConfig.default)
+            return .default
+        }
+
+        let data = try Data(contentsOf: fileURL)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let migrated = decoded.migratedWithSiteDefaults()
+        if migrated != decoded {
+            try save(migrated)
+        }
+        return migrated
+    }
+
+    func save(_ config: AppConfig) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(config)
+        try data.write(to: fileURL, options: .atomic)
+    }
+}
