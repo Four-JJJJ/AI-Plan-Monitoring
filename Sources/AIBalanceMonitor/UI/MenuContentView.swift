@@ -217,7 +217,7 @@ struct MenuContentView: View {
     private func footerButton(title: String, iconName: String, fallback: String, textColor: Color = Color.white.opacity(0.80), action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                localIcon(name: iconName, fallback: fallback)
+                localIcon(name: iconName, fallback: fallback, size: 13, tint: textColor)
                 Text(title)
                     .font(.system(size: 12))
                     .foregroundStyle(textColor)
@@ -293,20 +293,28 @@ struct MenuContentView: View {
         }
     }
 
-    private func localIcon(name: String, fallback: String) -> some View {
+    private func localIcon(name: String, fallback: String, size: CGFloat = 12, tint: Color? = nil) -> some View {
         Group {
             if let image = bundledImage(named: name) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
+                if let tint {
+                    Image(nsImage: image)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(tint)
+                } else {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                }
             } else {
                 Image(systemName: fallback)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(Color.white.opacity(0.85))
+                    .foregroundStyle(tint ?? Color.white.opacity(0.85))
             }
         }
-        .frame(width: 12, height: 12)
+        .frame(width: size, height: size)
     }
 
     private func bundledImage(named name: String) -> NSImage? {
