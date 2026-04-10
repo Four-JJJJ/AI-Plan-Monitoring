@@ -14,12 +14,12 @@ struct MenuContentView: View {
             separator
             footer
         }
-        .frame(width: 320)
+        .frame(width: 360)
         .padding(.horizontal, 12)
         .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.65))
+                .fill(Color.black.opacity(0.80))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -90,7 +90,7 @@ struct MenuContentView: View {
             }
 
             if let error {
-                Text("Error: \(error)")
+                Text(error)
                     .font(.system(size: 10))
                     .foregroundStyle(Color(hex: 0xD83E3E))
             }
@@ -132,13 +132,17 @@ struct MenuContentView: View {
                 Text(viewModel.text(.balanceLabel))
                     .font(.system(size: 10))
                     .foregroundStyle(Color.white.opacity(0.50))
-                Text(formattedBalanceNumber(remaining))
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                HStack(spacing: 2) {
+                    Text("💰")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(formattedBalanceNumber(remaining))
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.white)
             }
 
             if let error {
-                Text("Error: \(error)")
+                Text(error)
                     .font(.system(size: 10))
                     .foregroundStyle(Color(hex: 0xD83E3E))
             }
@@ -179,6 +183,8 @@ struct MenuContentView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 42, alignment: .leading)
+                    .lineLimit(1)
+                    .layoutPriority(2)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule(style: .continuous)
@@ -189,6 +195,7 @@ struct MenuContentView: View {
                     }
                 }
                 .frame(height: 4)
+                .layoutPriority(0)
             }
         }
     }
@@ -303,13 +310,13 @@ struct MenuContentView: View {
     }
 
     private func bundledImage(named name: String) -> NSImage? {
-        if let svgURL = Bundle.module.url(forResource: name, withExtension: "svg"),
-           let svgImage = NSImage(contentsOf: svgURL) {
-            return svgImage
-        }
         if let pngURL = Bundle.module.url(forResource: name, withExtension: "png"),
            let pngImage = NSImage(contentsOf: pngURL) {
             return pngImage
+        }
+        if let svgURL = Bundle.module.url(forResource: name, withExtension: "svg"),
+           let svgImage = NSImage(contentsOf: svgURL) {
+            return svgImage
         }
         return nil
     }
