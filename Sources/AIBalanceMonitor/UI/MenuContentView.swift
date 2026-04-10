@@ -63,7 +63,7 @@ struct MenuContentView: View {
         if provider.type == .codex || provider.type == .kimi {
             quotaCard(provider: provider, snapshot: snapshot, error: error)
         } else {
-            balanceCard(snapshot: snapshot, error: error, threshold: provider.threshold.lowRemaining)
+            balanceCard(provider: provider, snapshot: snapshot, error: error, threshold: provider.threshold.lowRemaining)
         }
     }
 
@@ -102,7 +102,7 @@ struct MenuContentView: View {
         )
     }
 
-    private func balanceCard(snapshot: UsageSnapshot?, error: String?, threshold: Double) -> some View {
+    private func balanceCard(provider: ProviderDescriptor, snapshot: UsageSnapshot?, error: String?, threshold: Double) -> some View {
         let remaining = snapshot?.remaining ?? 0
         let level = balanceLevel(remaining: remaining, threshold: threshold, hasError: error != nil)
         let statusText: String
@@ -121,7 +121,7 @@ struct MenuContentView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                cardTitle(provider: nil)
+                cardTitle(provider: provider)
                 Spacer()
                 Text(statusText)
                     .font(.system(size: 10))
@@ -265,7 +265,7 @@ struct MenuContentView: View {
         case .kimi:
             return "KIMI"
         case .open, .dragon:
-            return viewModel.text(.thirdPartyRelay)
+            return provider.name
         }
     }
 
