@@ -43,6 +43,18 @@ final class AppViewModel {
         }
     }
 
+    func refreshNow() {
+        let enabled = config.providers.filter(\.enabled)
+        guard !enabled.isEmpty else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            for descriptor in enabled {
+                await self.refreshProvider(descriptor, forceRefresh: true)
+            }
+        }
+    }
+
     var language: AppLanguage {
         config.language
     }
@@ -283,7 +295,7 @@ final class AppViewModel {
                 return
             }
 
-            await refreshProvider(descriptor)
+            await refreshProvider(descriptor, forceRefresh: false)
 
             let failureCount = consecutiveFailures[providerID, default: 0]
             let delay = BackoffPolicy.delaySeconds(baseInterval: descriptor.pollIntervalSec, consecutiveFailures: failureCount)
@@ -296,11 +308,11 @@ final class AppViewModel {
         }
     }
 
-    private func refreshProvider(_ descriptor: ProviderDescriptor) async {
+    private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
         let provider = providerFactory.makeProvider(for: descriptor)
 
         do {
-            let snapshot = try await provider.fetch()
+            let snapshot = try await provider.fetch(forceRefresh: forceRefresh)
             snapshots[descriptor.id] = snapshot
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0

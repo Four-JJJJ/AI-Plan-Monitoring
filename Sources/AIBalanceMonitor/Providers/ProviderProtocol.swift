@@ -3,6 +3,13 @@ import Foundation
 protocol UsageProvider: Sendable {
     var descriptor: ProviderDescriptor { get }
     func fetch() async throws -> UsageSnapshot
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot
+}
+
+extension UsageProvider {
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
+        try await fetch()
+    }
 }
 
 enum ProviderError: Error, LocalizedError {

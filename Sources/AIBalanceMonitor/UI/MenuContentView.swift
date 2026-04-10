@@ -203,7 +203,7 @@ struct MenuContentView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             footerButton(title: viewModel.text(.refreshNow), iconName: "refresh_icon", fallback: "arrow.clockwise") {
-                viewModel.restartPolling()
+                viewModel.refreshNow()
             }
             footerButton(title: viewModel.text(.settings).replacingOccurrences(of: "...", with: ""), iconName: "settings_icon", fallback: "gearshape") {
                 SettingsWindowController.shared.show(viewModel: viewModel)

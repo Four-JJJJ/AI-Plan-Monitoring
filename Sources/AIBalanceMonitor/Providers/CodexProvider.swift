@@ -4,7 +4,7 @@ import Dispatch
 final class CodexProvider: UsageProvider, @unchecked Sendable {
     private static let cache = CodexSnapshotCache()
     private static let gate = CodexFetchGate()
-    private let cacheTTL: TimeInterval = 300
+    private let cacheTTL: TimeInterval = 15
 
     let descriptor: ProviderDescriptor
 
@@ -13,8 +13,13 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     }
 
     func fetch() async throws -> UsageSnapshot {
+        try await fetch(forceRefresh: false)
+    }
+
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
         try await Self.gate.withPermit { [self] in
-            if let cached = await Self.cache.snapshotIfFresh(ttl: self.cacheTTL) {
+            if !forceRefresh,
+               let cached = await Self.cache.snapshotIfFresh(ttl: self.cacheTTL) {
                 return cached
             }
 
