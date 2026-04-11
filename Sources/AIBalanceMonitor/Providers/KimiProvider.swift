@@ -26,6 +26,7 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         let baseURL = URL(string: descriptor.baseURL ?? "https://www.kimi.com")!
         let resolved = try (tokenResolverOverride?() ?? resolveToken())
         let authToken = Self.normalizeToken(resolved.token)
+        let sessionInfo = Self.decodeSessionInfo(from: authToken)
 
         var request = URLRequest(url: baseURL.appending(path: "/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages"))
         request.httpMethod = "POST"
@@ -34,6 +35,24 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("kimi-auth=\(authToken)", forHTTPHeaderField: "Cookie")
+        request.setValue("https://www.kimi.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://www.kimi.com/code/console", forHTTPHeaderField: "Referer")
+        request.setValue(Locale.preferredLanguages.first ?? "zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("1", forHTTPHeaderField: "connect-protocol-version")
+        request.setValue(Locale.current.identifier, forHTTPHeaderField: "x-language")
+        request.setValue("web", forHTTPHeaderField: "x-msh-platform")
+        request.setValue(TimeZone.current.identifier, forHTTPHeaderField: "r-timezone")
+        if let deviceId = sessionInfo?.deviceId, !deviceId.isEmpty {
+            request.setValue(deviceId, forHTTPHeaderField: "x-msh-device-id")
+        }
+        if let sessionId = sessionInfo?.sessionId, !sessionId.isEmpty {
+            request.setValue(sessionId, forHTTPHeaderField: "x-msh-session-id")
+        }
+        if let trafficId = sessionInfo?.trafficId, !trafficId.isEmpty {
+            request.setValue(trafficId, forHTTPHeaderField: "x-traffic-id")
+        }
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -101,6 +120,24 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         }
 
         let note = "Weekly \(Int(weekly.remaining))/\(Int(weekly.limit)) | 5h \(Int(window.remaining))/\(Int(window.limit))"
+        let quotaWindows = [
+            UsageQuotaWindow(
+                id: "\(descriptor.id)-weekly",
+                title: "Weekly",
+                remainingPercent: weeklyPercent,
+                usedPercent: max(0, 100 - weeklyPercent),
+                resetAt: Self.parseISO8601ToEpoch(weekly.resetTime).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                kind: .weekly
+            ),
+            UsageQuotaWindow(
+                id: "\(descriptor.id)-5h",
+                title: "5h",
+                remainingPercent: windowPercent,
+                usedPercent: max(0, 100 - windowPercent),
+                resetAt: Self.parseISO8601ToEpoch(window.resetTime).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                kind: .session
+            )
+        ]
 
         return UsageSnapshot(
             source: descriptor.id,
@@ -111,6 +148,10 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
             unit: "%",
             updatedAt: now,
             note: note,
+            quotaWindows: quotaWindows,
+            sourceLabel: authSource,
+            accountLabel: nil,
+            extras: [:],
             rawMeta: rawMeta
         )
     }
@@ -209,7 +250,24 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         if let details = root["details"] as? String {
             return details.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if let message = (root["error"] as? [String: Any])?["message"] as? String {
+            return message.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         return nil
+    }
+
+    private static func decodeSessionInfo(from token: String) -> KimiSessionInfo? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        guard let payloadData = KimiJWT.decodeBase64URL(String(parts[1])),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            return nil
+        }
+        return KimiSessionInfo(
+            deviceId: payload["device_id"] as? String,
+            sessionId: payload["ssid"] as? String,
+            trafficId: payload["sub"] as? String
+        )
     }
 }
 
@@ -283,7 +341,7 @@ enum KimiJWT {
         return exp <= now.timeIntervalSince1970 + 5
     }
 
-    private static func decodeBase64URL(_ value: String) -> Data? {
+    static func decodeBase64URL(_ value: String) -> Data? {
         var base64 = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         let remainder = base64.count % 4
         if remainder != 0 {
@@ -291,4 +349,10 @@ enum KimiJWT {
         }
         return Data(base64Encoded: base64)
     }
+}
+
+private struct KimiSessionInfo {
+    let deviceId: String?
+    let sessionId: String?
+    let trafficId: String?
 }

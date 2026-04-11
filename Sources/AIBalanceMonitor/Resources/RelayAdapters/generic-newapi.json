@@ -1,0 +1,46 @@
+{
+  "id": "generic-newapi",
+  "displayName": "Generic New API",
+  "match": {
+    "hostPatterns": ["*"],
+    "defaultDisplayName": "Generic New API",
+    "defaultTokenChannelEnabled": true,
+    "defaultBalanceChannelEnabled": false
+  },
+  "setup": {
+    "requiredInputs": ["displayName", "baseURL", "quotaAuth"],
+    "quotaAuthHint": {
+      "zhHans": "填写站点提供的 API Key 或 sk- Token，支持 `sk-...` 和 `Bearer sk-...` 两种格式。",
+      "en": "Enter the site's API key or sk token. Both `sk-...` and `Bearer sk-...` are supported."
+    },
+    "balanceAuthHint": {
+      "zhHans": "如果你开启账户余额通道，这里通常填后台 access token；少数站点需要粘贴完整 Cookie。",
+      "en": "If account balance is enabled, this is usually a dashboard access token; some sites require the full Cookie instead."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedBearer" },
+    { "kind": "browserBearer" },
+    { "kind": "savedCookieHeader" },
+    { "kind": "browserCookieHeader" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api/user/self",
+    "authHeader": "Authorization",
+    "authScheme": "Bearer",
+    "userIDHeader": "New-Api-User"
+  },
+  "tokenRequest": {
+    "usagePath": "/api/usage/token/",
+    "subscriptionPath": "/v1/dashboard/billing/subscription",
+    "billingUsagePath": "/v1/dashboard/billing/usage"
+  },
+  "extract": {
+    "success": "success",
+    "remaining": "data.quota",
+    "used": "data.used_quota",
+    "limit": "data.request_quota",
+    "unit": "quota"
+  }
+}

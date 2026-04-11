@@ -1,0 +1,44 @@
+{
+  "id": "minimax",
+  "displayName": "platform.minimaxi.com",
+  "match": {
+    "hostPatterns": ["platform.minimaxi.com", "www.minimaxi.com", "minimaxi.com"],
+    "defaultDisplayName": "platform.minimaxi.com",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "setup": {
+    "recommendedBaseURL": "https://platform.minimaxi.com",
+    "requiredInputs": ["balanceAuth", "userID"],
+    "balanceAuthHint": {
+      "zhHans": "粘贴浏览器请求里的完整 Cookie。模板会自动带上 `Origin` 和 `Referer` 等固定请求头。",
+      "en": "Paste the full Cookie value from your browser request. The template already adds the fixed `Origin` and `Referer` headers."
+    },
+    "userIDHint": {
+      "zhHans": "这里填写请求 URL 里的 `GroupId`，例如 `/backend/account?GroupId=2026...` 里的那一串数字。",
+      "en": "Enter the `GroupId` from the request URL, for example the numeric value in `/backend/account?GroupId=2026...`."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedCookieHeader" },
+    { "kind": "browserCookieHeader" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "https://www.minimaxi.com/account/query_balance?GroupId={{userID}}",
+    "authHeader": "Cookie",
+    "authScheme": "",
+    "headers": {
+      "Origin": "https://platform.minimaxi.com",
+      "Referer": "https://platform.minimaxi.com/",
+      "Accept": "application/json, text/plain, */*"
+    }
+  },
+  "extract": {
+    "remaining": "coalesce(data.available_amount,data.balance,data.availableBalance,data.accountBalance,data.currentBalance,data.group.balance,data.groupBalance,data.wallet.balance,data.walletBalance,data.remainBalance,data.remainingBalance,available_amount,balance,availableBalance,accountBalance,currentBalance,groupBalance,walletBalance,remainBalance,remainingBalance)",
+    "used": "coalesce(data.used,data.monthlyUsage,data.monthlySpend,data.totalUsage,data.totalSpend,used,monthlyUsage,monthlySpend,totalUsage,totalSpend)",
+    "limit": "coalesce(data.limit,data.totalLimit,data.quota,data.totalQuota,limit,totalLimit,quota,totalQuota)",
+    "unit": "\"CNY\"",
+    "accountLabel": "coalesce(data.groupName,data.group.name,data.accountName,data.name,groupName,accountName,name)"
+  }
+}

@@ -23,19 +23,44 @@ struct SettingsView: View {
     @State private var limitPathInputs: [String: String] = [:]
     @State private var successPathInputs: [String: String] = [:]
     @State private var unitInputs: [String: String] = [:]
-    @State private var kimiAuthModeInputs: [String: KimiAuthMode] = [:]
-    @State private var kimiAutoCookieInputs: [String: Bool] = [:]
-    @State private var kimiManualTokenInputs: [String: String] = [:]
-    @State private var kimiDetectResult: [String: String] = [:]
+    @State private var officialSourceModeInputs: [String: OfficialSourceMode] = [:]
+    @State private var officialWebModeInputs: [String: OfficialWebMode] = [:]
+    @State private var officialCookieInputs: [String: String] = [:]
+    @State private var relayTestResult: [String: String] = [:]
+    @State private var relayAdvancedExpanded: [String: Bool] = [:]
+    @State private var selectedRelayTemplateInputs: [String: String] = [:]
+    @State private var relayCredentialModeInputs: [String: RelayCredentialMode] = [:]
 
     @State private var newProviderName = ""
     @State private var newProviderBaseURL = "https://"
+    @State private var newProviderTemplateID = "generic-newapi"
+    @State private var selectedGroup: ProviderGroup = .official
+    @State private var selectedProviderID: String?
+    private let panelBackground = Color(hex: 0x232325)
+    private let cardBackground = Color.black
+    private let outlineColor = Color.white.opacity(0.12)
+
+    private enum ProviderGroup: String, CaseIterable, Identifiable {
+        case official
+        case thirdParty
+
+        var id: String { rawValue }
+    }
+
+    private struct RelayTemplatePreset: Identifiable {
+        let manifest: RelayAdapterManifest
+        let suggestedBaseURL: String?
+
+        var id: String { manifest.id }
+        var displayName: String { manifest.displayName }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(viewModel.text(.settingsTitle))
                     .font(.headline)
+                    .foregroundStyle(.white)
                 Spacer()
                 Button(viewModel.text(.done)) {
                     if let onDone {
@@ -47,30 +72,145 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    generalSection
-                    addRelaySection
-                    providersSection
-                }
-                .padding(.vertical, 2)
+            topGeneralSection
+
+            HStack(spacing: 12) {
+                sidebar
+                    .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
+
+                detailPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(cardBackground)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(outlineColor, lineWidth: 1)
+                    )
             }
         }
-        .glassPanel(cornerRadius: 20)
-        .padding(10)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(panelBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+        .environment(\.colorScheme, .dark)
         .onAppear {
             seedInputsFromConfig()
+            syncSelection()
         }
         .onChange(of: viewModel.config.providers.map(\.id)) { _, _ in
             seedInputsFromConfig()
+            syncSelection()
+        }
+        .onChange(of: selectedGroup) { _, _ in
+            syncSelection()
         }
     }
 
-    private var generalSection: some View {
+    private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(viewModel.text(.general))
-                .font(.subheadline.weight(.semibold))
+            Picker("", selection: $selectedGroup) {
+                Text(viewModel.text(.officialTab)).tag(ProviderGroup.official)
+                Text(viewModel.text(.thirdPartyTab)).tag(ProviderGroup.thirdParty)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
 
+            List(selection: $selectedProviderID) {
+                if !enabledSidebarProviders.isEmpty {
+                    Section {
+                        ForEach(enabledSidebarProviders) { provider in
+                            sidebarProviderRow(provider)
+                                .tag(provider.id)
+                        }
+                        .onMove(perform: moveEnabledProviders)
+                    }
+                }
+                if !disabledSidebarProviders.isEmpty {
+                    Section {
+                        ForEach(disabledSidebarProviders) { provider in
+                            sidebarProviderRow(provider)
+                                .tag(provider.id)
+                        }
+                    }
+                }
+            }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .background(cardBackground)
+
+            if selectedGroup == .thirdParty {
+                addRelaySection
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private func sidebarProviderRow(_ provider: ProviderDescriptor) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { provider.enabled },
+                set: { viewModel.setEnabled($0, providerID: provider.id) }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+
+            providerIcon(for: provider, size: 12)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sidebarDisplayName(for: provider))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(provider.enabled ? viewModel.text(.toggleOn) : viewModel.text(.toggleOff))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedProviderID = provider.id
+        }
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let selectedProvider {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    providerSettingsCard(selectedProvider)
+                }
+            }
+        } else {
+            VStack {
+                Spacer()
+                Text(viewModel.text(.selectProviderHint))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+    }
+
+    private var topGeneralSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(viewModel.text(.language))
                     .foregroundStyle(.secondary)
@@ -84,33 +224,129 @@ struct SettingsView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 180)
+                Spacer(minLength: 8)
             }
+
+            HStack(spacing: 8) {
+                Toggle(
+                    viewModel.text(.relaySimpleMode),
+                    isOn: Binding(
+                        get: { viewModel.simplifiedRelayConfig },
+                        set: { viewModel.setSimplifiedRelayConfig($0) }
+                    )
+                )
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
+
+            Text(viewModel.text(.relaySimpleModeHint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .glassCard(cornerRadius: 12)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
     }
 
     private var addRelaySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let simpleMode = viewModel.simplifiedRelayConfig
+        let selectedPreset = relayTemplatePresets.first(where: { $0.id == newProviderTemplateID })
+        let selectedManifest = selectedPreset?.manifest
+        let selectedRequiredInputs = selectedManifest.map {
+            relayRequiredInputs(
+                for: $0,
+                tokenChannelEnabled: $0.tokenRequest != nil && $0.match.defaultTokenChannelEnabled,
+                accountChannelEnabled: $0.match.defaultBalanceChannelEnabled,
+                showsManualUserID: relayTemplateNeedsManualUserID($0)
+            )
+        } ?? [.displayName, .baseURL]
+        let showNameField = !simpleMode || selectedRequiredInputs.contains(.displayName)
+        let showBaseURLField = !simpleMode || selectedRequiredInputs.contains(.baseURL)
+
+        return VStack(alignment: .leading, spacing: 10) {
             Text(viewModel.text(.addRelayProvider))
                 .font(.subheadline.weight(.semibold))
 
+            Picker(viewModel.text(.relayTemplate), selection: Binding(
+                get: { newProviderTemplateID },
+                set: { applyNewRelayTemplate($0) }
+            )) {
+                ForEach(relayTemplatePresets) { preset in
+                    Text(preset.displayName).tag(preset.id)
+                }
+            }
+            .pickerStyle(.menu)
+
             HStack(spacing: 8) {
-                TextField(viewModel.text(.providerName), text: $newProviderName)
-                    .textFieldStyle(.roundedBorder)
-                TextField(viewModel.text(.baseURL), text: $newProviderBaseURL)
-                    .textFieldStyle(.roundedBorder)
+                if showNameField {
+                    TextField(viewModel.text(.providerName), text: $newProviderName)
+                        .textFieldStyle(.roundedBorder)
+                }
+                if showBaseURLField {
+                    TextField(viewModel.text(.baseURL), text: $newProviderBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                }
                 Button(viewModel.text(.addProvider)) {
-                    viewModel.addOpenRelay(name: newProviderName, baseURL: newProviderBaseURL)
+                    let beforeIDs = Set(viewModel.config.providers.map(\.id))
+                    viewModel.addOpenRelay(
+                        name: resolvedRelayNameInput(
+                            typedName: newProviderName,
+                            manifest: selectedManifest
+                        ),
+                        baseURL: resolvedRelayBaseURLInput(
+                            typedBaseURL: newProviderBaseURL,
+                            manifest: selectedManifest
+                        ),
+                        preferredAdapterID: newProviderTemplateID
+                    )
+                    if let added = viewModel.config.providers.first(where: { !beforeIDs.contains($0.id) }) {
+                        selectedGroup = .thirdParty
+                        selectedProviderID = added.id
+                    }
                     newProviderName = ""
+                    applyNewRelayTemplate(newProviderTemplateID)
                 }
                 .buttonStyle(.borderedProminent)
             }
 
-            Text(viewModel.text(.relayRequiredFieldsHint))
+            if simpleMode {
+                if !showNameField, let selectedManifest {
+                    Text("\(viewModel.text(.providerName)): \(selectedManifest.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !showBaseURLField, let selectedManifest, let suggestedBaseURL = suggestedBaseURL(for: selectedManifest) {
+                    Text("Base URL: \(suggestedBaseURL)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let preset = selectedPreset {
+                Text(relayRequiredInputSummary(
+                    manifest: preset.manifest,
+                    tokenChannelEnabled: preset.manifest.tokenRequest != nil && preset.manifest.match.defaultTokenChannelEnabled,
+                    accountChannelEnabled: preset.manifest.match.defaultBalanceChannelEnabled,
+                    showsManualUserID: relayTemplateNeedsManualUserID(preset.manifest)
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Text(relayFixedTemplateSummary(for: preset.manifest))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(viewModel.text(.relayTemplatePresetHint))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .glassCard(cornerRadius: 12)
     }
 
     private var providersSection: some View {
@@ -118,7 +354,17 @@ struct SettingsView: View {
             Text(viewModel.text(.providers))
                 .font(.subheadline.weight(.semibold))
 
-            ForEach(viewModel.config.providers) { provider in
+            Text(viewModel.text(.officialProviders))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(viewModel.config.providers.filter { $0.family == .official }) { provider in
+                providerSettingsCard(provider)
+            }
+
+            Text(viewModel.text(.thirdPartyProviders))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(viewModel.config.providers.filter { $0.family == .thirdParty }) { provider in
                 providerSettingsCard(provider)
             }
         }
@@ -128,18 +374,13 @@ struct SettingsView: View {
     private func providerSettingsCard(_ provider: ProviderDescriptor) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(provider.name)
+                HStack(spacing: 8) {
+                    providerIcon(for: provider, size: 14)
+                    Text(sidebarDisplayName(for: provider))
+                }
                     .font(.headline)
                 Spacer()
-                let enabledBinding = Binding(
-                    get: { provider.enabled },
-                    set: { viewModel.setEnabled($0, providerID: provider.id) }
-                )
-                Toggle(viewModel.text(.enabled), isOn: enabledBinding)
-                .toggleStyle(.switch)
-                .tint(.green)
-                .labelsHidden()
-                toggleStateBadge(isOn: enabledBinding.wrappedValue)
+                toggleStateBadge(isOn: provider.enabled)
             }
 
             HStack(spacing: 8) {
@@ -158,184 +399,420 @@ struct SettingsView: View {
                     .frame(width: 40, alignment: .trailing)
             }
 
-            if provider.type == .open || provider.type == .dragon {
+            HStack(spacing: 8) {
+                Text(viewModel.text(.statusBarDisplayProvider))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(
+                    get: { viewModel.isStatusBarProvider(providerID: provider.id) },
+                    set: { newValue in
+                        if newValue {
+                            viewModel.setStatusBarProvider(providerID: provider.id)
+                        }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .tint(.blue)
+                .labelsHidden()
+            }
+
+            if provider.family == .official {
+                officialConfigSection(provider)
+            } else if provider.isRelay {
                 openRelayConfigSection(provider)
-            } else if provider.type == .kimi {
-                kimiConfigSection(provider)
             }
         }
-        .glassCard(cornerRadius: 12)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(panelBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func officialConfigSection(_ provider: ProviderDescriptor) -> some View {
+        let supportedSourceModes = provider.supportedOfficialSourceModes
+        let supportedWebModes = provider.supportedOfficialWebModes
+        let sourceBinding = Binding(
+            get: {
+                let current = officialSourceModeInputs[provider.id] ?? (provider.officialConfig?.sourceMode ?? .auto)
+                return supportedSourceModes.contains(current) ? current : (supportedSourceModes.first ?? .auto)
+            },
+            set: { officialSourceModeInputs[provider.id] = $0 }
+        )
+        let webBinding = Binding(
+            get: {
+                let current = officialWebModeInputs[provider.id] ?? (provider.officialConfig?.webMode ?? .disabled)
+                return supportedWebModes.contains(current) ? current : (supportedWebModes.first ?? .disabled)
+            },
+            set: { officialWebModeInputs[provider.id] = $0 }
+        )
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(viewModel.text(.sourceMode))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: sourceBinding) {
+                    ForEach(supportedSourceModes) { mode in
+                        Text(sourceModeLabel(mode))
+                            .tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+            }
+
+            if supportedWebModes.count > 1 {
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.webMode))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: webBinding) {
+                        ForEach(supportedWebModes) { mode in
+                            Text(webModeLabel(mode))
+                                .tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 320)
+                }
+            }
+
+            if provider.supportsOfficialManualCookieInput {
+                HStack {
+                    SecureField(viewModel.text(.manualCookieHeader), text: Binding(
+                        get: { officialCookieInputs[provider.id, default: ""] },
+                        set: { officialCookieInputs[provider.id] = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+
+                    Button(viewModel.text(.saveToken)) {
+                        let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !raw.isEmpty else { return }
+                        _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                        officialCookieInputs[provider.id] = ""
+                        viewModel.restartPolling()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text(viewModel.hasOfficialManualCookie(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
+                        .font(.caption)
+                        .foregroundStyle(viewModel.hasOfficialManualCookie(for: provider) ? .green : .secondary)
+                }
+            }
+
+            Text(viewModel.text(.officialAutoDiscoveryHint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button(viewModel.text(.saveConfig)) {
+                viewModel.updateOfficialProviderSettings(
+                    providerID: provider.id,
+                    sourceMode: sourceBinding.wrappedValue ?? supportedSourceModes.first ?? .auto,
+                    webMode: webBinding.wrappedValue ?? supportedWebModes.first ?? .disabled
+                )
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func sourceModeLabel(_ mode: OfficialSourceMode) -> String {
+        switch mode {
+        case .auto: return "Auto"
+        case .api: return "API"
+        case .cli: return "CLI"
+        case .web: return "Web"
+        }
+    }
+
+    private func webModeLabel(_ mode: OfficialWebMode) -> String {
+        switch mode {
+        case .disabled: return viewModel.text(.webDisabled)
+        case .autoImport: return viewModel.text(.webAutoImport)
+        case .manual: return viewModel.text(.webManual)
+        }
     }
 
     @ViewBuilder
     private func openRelayConfigSection(_ provider: ProviderDescriptor) -> some View {
-        let accountAuth = provider.openConfig?.accountBalance?.auth
+        let relayViewConfig = provider.relayViewConfig
+        let accountAuth = relayViewConfig?.accountBalance?.auth
+        let simpleMode = viewModel.simplifiedRelayConfig
+        let selectedTemplateID = selectedRelayTemplateInputs[provider.id]
+            ?? provider.relayConfig?.adapterID
+            ?? provider.relayManifest?.id
+            ?? "generic-newapi"
+        let selectedTemplate = relayTemplatePresets.first(where: { $0.id == selectedTemplateID })?.manifest
+            ?? provider.relayManifest
+            ?? RelayAdapterRegistry.shared.manifest(for: provider.baseURL ?? "", preferredID: selectedTemplateID)
+        let tokenChannelEnabled = tokenUsageEnabledInputs[provider.id]
+            ?? relayViewConfig?.tokenUsageEnabled
+            ?? selectedTemplate.match.defaultTokenChannelEnabled
+        let accountChannelEnabled = accountEnabledInputs[provider.id]
+            ?? relayViewConfig?.accountBalance?.enabled
+            ?? selectedTemplate.match.defaultBalanceChannelEnabled
+        let tokenTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
+        let balanceTemplate = relayCredentialTemplate(
+            authHeader: selectedTemplate.balanceRequest.authHeader ?? relayViewConfig?.accountBalance?.authHeader,
+            authScheme: selectedTemplate.balanceRequest.authScheme ?? relayViewConfig?.accountBalance?.authScheme
+        )
+        let showTokenCredential = tokenChannelEnabled
+        let showBalanceCredential = accountChannelEnabled
+        let hasUserIDHeader = !(selectedTemplate.balanceRequest.userIDHeader?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let existingUserID = relayViewConfig?.accountBalance?.userID ?? ""
+        let typedUserID = userIDInputs[provider.id] ?? ""
+        let showUserIDField = showBalanceCredential &&
+            selectedTemplate.balanceRequest.userID == nil &&
+            (hasUserIDHeader || !existingUserID.isEmpty || !typedUserID.isEmpty)
+        let currentName = providerNameInputs[provider.id] ?? provider.name
+        let currentBaseURL = baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
+        let showNameField = !simpleMode || requiresDisplayNameInput(for: selectedTemplate, currentName: currentName)
+        let showBaseURLField = !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
+        let credentialMode = relayCredentialModeInputs[provider.id]
+            ?? provider.relayConfig?.balanceCredentialMode
+            ?? .manualPreferred
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                TextField(viewModel.text(.providerName), text: Binding(
-                    get: { providerNameInputs[provider.id] ?? provider.name },
-                    set: { providerNameInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                TextField(viewModel.text(.baseURL), text: Binding(
-                    get: { baseURLInputs[provider.id] ?? (provider.baseURL ?? "") },
-                    set: { baseURLInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+                Text(viewModel.text(.relayTemplate))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { selectedTemplateID },
+                    set: { selectedRelayTemplateInputs[provider.id] = $0 }
+                )) {
+                    ForEach(relayTemplatePresets) { preset in
+                        Text(preset.displayName).tag(preset.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
             }
 
-            let tokenChannelBinding = Binding(
-                get: { tokenUsageEnabledInputs[provider.id] ?? (provider.openConfig?.tokenUsageEnabled ?? true) },
-                set: { tokenUsageEnabledInputs[provider.id] = $0 }
-            )
-            labeledToggle(viewModel.text(.enableTokenChannel), isOn: tokenChannelBinding)
+            if showNameField || showBaseURLField {
+                HStack(spacing: 8) {
+                    if showNameField {
+                        TextField(viewModel.text(.providerName), text: Binding(
+                            get: { providerNameInputs[provider.id] ?? provider.name },
+                            set: { providerNameInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
 
-            HStack {
-                SecureField(viewModel.text(.pasteToken), text: Binding(
-                    get: { tokenInputs[provider.id, default: ""] },
-                    set: { tokenInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                Button(viewModel.text(.saveToken)) {
-                    let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !token.isEmpty else { return }
-                    _ = viewModel.saveToken(token, for: provider)
-                    tokenInputs[provider.id] = ""
-                    viewModel.restartPolling()
+                    if showBaseURLField {
+                        TextField(viewModel.text(.baseURL), text: Binding(
+                            get: { baseURLInputs[provider.id] ?? (provider.baseURL ?? "") },
+                            set: { baseURLInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
                 }
-                .buttonStyle(.bordered)
-
-                Text(viewModel.hasToken(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
-                    .font(.caption)
-                    .foregroundStyle(viewModel.hasToken(for: provider) ? .green : .secondary)
             }
 
-            Divider()
-
-            let accountChannelBinding = Binding(
-                get: { accountEnabledInputs[provider.id] ?? (provider.openConfig?.accountBalance?.enabled ?? false) },
-                set: { accountEnabledInputs[provider.id] = $0 }
-            )
-            labeledToggle(viewModel.text(.enableAccountChannel), isOn: accountChannelBinding)
-
-            HStack {
-                SecureField(viewModel.text(.pasteSystemToken), text: Binding(
-                    get: { systemTokenInputs[provider.id, default: ""] },
-                    set: { systemTokenInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                Button(viewModel.text(.saveToken)) {
-                    guard let accountAuth else { return }
-                    let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !token.isEmpty else { return }
-                    _ = viewModel.saveToken(token, auth: accountAuth)
-                    systemTokenInputs[provider.id] = ""
-                    viewModel.restartPolling()
-                }
-                .buttonStyle(.bordered)
-
-                if let accountAuth {
-                    Text(viewModel.hasToken(auth: accountAuth) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
+            if simpleMode {
+                if !showNameField {
+                    Text("\(viewModel.text(.providerName)): \(selectedTemplate.displayName)")
                         .font(.caption)
-                        .foregroundStyle(viewModel.hasToken(auth: accountAuth) ? .green : .secondary)
+                        .foregroundStyle(.secondary)
+                }
+                if !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
+                    Text("Base URL: \(suggestedBaseURL)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            HStack(spacing: 8) {
-                TextField(viewModel.text(.authHeader), text: Binding(
-                    get: { authHeaderInputs[provider.id] ?? (provider.openConfig?.accountBalance?.authHeader ?? "Authorization") },
-                    set: { authHeaderInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                TextField(viewModel.text(.authScheme), text: Binding(
-                    get: { authSchemeInputs[provider.id] ?? (provider.openConfig?.accountBalance?.authScheme ?? "Bearer") },
-                    set: { authSchemeInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-            }
-
-            HStack(spacing: 8) {
+            if showUserIDField {
                 TextField(viewModel.text(.userID), text: Binding(
-                    get: { userIDInputs[provider.id] ?? (provider.openConfig?.accountBalance?.userID ?? "") },
+                    get: { userIDInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userID ?? "") },
                     set: { userIDInputs[provider.id] = $0 }
                 ))
                 .textFieldStyle(.roundedBorder)
 
-                TextField(viewModel.text(.userIDHeader), text: Binding(
-                    get: { userHeaderInputs[provider.id] ?? (provider.openConfig?.accountBalance?.userIDHeader ?? "New-Api-User") },
-                    set: { userHeaderInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+                if let userIDHint = relaySetupHint(for: selectedTemplate, field: .userID) {
+                    Text(userIDHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if showBalanceCredential {
+                Text(relayCredentialSectionTitle(isAccount: true, templateKind: balanceTemplate.kind))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    SecureField(balanceTemplate.placeholder, text: Binding(
+                        get: { systemTokenInputs[provider.id, default: ""] },
+                        set: { systemTokenInputs[provider.id] = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+
+                    Button(relayCredentialSaveLabel(templateKind: balanceTemplate.kind)) {
+                        guard let accountAuth else { return }
+                        let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !token.isEmpty else { return }
+                        _ = viewModel.saveToken(token, auth: accountAuth)
+                        systemTokenInputs[provider.id] = ""
+                        viewModel.restartPolling()
+                    }
+                    .buttonStyle(.bordered)
+
+                    if let accountAuth {
+                        Text(viewModel.hasToken(auth: accountAuth) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
+                            .font(.caption)
+                            .foregroundStyle(viewModel.hasToken(auth: accountAuth) ? .green : .secondary)
+                    }
+                }
+
+                Text(balanceTemplate.hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let balanceSetupHint = relaySetupHint(for: selectedTemplate, field: .balanceAuth) {
+                    Text(balanceSetupHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(relayCredentialLookupHint(templateKind: balanceTemplate.kind))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if showTokenCredential {
+                Text(relayCredentialSectionTitle(isAccount: false, templateKind: tokenTemplate.kind))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    SecureField(tokenTemplate.placeholder, text: Binding(
+                        get: { tokenInputs[provider.id, default: ""] },
+                        set: { tokenInputs[provider.id] = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+
+                    Button(relayCredentialSaveLabel(templateKind: tokenTemplate.kind)) {
+                        let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !token.isEmpty else { return }
+                        _ = viewModel.saveToken(token, for: provider)
+                        tokenInputs[provider.id] = ""
+                        viewModel.restartPolling()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text(viewModel.hasToken(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
+                        .font(.caption)
+                        .foregroundStyle(viewModel.hasToken(for: provider) ? .green : .secondary)
+                }
+
+                Text(tokenTemplate.hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let quotaSetupHint = relaySetupHint(for: selectedTemplate, field: .quotaAuth) {
+                    Text(quotaSetupHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(relayCredentialLookupHint(templateKind: tokenTemplate.kind))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {
-                TextField(viewModel.text(.endpointPath), text: Binding(
-                    get: { endpointPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.endpointPath ?? "/api/user/self") },
-                    set: { endpointPathInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                TextField(viewModel.text(.unit), text: Binding(
-                    get: { unitInputs[provider.id] ?? (provider.openConfig?.accountBalance?.unit ?? "quota") },
-                    set: { unitInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+                Text(viewModel.text(.credentialMode))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { credentialMode },
+                    set: { relayCredentialModeInputs[provider.id] = $0 }
+                )) {
+                    ForEach(RelayCredentialMode.allCases) { mode in
+                        Text(relayCredentialModeLabel(mode)).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
             }
 
-            HStack(spacing: 8) {
-                TextField(viewModel.text(.remainingPath), text: Binding(
-                    get: { remainingPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.remainingJSONPath ?? "data.quota") },
-                    set: { remainingPathInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+            Text(viewModel.text(.credentialModeHint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-                TextField(viewModel.text(.usedPath), text: Binding(
-                    get: { usedPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.usedJSONPath ?? "") },
-                    set: { usedPathInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Text("\(viewModel.text(.matchedAdapter)): \(selectedTemplate.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let authSource = viewModel.relayAuthSource(for: provider.id) {
+                    Text("\(viewModel.text(.authSourceLabel)): \(authSource)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            HStack(spacing: 8) {
-                TextField(viewModel.text(.limitPath), text: Binding(
-                    get: { limitPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.limitJSONPath ?? "") },
-                    set: { limitPathInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+            Text(relayRequiredInputSummary(
+                manifest: selectedTemplate,
+                tokenChannelEnabled: showTokenCredential,
+                accountChannelEnabled: showBalanceCredential,
+                showsManualUserID: showUserIDField
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
-                TextField(viewModel.text(.successPath), text: Binding(
-                    get: { successPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.successJSONPath ?? "") },
-                    set: { successPathInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+            Text(relayFixedTemplateSummary(for: selectedTemplate))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if simpleMode {
+                Text(viewModel.text(.relaySimpleModeHint))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {
                 Button(viewModel.text(.saveConfig)) {
                     viewModel.updateOpenProviderSettings(
                         providerID: provider.id,
-                        name: providerNameInputs[provider.id] ?? provider.name,
-                        baseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
-                        tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? (provider.openConfig?.tokenUsageEnabled ?? true),
-                        accountEnabled: accountEnabledInputs[provider.id] ?? (provider.openConfig?.accountBalance?.enabled ?? false),
-                        authHeader: authHeaderInputs[provider.id] ?? (provider.openConfig?.accountBalance?.authHeader ?? "Authorization"),
-                        authScheme: authSchemeInputs[provider.id] ?? (provider.openConfig?.accountBalance?.authScheme ?? "Bearer"),
-                        userID: userIDInputs[provider.id] ?? (provider.openConfig?.accountBalance?.userID ?? ""),
-                        userIDHeader: userHeaderInputs[provider.id] ?? (provider.openConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
-                        endpointPath: endpointPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
-                        remainingJSONPath: remainingPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
-                        usedJSONPath: usedPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.usedJSONPath ?? ""),
-                        limitJSONPath: limitPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.limitJSONPath ?? ""),
-                        successJSONPath: successPathInputs[provider.id] ?? (provider.openConfig?.accountBalance?.successJSONPath ?? ""),
-                        unit: unitInputs[provider.id] ?? (provider.openConfig?.accountBalance?.unit ?? "quota")
+                        name: resolvedRelayNameInput(
+                            typedName: providerNameInputs[provider.id] ?? provider.name,
+                            manifest: selectedTemplate
+                        ),
+                        baseURL: resolvedRelayBaseURLInput(
+                            typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
+                            manifest: selectedTemplate
+                        ),
+                        preferredAdapterID: selectedTemplateID,
+                        balanceCredentialMode: relayCredentialModeInputs[provider.id]
+                            ?? provider.relayConfig?.balanceCredentialMode
+                            ?? .manualPreferred,
+                        tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
+                        accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
+                        authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
+                        authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
+                        userID: userIDInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userID ?? ""),
+                        userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
+                        endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
+                        remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
+                        usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
+                        limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
+                        successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
+                        unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
                     )
                 }
                 .buttonStyle(.borderedProminent)
+
+                Button(viewModel.text(.testConnection)) {
+                    Task {
+                        relayTestResult[provider.id] = await viewModel.testRelayConnection(providerID: provider.id)
+                    }
+                }
+                .buttonStyle(.bordered)
 
                 if provider.id != "open-ailinyu" {
                     Button(viewModel.text(.removeProvider), role: .destructive) {
@@ -344,104 +821,539 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                 }
             }
+
+            if let relayTestResult = relayTestResult[provider.id], !relayTestResult.isEmpty {
+                Text(relayTestResult)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            DisclosureGroup(
+                isExpanded: Binding(
+                    get: { relayAdvancedExpanded[provider.id] ?? false },
+                    set: { relayAdvancedExpanded[provider.id] = $0 }
+                ),
+                content: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        let tokenChannelBinding = Binding(
+                            get: { tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled },
+                            set: { tokenUsageEnabledInputs[provider.id] = $0 }
+                        )
+                        labeledToggle(viewModel.text(.enableTokenChannel), isOn: tokenChannelBinding)
+
+                        let accountChannelBinding = Binding(
+                            get: { accountEnabledInputs[provider.id] ?? accountChannelEnabled },
+                            set: { accountEnabledInputs[provider.id] = $0 }
+                        )
+                        labeledToggle(viewModel.text(.enableAccountChannel), isOn: accountChannelBinding)
+
+                        if !simpleMode {
+                            HStack(spacing: 8) {
+                                TextField(viewModel.text(.authHeader), text: Binding(
+                                    get: {
+                                        authHeaderInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.authHeader
+                                            ?? selectedTemplate.balanceRequest.authHeader
+                                            ?? "Authorization"
+                                    },
+                                    set: { authHeaderInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+
+                                TextField(viewModel.text(.authScheme), text: Binding(
+                                    get: {
+                                        authSchemeInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.authScheme
+                                            ?? selectedTemplate.balanceRequest.authScheme
+                                            ?? "Bearer"
+                                    },
+                                    set: { authSchemeInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+
+                            HStack(spacing: 8) {
+                                TextField(viewModel.text(.userIDHeader), text: Binding(
+                                    get: {
+                                        userHeaderInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.userIDHeader
+                                            ?? selectedTemplate.balanceRequest.userIDHeader
+                                            ?? "New-Api-User"
+                                    },
+                                    set: { userHeaderInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+
+                                TextField(viewModel.text(.endpointPath), text: Binding(
+                                    get: {
+                                        endpointPathInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.endpointPath
+                                            ?? selectedTemplate.balanceRequest.path
+                                    },
+                                    set: { endpointPathInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+
+                            HStack(spacing: 8) {
+                                TextField(viewModel.text(.unit), text: Binding(
+                                    get: {
+                                        unitInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.unit
+                                            ?? selectedTemplate.extract.unit
+                                            ?? "quota"
+                                    },
+                                    set: { unitInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+
+                                TextField(viewModel.text(.remainingPath), text: Binding(
+                                    get: {
+                                        remainingPathInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.remainingJSONPath
+                                            ?? selectedTemplate.extract.remaining
+                                    },
+                                    set: { remainingPathInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+
+                            HStack(spacing: 8) {
+                                TextField(viewModel.text(.usedPath), text: Binding(
+                                    get: {
+                                        usedPathInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.usedJSONPath
+                                            ?? selectedTemplate.extract.used
+                                            ?? ""
+                                    },
+                                    set: { usedPathInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+
+                                TextField(viewModel.text(.limitPath), text: Binding(
+                                    get: {
+                                        limitPathInputs[provider.id]
+                                            ?? relayViewConfig?.accountBalance?.limitJSONPath
+                                            ?? selectedTemplate.extract.limit
+                                            ?? ""
+                                    },
+                                    set: { limitPathInputs[provider.id] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                            }
+
+                            TextField(viewModel.text(.successPath), text: Binding(
+                                get: {
+                                    successPathInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.successJSONPath
+                                        ?? selectedTemplate.extract.success
+                                        ?? ""
+                                },
+                                set: { successPathInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                },
+                label: {
+                    Text(viewModel.text(.advancedSettings))
+                        .font(.caption.weight(.semibold))
+                }
+            )
+        }
+    }
+
+    private var sidebarProviders: [ProviderDescriptor] {
+        let providers = viewModel.config.providers.filter { provider in
+            switch selectedGroup {
+            case .official:
+                return provider.family == .official
+            case .thirdParty:
+                return provider.family == .thirdParty
+            }
+        }
+        return providers.filter(\.enabled) + providers.filter { !$0.enabled }
+    }
+
+    private var enabledSidebarProviders: [ProviderDescriptor] {
+        sidebarProviders.filter(\.enabled)
+    }
+
+    private var disabledSidebarProviders: [ProviderDescriptor] {
+        sidebarProviders.filter { !$0.enabled }
+    }
+
+    private var relayTemplatePresets: [RelayTemplatePreset] {
+        RelayAdapterRegistry.shared
+            .availableManifests()
+            .map { manifest in
+                RelayTemplatePreset(
+                    manifest: manifest,
+                    suggestedBaseURL: suggestedBaseURL(for: manifest)
+                )
+            }
+            .sorted { lhs, rhs in
+                switch (lhs.id == "generic-newapi", rhs.id == "generic-newapi") {
+                case (true, false):
+                    return false
+                case (false, true):
+                    return true
+                default:
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+            }
+    }
+
+    private func relayTemplateNeedsManualUserID(_ manifest: RelayAdapterManifest) -> Bool {
+        let setupRequiresUserID = manifest.setup?.requiredInputs.contains(.userID) ?? false
+        return setupRequiresUserID || (
+            manifest.balanceRequest.userID == nil &&
+            !(manifest.balanceRequest.userIDHeader?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        )
+    }
+
+    private func suggestedBaseURL(for manifest: RelayAdapterManifest) -> String? {
+        if let recommendedBaseURL = manifest.setup?.recommendedBaseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !recommendedBaseURL.isEmpty {
+            return recommendedBaseURL
+        }
+        guard let hostPattern = manifest.match.hostPatterns.first(where: { $0 != "*" }) else {
+            return nil
+        }
+        let normalizedHost: String
+        if hostPattern.hasPrefix("*.") {
+            normalizedHost = String(hostPattern.dropFirst(2))
+        } else {
+            normalizedHost = hostPattern
+        }
+        return normalizedHost.isEmpty ? nil : "https://\(normalizedHost)"
+    }
+
+    private func applyNewRelayTemplate(_ templateID: String) {
+        newProviderTemplateID = templateID
+        guard let preset = relayTemplatePresets.first(where: { $0.id == templateID }) else { return }
+        if let suggestedBaseURL = preset.suggestedBaseURL {
+            newProviderBaseURL = suggestedBaseURL
+        } else {
+            newProviderBaseURL = "https://"
+        }
+        newProviderName = preset.id == "generic-newapi" ? "" : preset.displayName
+    }
+
+    private func resolvedRelayNameInput(
+        typedName: String,
+        manifest: RelayAdapterManifest?
+    ) -> String {
+        let trimmed = typedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return manifest?.displayName ?? typedName
+    }
+
+    private func resolvedRelayBaseURLInput(
+        typedBaseURL: String,
+        manifest: RelayAdapterManifest?
+    ) -> String {
+        let trimmed = typedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return suggestedBaseURL(for: manifest ?? RelayAdapterRegistry.genericManifest) ?? typedBaseURL
+    }
+
+    private enum RelaySetupHintField {
+        case quotaAuth
+        case balanceAuth
+        case userID
+    }
+
+    private func relaySetupHint(
+        for manifest: RelayAdapterManifest,
+        field: RelaySetupHintField
+    ) -> String? {
+        let localized: RelaySetupManifest.LocalizedText?
+        switch field {
+        case .quotaAuth:
+            localized = manifest.setup?.quotaAuthHint
+        case .balanceAuth:
+            localized = manifest.setup?.balanceAuthHint
+        case .userID:
+            localized = manifest.setup?.userIDHint
+        }
+
+        switch viewModel.language {
+        case .zhHans:
+            return localized?.zhHans ?? localized?.en
+        case .en:
+            return localized?.en ?? localized?.zhHans
+        }
+    }
+
+    private func relayRequiredInputs(
+        for manifest: RelayAdapterManifest,
+        tokenChannelEnabled: Bool,
+        accountChannelEnabled: Bool,
+        showsManualUserID: Bool
+    ) -> [RelayRequiredInputKind] {
+        if let setupInputs = manifest.setup?.requiredInputs, !setupInputs.isEmpty {
+            var resolved: [RelayRequiredInputKind] = []
+            for item in setupInputs {
+                switch item {
+                case .quotaAuth where tokenChannelEnabled:
+                    resolved.append(item)
+                case .balanceAuth where accountChannelEnabled:
+                    resolved.append(item)
+                case .userID where showsManualUserID:
+                    resolved.append(item)
+                case .quotaAuth, .balanceAuth, .userID:
+                    continue
+                default:
+                    resolved.append(item)
+                }
+            }
+            if showsManualUserID && !resolved.contains(.userID) && relayTemplateNeedsManualUserID(manifest) {
+                resolved.append(.userID)
+            }
+            return resolved
+        }
+
+        var inferred: [RelayRequiredInputKind] = [.displayName, .baseURL]
+        if tokenChannelEnabled {
+            inferred.append(.quotaAuth)
+        }
+        if accountChannelEnabled {
+            inferred.append(.balanceAuth)
+        }
+        if showsManualUserID {
+            inferred.append(.userID)
+        }
+        return inferred
+    }
+
+    private func requiresDisplayNameInput(
+        for manifest: RelayAdapterManifest,
+        currentName: String
+    ) -> Bool {
+        let requiredInputs = manifest.setup?.requiredInputs ?? []
+        if requiredInputs.isEmpty {
+            return true
+        }
+        if requiredInputs.contains(.displayName) {
+            return true
+        }
+        return currentName.trimmingCharacters(in: .whitespacesAndNewlines) != manifest.displayName
+    }
+
+    private func requiresBaseURLInput(
+        for manifest: RelayAdapterManifest,
+        currentBaseURL: String
+    ) -> Bool {
+        let requiredInputs = manifest.setup?.requiredInputs ?? []
+        if requiredInputs.isEmpty {
+            return true
+        }
+        if requiredInputs.contains(.baseURL) {
+            return true
+        }
+        guard let suggestedBaseURL = suggestedBaseURL(for: manifest) else {
+            return true
+        }
+        return ProviderDescriptor.normalizeRelayBaseURL(currentBaseURL) != ProviderDescriptor.normalizeRelayBaseURL(suggestedBaseURL)
+    }
+
+    private func relayRequiredInputSummary(
+        manifest: RelayAdapterManifest,
+        tokenChannelEnabled: Bool,
+        accountChannelEnabled: Bool,
+        showsManualUserID: Bool
+    ) -> String {
+        let tokenTemplateKind = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer").kind
+        let balanceTemplateKind = relayCredentialTemplate(
+            authHeader: manifest.balanceRequest.authHeader,
+            authScheme: manifest.balanceRequest.authScheme
+        ).kind
+        let items = relayRequiredInputs(
+            for: manifest,
+            tokenChannelEnabled: tokenChannelEnabled,
+            accountChannelEnabled: accountChannelEnabled,
+            showsManualUserID: showsManualUserID
+        ).map { item in
+            switch item {
+            case .displayName:
+                return viewModel.language == .zhHans ? "名称" : "Name"
+            case .baseURL:
+                return "Base URL"
+            case .quotaAuth:
+                return relayCredentialFieldName(isAccount: false, templateKind: tokenTemplateKind)
+            case .balanceAuth:
+                return relayCredentialFieldName(isAccount: true, templateKind: balanceTemplateKind)
+            case .userID:
+                return viewModel.language == .zhHans ? "用户 ID" : "User ID"
+            }
+        }
+
+        let joined = items.joined(separator: viewModel.language == .zhHans ? "、" : ", ")
+        if viewModel.language == .zhHans {
+            return "当前模板 `\(manifest.displayName)` 只需要你填写：\(joined)。"
+        } else {
+            return "Template `\(manifest.displayName)` only asks you to fill: \(joined)."
+        }
+    }
+
+    private func relayFixedTemplateSummary(for manifest: RelayAdapterManifest) -> String {
+        let language = viewModel.language
+        var parts: [String] = []
+
+        if let suggestedBaseURL = suggestedBaseURL(for: manifest) {
+            parts.append(language == .zhHans ? "固定地址 = \(suggestedBaseURL)" : "base URL = \(suggestedBaseURL)")
+        }
+
+        parts.append("\(manifest.balanceRequest.method) \(manifest.balanceRequest.path)")
+        parts.append(language == .zhHans
+            ? "剩余 = \(manifest.extract.remaining)"
+            : "remaining = \(manifest.extract.remaining)")
+
+        if let used = manifest.extract.used, !used.isEmpty {
+            parts.append(language == .zhHans ? "已用 = \(used)" : "used = \(used)")
+        }
+        if let limit = manifest.extract.limit, !limit.isEmpty {
+            parts.append(language == .zhHans ? "上限 = \(limit)" : "limit = \(limit)")
+        }
+        if let unit = manifest.extract.unit, !unit.isEmpty {
+            parts.append(language == .zhHans ? "单位 = \(unit)" : "unit = \(unit)")
+        }
+
+        let joined = parts.joined(separator: language == .zhHans ? "；" : "; ")
+        if language == .zhHans {
+            return "以下内容由模板固定：\(joined)。如需改接口或字段映射，再展开高级设置。"
+        } else {
+            return "These values are fixed by the template: \(joined). Open Advanced settings only if the site differs."
+        }
+    }
+
+    private var selectedFamily: ProviderFamily {
+        switch selectedGroup {
+        case .official:
+            return .official
+        case .thirdParty:
+            return .thirdParty
+        }
+    }
+
+    private func moveEnabledProviders(from source: IndexSet, to destination: Int) {
+        viewModel.reorderEnabledProviders(
+            family: selectedFamily,
+            fromOffsets: source,
+            toOffset: destination
+        )
+    }
+
+    private var selectedProvider: ProviderDescriptor? {
+        guard let selectedProviderID else { return nil }
+        return sidebarProviders.first(where: { $0.id == selectedProviderID })
+    }
+
+    private func syncSelection() {
+        let ids = sidebarProviders.map(\.id)
+        guard !ids.isEmpty else {
+            selectedProviderID = nil
+            return
+        }
+        if let selectedProviderID, ids.contains(selectedProviderID) {
+            return
+        }
+        self.selectedProviderID = ids.first
+    }
+
+    private func sidebarDisplayName(for provider: ProviderDescriptor) -> String {
+        switch provider.type {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude"
+        case .gemini:
+            return "Gemini"
+        case .copilot:
+            return "Copilot"
+        case .zai:
+            return "Z.ai"
+        case .amp:
+            return "Amp"
+        case .cursor:
+            return "Cursor"
+        case .jetbrains:
+            return "JetBrains"
+        case .kiro:
+            return "Kiro"
+        case .windsurf:
+            return "Windsurf"
+        case .kimi:
+            return "Kimi"
+        case .relay, .open, .dragon:
+            return provider.name
+        }
+    }
+
+    private func iconName(for provider: ProviderDescriptor) -> String {
+        switch provider.type {
+        case .codex:
+            return "codex_icon"
+        case .kimi:
+            return "kimi_icon"
+        default:
+            return "relay_icon"
+        }
+    }
+
+    private func fallbackIcon(for provider: ProviderDescriptor) -> String {
+        switch provider.type {
+        case .codex:
+            return "terminal.fill"
+        case .kimi:
+            return "moon.stars.fill"
+        default:
+            return "globe"
         }
     }
 
     @ViewBuilder
-    private func kimiConfigSection(_ provider: ProviderDescriptor) -> some View {
-        let authModeBinding = Binding(
-            get: { kimiAuthModeInputs[provider.id] ?? (provider.kimiConfig?.authMode ?? .auto) },
-            set: { kimiAuthModeInputs[provider.id] = $0 }
-        )
-        let autoCookieBinding = Binding(
-            get: { kimiAutoCookieInputs[provider.id] ?? (provider.kimiConfig?.autoCookieEnabled ?? true) },
-            set: { kimiAutoCookieInputs[provider.id] = $0 }
-        )
-
-        VStack(alignment: .leading, spacing: 8) {
-            TextField(viewModel.text(.providerName), text: Binding(
-                get: { providerNameInputs[provider.id] ?? provider.name },
-                set: { providerNameInputs[provider.id] = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-
-            HStack(spacing: 8) {
-                Text(viewModel.text(.kimiAuthMode))
-                    .foregroundStyle(.secondary)
-                Picker("", selection: authModeBinding) {
-                    Text(viewModel.text(.kimiAuthAuto)).tag(KimiAuthMode.auto)
-                    Text(viewModel.text(.kimiAuthManual)).tag(KimiAuthMode.manual)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-            }
-
-            labeledToggle(viewModel.text(.kimiAutoCookie), isOn: autoCookieBinding)
-
-            HStack {
-                SecureField(viewModel.text(.kimiManualToken), text: Binding(
-                    get: { kimiManualTokenInputs[provider.id, default: ""] },
-                    set: { kimiManualTokenInputs[provider.id] = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                Button(viewModel.text(.saveToken)) {
-                    let token = kimiManualTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !token.isEmpty else { return }
-                    _ = viewModel.saveKimiManualToken(token, providerID: provider.id)
-                    kimiManualTokenInputs[provider.id] = ""
-                    viewModel.restartPolling()
-                }
-                .buttonStyle(.bordered)
-
-                Text(viewModel.hasToken(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
-                    .font(.caption)
-                    .foregroundStyle(viewModel.hasToken(for: provider) ? .green : .secondary)
-            }
-
-            HStack(spacing: 8) {
-                Button(viewModel.text(.kimiAutoDetect)) {
-                    Task {
-                        let message = await viewModel.detectAndCacheKimiToken(providerID: provider.id)
-                        kimiDetectResult[provider.id] = message
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button(viewModel.text(.kimiOpenPrivacySettings)) {
-                    openFullDiskAccessSettings()
-                }
-                .buttonStyle(.bordered)
-            }
-
-            if let detectText = kimiDetectResult[provider.id], !detectText.isEmpty {
-                Text(detectText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("\(viewModel.text(.kimiBrowserOrder)): Arc → Chrome → Safari → Edge → Brave → Chromium")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(viewModel.text(.kimiFdaHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button(viewModel.text(.saveConfig)) {
-                viewModel.updateKimiProviderSettings(
-                    providerID: provider.id,
-                    name: providerNameInputs[provider.id] ?? provider.name,
-                    authMode: kimiAuthModeInputs[provider.id] ?? (provider.kimiConfig?.authMode ?? .auto),
-                    autoCookieEnabled: kimiAutoCookieInputs[provider.id] ?? (provider.kimiConfig?.autoCookieEnabled ?? true)
-                )
-            }
-            .buttonStyle(.borderedProminent)
+    private func providerIcon(for provider: ProviderDescriptor, size: CGFloat) -> some View {
+        if let image = bundledImage(named: iconName(for: provider)) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: fallbackIcon(for: provider))
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.primary)
+                .frame(width: size, height: size)
         }
     }
 
+    private func bundledImage(named name: String) -> NSImage? {
+        if let pngURL = Bundle.module.url(forResource: name, withExtension: "png"),
+           let pngImage = NSImage(contentsOf: pngURL) {
+            return pngImage
+        }
+        if let svgURL = Bundle.module.url(forResource: name, withExtension: "svg"),
+           let svgImage = NSImage(contentsOf: svgURL) {
+            return svgImage
+        }
+        return nil
+    }
+
     private func seedInputsFromConfig() {
-        for provider in viewModel.config.providers where provider.type == .open || provider.type == .dragon {
+        for provider in viewModel.config.providers where provider.isRelay {
+            let relayViewConfig = provider.relayViewConfig
+            if selectedRelayTemplateInputs[provider.id] == nil {
+                selectedRelayTemplateInputs[provider.id] =
+                    provider.relayConfig?.adapterID
+                    ?? provider.relayManifest?.id
+                    ?? "generic-newapi"
+            }
             if providerNameInputs[provider.id] == nil {
                 providerNameInputs[provider.id] = provider.name
             }
@@ -449,52 +1361,52 @@ struct SettingsView: View {
                 baseURLInputs[provider.id] = provider.baseURL ?? ""
             }
             if tokenUsageEnabledInputs[provider.id] == nil {
-                tokenUsageEnabledInputs[provider.id] = provider.openConfig?.tokenUsageEnabled ?? true
+                tokenUsageEnabledInputs[provider.id] = relayViewConfig?.tokenUsageEnabled ?? true
             }
             if accountEnabledInputs[provider.id] == nil {
-                accountEnabledInputs[provider.id] = provider.openConfig?.accountBalance?.enabled ?? false
+                accountEnabledInputs[provider.id] = relayViewConfig?.accountBalance?.enabled ?? false
             }
             if authHeaderInputs[provider.id] == nil {
-                authHeaderInputs[provider.id] = provider.openConfig?.accountBalance?.authHeader ?? "Authorization"
+                authHeaderInputs[provider.id] = relayViewConfig?.accountBalance?.authHeader ?? "Authorization"
             }
             if authSchemeInputs[provider.id] == nil {
-                authSchemeInputs[provider.id] = provider.openConfig?.accountBalance?.authScheme ?? "Bearer"
+                authSchemeInputs[provider.id] = relayViewConfig?.accountBalance?.authScheme ?? "Bearer"
             }
             if userIDInputs[provider.id] == nil {
-                userIDInputs[provider.id] = provider.openConfig?.accountBalance?.userID ?? ""
+                userIDInputs[provider.id] = relayViewConfig?.accountBalance?.userID ?? ""
             }
             if userHeaderInputs[provider.id] == nil {
-                userHeaderInputs[provider.id] = provider.openConfig?.accountBalance?.userIDHeader ?? "New-Api-User"
+                userHeaderInputs[provider.id] = relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"
             }
             if endpointPathInputs[provider.id] == nil {
-                endpointPathInputs[provider.id] = provider.openConfig?.accountBalance?.endpointPath ?? "/api/user/self"
+                endpointPathInputs[provider.id] = relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"
             }
             if remainingPathInputs[provider.id] == nil {
-                remainingPathInputs[provider.id] = provider.openConfig?.accountBalance?.remainingJSONPath ?? "data.quota"
+                remainingPathInputs[provider.id] = relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"
             }
             if usedPathInputs[provider.id] == nil {
-                usedPathInputs[provider.id] = provider.openConfig?.accountBalance?.usedJSONPath ?? ""
+                usedPathInputs[provider.id] = relayViewConfig?.accountBalance?.usedJSONPath ?? ""
             }
             if limitPathInputs[provider.id] == nil {
-                limitPathInputs[provider.id] = provider.openConfig?.accountBalance?.limitJSONPath ?? ""
+                limitPathInputs[provider.id] = relayViewConfig?.accountBalance?.limitJSONPath ?? ""
             }
             if successPathInputs[provider.id] == nil {
-                successPathInputs[provider.id] = provider.openConfig?.accountBalance?.successJSONPath ?? ""
+                successPathInputs[provider.id] = relayViewConfig?.accountBalance?.successJSONPath ?? ""
             }
             if unitInputs[provider.id] == nil {
-                unitInputs[provider.id] = provider.openConfig?.accountBalance?.unit ?? "quota"
+                unitInputs[provider.id] = relayViewConfig?.accountBalance?.unit ?? "quota"
+            }
+            if relayCredentialModeInputs[provider.id] == nil {
+                relayCredentialModeInputs[provider.id] = provider.relayConfig?.balanceCredentialMode ?? .manualPreferred
             }
         }
 
-        for provider in viewModel.config.providers where provider.type == .kimi {
-            if providerNameInputs[provider.id] == nil {
-                providerNameInputs[provider.id] = provider.name
+        for provider in viewModel.config.providers where provider.family == .official {
+            if officialSourceModeInputs[provider.id] == nil {
+                officialSourceModeInputs[provider.id] = provider.officialConfig?.sourceMode ?? .auto
             }
-            if kimiAuthModeInputs[provider.id] == nil {
-                kimiAuthModeInputs[provider.id] = provider.kimiConfig?.authMode ?? .auto
-            }
-            if kimiAutoCookieInputs[provider.id] == nil {
-                kimiAutoCookieInputs[provider.id] = provider.kimiConfig?.autoCookieEnabled ?? true
+            if officialWebModeInputs[provider.id] == nil {
+                officialWebModeInputs[provider.id] = provider.officialConfig?.webMode ?? .disabled
             }
         }
     }
@@ -523,10 +1435,154 @@ struct SettingsView: View {
             )
     }
 
-    private func openFullDiskAccessSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else {
-            return
+    private enum RelayCredentialTemplateKind {
+        case cookie
+        case bearer
+        case custom(header: String, scheme: String)
+    }
+
+    private struct RelayCredentialTemplate {
+        let kind: RelayCredentialTemplateKind
+        let placeholder: String
+        let hint: String
+    }
+
+    private func relayCredentialTemplate(authHeader: String?, authScheme: String?) -> RelayCredentialTemplate {
+        let language = viewModel.language
+        let header = (authHeader ?? "Authorization").trimmingCharacters(in: .whitespacesAndNewlines)
+        let scheme = (authScheme ?? "Bearer").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if header.caseInsensitiveCompare("Cookie") == .orderedSame {
+            if language == .zhHans {
+                return RelayCredentialTemplate(
+                    kind: .cookie,
+                    placeholder: "粘贴完整 Cookie Header，例如 session=...; token=...",
+                    hint: "这里填写完整 Cookie Header，不是单个字段。"
+                )
+            } else {
+                return RelayCredentialTemplate(
+                    kind: .cookie,
+                    placeholder: "Paste the full Cookie header, for example session=...; token=...",
+                    hint: "Paste the full Cookie header, not a single cookie field."
+                )
+            }
         }
-        NSWorkspace.shared.open(url)
+
+        if header.caseInsensitiveCompare("Authorization") == .orderedSame &&
+            (scheme.isEmpty || scheme.caseInsensitiveCompare("Bearer") == .orderedSame) {
+            if language == .zhHans {
+                return RelayCredentialTemplate(
+                    kind: .bearer,
+                    placeholder: "粘贴 Bearer Token，例如 Bearer eyJ... 或 eyJ...",
+                    hint: "这里填写 Authorization Bearer 值，带或不带 Bearer 前缀都可以。"
+                )
+            } else {
+                return RelayCredentialTemplate(
+                    kind: .bearer,
+                    placeholder: "Paste the bearer token, for example Bearer eyJ... or eyJ...",
+                    hint: "Paste the Authorization bearer value, with or without the Bearer prefix."
+                )
+            }
+        }
+
+        let normalizedHeader = header.isEmpty ? "Authorization" : header
+        let normalizedScheme = scheme
+        if language == .zhHans {
+            return RelayCredentialTemplate(
+                kind: .custom(header: normalizedHeader, scheme: normalizedScheme),
+                placeholder: "粘贴 \(normalizedHeader) 的值：\(normalizedScheme.isEmpty ? "<value>" : "\(normalizedScheme) <value>")",
+                hint: "这里填写站点要求的自定义请求头值。"
+            )
+        } else {
+            return RelayCredentialTemplate(
+                kind: .custom(header: normalizedHeader, scheme: normalizedScheme),
+                placeholder: "Paste the \(normalizedHeader) value: \(normalizedScheme.isEmpty ? "<value>" : "\(normalizedScheme) <value>")",
+                hint: "Paste the custom header value required by this site."
+            )
+        }
+    }
+
+    private func relayCredentialFieldName(
+        isAccount: Bool,
+        templateKind: RelayCredentialTemplateKind
+    ) -> String {
+        let language = viewModel.language
+        switch templateKind {
+        case .cookie:
+            return "Cookie"
+        case .bearer:
+            if language == .zhHans {
+                return isAccount ? "Access Token" : "API Key / Token"
+            } else {
+                return isAccount ? "Access Token" : "API Key / Token"
+            }
+        case .custom(let header, _):
+            if language == .zhHans {
+                return "\(header) 值"
+            } else {
+                return "\(header) value"
+            }
+        }
+    }
+
+    private func relayCredentialSectionTitle(
+        isAccount: Bool,
+        templateKind: RelayCredentialTemplateKind
+    ) -> String {
+        let fieldName = relayCredentialFieldName(isAccount: isAccount, templateKind: templateKind)
+        if viewModel.language == .zhHans {
+            return isAccount ? "余额 \(fieldName)" : "配额 \(fieldName)"
+        } else {
+            return isAccount ? "Balance \(fieldName)" : "Quota \(fieldName)"
+        }
+    }
+
+    private func relayCredentialSaveLabel(templateKind: RelayCredentialTemplateKind) -> String {
+        switch templateKind {
+        case .cookie:
+            return viewModel.language == .zhHans ? "保存 Cookie" : "Save Cookie"
+        case .bearer:
+            return viewModel.language == .zhHans ? "保存 Access Token" : "Save Access Token"
+        case .custom(let header, _):
+            return viewModel.language == .zhHans ? "保存 \(header)" : "Save \(header)"
+        }
+    }
+
+    private func relayCredentialLookupHint(templateKind: RelayCredentialTemplateKind) -> String {
+        switch templateKind {
+        case .cookie:
+            return viewModel.language == .zhHans
+                ? "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制完整 Cookie。"
+                : "Open the matching request in browser DevTools Network and copy the full Cookie value from Request Headers."
+        case .bearer:
+            return viewModel.language == .zhHans
+                ? "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制 Authorization 的 Bearer 值。"
+                : "Open the matching request in browser DevTools Network and copy the Authorization bearer value from Request Headers."
+        case .custom(let header, _):
+            return viewModel.language == .zhHans
+                ? "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制 \(header) 的值。"
+                : "Open the matching request in browser DevTools Network and copy the \(header) value from Request Headers."
+        }
+    }
+
+    private func relayCredentialModeLabel(_ mode: RelayCredentialMode) -> String {
+        switch mode {
+        case .manualPreferred:
+            return viewModel.text(.credentialModeManualPreferred)
+        case .browserPreferred:
+            return viewModel.text(.credentialModeBrowserPreferred)
+        case .browserOnly:
+            return viewModel.text(.credentialModeBrowserOnly)
+        }
+    }
+
+}
+
+private extension Color {
+    init(hex: UInt32) {
+        let r = Double((hex >> 16) & 0xFF) / 255
+        let g = Double((hex >> 8) & 0xFF) / 255
+        let b = Double(hex & 0xFF) / 255
+        self = Color(red: r, green: g, blue: b)
     }
 }

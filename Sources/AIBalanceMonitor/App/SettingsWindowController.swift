@@ -13,14 +13,14 @@ final class SettingsWindowController {
     func show(viewModel: AppViewModel) {
         if window == nil {
             let panel = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 620, height: 720),
+                contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             panel.title = "AI Balance Monitor Settings"
             panel.isReleasedWhenClosed = false
-            panel.minSize = NSSize(width: 560, height: 620)
+            panel.minSize = NSSize(width: 860, height: 620)
             panel.center()
             window = panel
         }
@@ -29,7 +29,7 @@ final class SettingsWindowController {
             SettingsView(viewModel: viewModel, onDone: { [weak self] in
                 self?.window?.orderOut(nil)
             })
-            .frame(minWidth: 560, minHeight: 620)
+            .frame(minWidth: 860, minHeight: 620)
         )
 
         if let hostingController {

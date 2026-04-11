@@ -1,0 +1,37 @@
+{
+  "id": "moonshot",
+  "displayName": "platform.moonshot.cn",
+  "match": {
+    "hostPatterns": ["platform.moonshot.cn", "moonshot.cn"],
+    "defaultDisplayName": "platform.moonshot.cn",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "setup": {
+    "recommendedBaseURL": "https://platform.moonshot.cn",
+    "requiredInputs": ["balanceAuth"],
+    "balanceAuthHint": {
+      "zhHans": "优先填写请求头里的 Authorization Bearer Token，直接粘贴 `Bearer ...` 或只粘贴 Token 本体都可以。像 INGRESSCOOKIE、_ga 这类 Cookie 不能用于登录鉴权。",
+      "en": "Prefer the Authorization bearer token from request headers. You can paste either `Bearer ...` or the raw token. Cookies like INGRESSCOOKIE or _ga are not login credentials."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedBearer" },
+    { "kind": "browserBearer" },
+    { "kind": "savedCookieHeader" },
+    { "kind": "browserCookieHeader" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api?endpoint=userInfo",
+    "authHeader": "Authorization",
+    "authScheme": "Bearer"
+  },
+  "extract": {
+    "remaining": "coalesce(data.cur,data.balance,data.wallet.balance,data.walletBalance,data.account.balance,data.accountBalance,data.availableBalance,data.available_amount,data.availableAmount,data.remaining,data.biz_data.cur,data.biz_data.balance,data.biz_data.wallet.balance,data.biz_data.walletBalance,data.biz_data.account.balance,data.biz_data.accountBalance,data.biz_data.availableBalance,data.biz_data.available_amount,data.biz_data.availableAmount,data.biz_data.remaining,cur,balance,walletBalance,accountBalance,availableBalance,availableAmount,remaining)",
+    "used": "coalesce(data.use,data.used,data.monthlySpend,data.monthlyUsage,data.totalSpend,data.totalUsage,data.biz_data.use,data.biz_data.used,data.biz_data.monthlySpend,data.biz_data.monthlyUsage,data.biz_data.totalSpend,data.biz_data.totalUsage,use,used,monthlySpend,monthlyUsage,totalSpend,totalUsage)",
+    "limit": "coalesce(data.acc,data.limit,data.totalLimit,data.quota,data.totalQuota,data.biz_data.acc,data.biz_data.limit,data.biz_data.totalLimit,data.biz_data.quota,data.biz_data.totalQuota,acc,limit,totalLimit,quota,totalQuota)",
+    "unit": "\"CNY\"",
+    "accountLabel": "coalesce(data.user.nickname,data.user.nickName,data.user.name,data.nickName,data.nickname,data.userName,data.biz_data.user.nickname,data.biz_data.user.name,nickName,nickname,userName,name)"
+  }
+}

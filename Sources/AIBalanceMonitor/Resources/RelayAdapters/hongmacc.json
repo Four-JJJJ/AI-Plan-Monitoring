@@ -1,0 +1,32 @@
+{
+  "id": "hongmacc",
+  "displayName": "hongmacc.com",
+  "match": {
+    "hostPatterns": ["hongmacc.com"],
+    "defaultDisplayName": "hongmacc.com",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "setup": {
+    "recommendedBaseURL": "https://hongmacc.com",
+    "requiredInputs": ["balanceAuth"],
+    "balanceAuthHint": {
+      "zhHans": "填写 hongmacc 后台的 Bearer Token。",
+      "en": "Enter the Bearer token from the hongmacc dashboard."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedBearer" },
+    { "kind": "browserBearer" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api/user/assets",
+    "authHeader": "Authorization",
+    "authScheme": "Bearer"
+  },
+  "extract": {
+    "remaining": "sum(quotaCards.*.remainingQuota)",
+    "unit": "CNY"
+  }
+}

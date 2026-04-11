@@ -8,6 +8,8 @@ enum L10nKey {
     case done
     case general
     case providers
+    case relaySimpleMode
+    case relaySimpleModeHint
     case enabled
     case toggleOn
     case toggleOff
@@ -81,9 +83,37 @@ enum L10nKey {
     case statusBalanceExhausted
     case statusTight
     case statusExhausted
+    case statusActive
+    case codexReadyToSwitch
     case updatedAgo
     case balanceLabel
     case thirdPartyRelay
+    case officialProviders
+    case thirdPartyProviders
+    case officialTab
+    case thirdPartyTab
+    case selectProviderHint
+    case sourceMode
+    case webMode
+    case webDisabled
+    case webAutoImport
+    case webManual
+    case manualCookieHeader
+    case officialAutoDiscoveryHint
+    case matchedAdapter
+    case relayTemplate
+    case relayTemplatePresetHint
+    case authSourceLabel
+    case credentialMode
+    case credentialModeManualPreferred
+    case credentialModeBrowserPreferred
+    case credentialModeBrowserOnly
+    case credentialModeHint
+    case testConnection
+    case connectionSuccess
+    case connectionFailed
+    case advancedSettings
+    case statusBarDisplayProvider
 }
 
 enum Localizer {
@@ -98,6 +128,8 @@ enum Localizer {
             case .done: return "完成"
             case .general: return "通用"
             case .providers: return "数据源"
+            case .relaySimpleMode: return "第三方极简配置（推荐）"
+            case .relaySimpleModeHint: return "开启后仅保留核心项，接口路径与字段解析自动使用站点模板。"
             case .enabled: return "启用"
             case .toggleOn: return "开启"
             case .toggleOff: return "关闭"
@@ -171,9 +203,37 @@ enum Localizer {
             case .statusBalanceExhausted: return "余额耗尽"
             case .statusTight: return "紧张"
             case .statusExhausted: return "耗尽"
+            case .statusActive: return "激活中"
+            case .codexReadyToSwitch: return "已重置，可切换"
             case .updatedAgo: return "更新于"
             case .balanceLabel: return "余额"
             case .thirdPartyRelay: return "第三方中转"
+            case .officialProviders: return "官方订阅来源"
+            case .thirdPartyProviders: return "第三方来源"
+            case .officialTab: return "官方订阅"
+            case .thirdPartyTab: return "第三方中转"
+            case .selectProviderHint: return "请先在左侧选择模型"
+            case .sourceMode: return "来源模式"
+            case .webMode: return "网页来源"
+            case .webDisabled: return "关闭"
+            case .webAutoImport: return "自动导入"
+            case .webManual: return "手动"
+            case .manualCookieHeader: return "手动 Cookie/Header"
+            case .officialAutoDiscoveryHint: return "默认会自动发现本地 CLI 登录态；手动 Cookie 仅作为网页来源修复入口。"
+            case .matchedAdapter: return "匹配模板"
+            case .relayTemplate: return "站点模板"
+            case .relayTemplatePresetHint: return "优先选择已验证过的站点模板；只在站点接口不一致时再改 Base URL 或展开高级设置。"
+            case .authSourceLabel: return "认证来源"
+            case .credentialMode: return "凭证模式"
+            case .credentialModeManualPreferred: return "手动优先"
+            case .credentialModeBrowserPreferred: return "浏览器优先"
+            case .credentialModeBrowserOnly: return "仅浏览器"
+            case .credentialModeHint: return "浏览器优先会在手动凭证过期或失效时自动尝试读取浏览器登录态；仅浏览器模式不会使用你手动保存的 Cookie 或 Token。"
+            case .testConnection: return "测试连接"
+            case .connectionSuccess: return "连接成功"
+            case .connectionFailed: return "连接失败"
+            case .advancedSettings: return "高级设置"
+            case .statusBarDisplayProvider: return "在状态栏展示该模型"
             }
         case .en:
             switch key {
@@ -184,6 +244,8 @@ enum Localizer {
             case .done: return "Done"
             case .general: return "General"
             case .providers: return "Providers"
+            case .relaySimpleMode: return "Minimal third-party setup (Recommended)"
+            case .relaySimpleModeHint: return "When enabled, only core fields are shown and endpoint/JSON paths follow site templates."
             case .enabled: return "Enabled"
             case .toggleOn: return "On"
             case .toggleOff: return "Off"
@@ -257,9 +319,37 @@ enum Localizer {
             case .statusBalanceExhausted: return "Balance exhausted"
             case .statusTight: return "Tight"
             case .statusExhausted: return "Exhausted"
+            case .statusActive: return "Active"
+            case .codexReadyToSwitch: return "Reset, ready to switch"
             case .updatedAgo: return "Updated"
             case .balanceLabel: return "Balance"
             case .thirdPartyRelay: return "Relay Provider"
+            case .officialProviders: return "Official Providers"
+            case .thirdPartyProviders: return "Third-Party Providers"
+            case .officialTab: return "Official"
+            case .thirdPartyTab: return "Relay"
+            case .selectProviderHint: return "Select a provider from the left"
+            case .sourceMode: return "Source mode"
+            case .webMode: return "Web mode"
+            case .webDisabled: return "Disabled"
+            case .webAutoImport: return "Auto Import"
+            case .webManual: return "Manual"
+            case .manualCookieHeader: return "Manual Cookie/Header"
+            case .officialAutoDiscoveryHint: return "Local CLI credentials are auto-discovered by default; manual cookie input is only for web-source repair."
+            case .matchedAdapter: return "Matched adapter"
+            case .relayTemplate: return "Site template"
+            case .relayTemplatePresetHint: return "Prefer a verified site template first. Only change Base URL or open Advanced settings when the site behaves differently."
+            case .authSourceLabel: return "Auth source"
+            case .credentialMode: return "Credential mode"
+            case .credentialModeManualPreferred: return "Manual First"
+            case .credentialModeBrowserPreferred: return "Browser First"
+            case .credentialModeBrowserOnly: return "Browser Only"
+            case .credentialModeHint: return "Browser-first mode automatically retries with live browser credentials when saved tokens expire. Browser-only mode ignores manually saved cookies or tokens."
+            case .testConnection: return "Test connection"
+            case .connectionSuccess: return "Connection successful"
+            case .connectionFailed: return "Connection failed"
+            case .advancedSettings: return "Advanced settings"
+            case .statusBarDisplayProvider: return "Show this provider in menu bar"
             }
         }
     }

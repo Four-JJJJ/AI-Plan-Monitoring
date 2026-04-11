@@ -1,0 +1,43 @@
+{
+  "id": "ailinyu",
+  "displayName": "open.ailinyu.de",
+  "match": {
+    "hostPatterns": ["open.ailinyu.de"],
+    "defaultDisplayName": "open.ailinyu.de",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "setup": {
+    "recommendedBaseURL": "https://open.ailinyu.de",
+    "requiredInputs": ["balanceAuth"],
+    "balanceAuthHint": {
+      "zhHans": "粘贴浏览器请求头里的完整 Cookie。这个站点模板已经内置固定用户 ID，一般不需要再额外填写。",
+      "en": "Paste the full Cookie value from your browser request headers. This template already includes the fixed user ID."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedCookieHeader" },
+    { "kind": "browserCookieHeader" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api/user/self",
+    "authHeader": "Cookie",
+    "authScheme": "",
+    "userID": "136",
+    "userIDHeader": "New-Api-User"
+  },
+  "tokenRequest": {
+    "usagePath": "/api/usage/token/",
+    "subscriptionPath": "/v1/dashboard/billing/subscription",
+    "billingUsagePath": "/v1/dashboard/billing/usage"
+  },
+  "extract": {
+    "success": "success",
+    "remaining": "data.quota",
+    "used": "data.used_quota",
+    "limit": "data.request_quota",
+    "unit": "quota"
+  },
+  "postprocessID": "quotaDisplayStatus"
+}

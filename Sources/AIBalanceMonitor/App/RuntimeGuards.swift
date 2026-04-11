@@ -38,12 +38,17 @@ final class SingleInstanceLock {
 }
 
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
+    private var statusBarController: StatusBarController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app stays menu-bar only even if started from terminal context.
         NSApp.setActivationPolicy(.accessory)
 
         if !SingleInstanceLock.shared.acquire() {
             NSApp.terminate(nil)
+            return
         }
+
+        statusBarController = StatusBarController(viewModel: AppViewModel())
     }
 }

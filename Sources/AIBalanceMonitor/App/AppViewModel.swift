@@ -6,12 +6,13 @@ import Observation
 final class AppViewModel {
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
-    private let kimiCookieService = KimiBrowserCookieService()
+    private let codexSlotStore = CodexAccountSlotStore()
     private let notifications = NotificationService()
     private let providerFactory: ProviderFactory
 
     private(set) var config: AppConfig
     private(set) var snapshots: [String: UsageSnapshot] = [:]
+    private(set) var codexSlots: [CodexAccountSlot] = []
     private(set) var errors: [String: String] = [:]
     private(set) var lastUpdatedAt: Date?
 
@@ -22,7 +23,8 @@ final class AppViewModel {
 
     init() {
         self.config = (try? configStore.load()) ?? .default
-        self.providerFactory = ProviderFactory(keychain: keychain, kimiCookieService: kimiCookieService)
+        self.providerFactory = ProviderFactory(keychain: keychain)
+        self.codexSlots = codexSlotStore.visibleSlots()
         notifications.requestPermissionIfNeeded()
     }
 
@@ -59,10 +61,49 @@ final class AppViewModel {
         config.language
     }
 
+    var simplifiedRelayConfig: Bool {
+        config.simplifiedRelayConfig
+    }
+
+    var statusBarProviderID: String? {
+        config.statusBarProviderID
+    }
+
     func setLanguage(_ language: AppLanguage) {
         guard config.language != language else { return }
         config.language = language
         try? configStore.save(config)
+    }
+
+    func setSimplifiedRelayConfig(_ enabled: Bool) {
+        guard config.simplifiedRelayConfig != enabled else { return }
+        config.simplifiedRelayConfig = enabled
+        try? configStore.save(config)
+    }
+
+    func isStatusBarProvider(providerID: String) -> Bool {
+        config.statusBarProviderID == providerID
+    }
+
+    func setStatusBarProvider(providerID: String?) {
+        let normalized: String?
+        if let providerID,
+           config.providers.contains(where: { $0.id == providerID }) {
+            normalized = providerID
+        } else {
+            normalized = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
+        guard config.statusBarProviderID != normalized else { return }
+        config.statusBarProviderID = normalized
+        try? configStore.save(config)
+    }
+
+    func statusBarProvider() -> ProviderDescriptor? {
+        if let id = config.statusBarProviderID,
+           let selected = config.providers.first(where: { $0.id == id }) {
+            return selected
+        }
+        return config.providers.first(where: { $0.id == AppConfig.defaultStatusBarProviderID(from: config.providers) })
     }
 
     func text(_ key: L10nKey) -> String {
@@ -80,10 +121,83 @@ final class AppViewModel {
         }
     }
 
+    func codexSlotViewModels() -> [CodexSlotViewModel] {
+        codexSlots = codexSlotStore.visibleSlots()
+        return codexSlots
+            .sorted { lhs, rhs in
+                if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
+                if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
+                return lhs.slotID.rawValue < rhs.slotID.rawValue
+            }
+            .map { slot in
+                CodexSlotViewModel(
+                    slotID: slot.slotID,
+                    title: "Codex \(slot.slotID.rawValue)",
+                    snapshot: slot.lastSnapshot,
+                    isActive: slot.isActive,
+                    lastSeenAt: slot.lastSeenAt,
+                    displayName: slot.displayName
+                )
+            }
+    }
+
     func setEnabled(_ enabled: Bool, providerID: String) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }) else { return }
+        if config.providers[idx].enabled == enabled { return }
         config.providers[idx].enabled = enabled
+
+        // Keep enabled providers grouped at the top of the same family list.
+        if enabled {
+            let provider = config.providers.remove(at: idx)
+            let family = provider.family
+            let familyIndices = config.providers.indices.filter { config.providers[$0].family == family }
+
+            let insertAt: Int
+            if familyIndices.isEmpty {
+                insertAt = config.providers.count
+            } else if let firstDisabled = familyIndices.first(where: { !config.providers[$0].enabled }) {
+                insertAt = firstDisabled
+            } else if let lastFamily = familyIndices.last {
+                insertAt = lastFamily + 1
+            } else {
+                insertAt = config.providers.count
+            }
+            config.providers.insert(provider, at: min(max(0, insertAt), config.providers.count))
+        }
+
+        if !enabled, config.statusBarProviderID == providerID {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
         persistAndRestart()
+    }
+
+    func reorderEnabledProviders(
+        family: ProviderFamily,
+        fromOffsets: IndexSet,
+        toOffset: Int
+    ) {
+        let enabledIndices = config.providers.indices.filter {
+            config.providers[$0].family == family && config.providers[$0].enabled
+        }
+        guard enabledIndices.count > 1 else { return }
+
+        var enabledProviders = enabledIndices.map { config.providers[$0] }
+        moveArray(&enabledProviders, fromOffsets: fromOffsets, toOffset: toOffset)
+
+        for (position, index) in enabledIndices.enumerated() {
+            config.providers[index] = enabledProviders[position]
+        }
+
+        persistAndRestart()
+    }
+
+    private func moveArray<T>(_ array: inout [T], fromOffsets: IndexSet, toOffset: Int) {
+        let moving = fromOffsets.sorted().map { array[$0] }
+        for index in fromOffsets.sorted(by: >) {
+            array.remove(at: index)
+        }
+        let insertion = min(max(0, toOffset), array.count)
+        array.insert(contentsOf: moving, at: insertion)
     }
 
     func setLowThreshold(_ value: Double, providerID: String) {
@@ -113,7 +227,9 @@ final class AppViewModel {
               let account = descriptor.auth.keychainAccount else {
             return false
         }
-        return keychain.saveToken(token, service: service, account: account)
+        let normalized = normalizedCredential(token, kind: descriptor.auth.kind)
+        guard !normalized.isEmpty else { return false }
+        return keychain.saveToken(normalized, service: service, account: account)
     }
 
     func saveToken(_ token: String, auth: AuthConfig) -> Bool {
@@ -121,17 +237,48 @@ final class AppViewModel {
               let account = auth.keychainAccount else {
             return false
         }
-        return keychain.saveToken(token, service: service, account: account)
+        let normalized = normalizedCredential(token, kind: auth.kind)
+        guard !normalized.isEmpty else { return false }
+        return keychain.saveToken(normalized, service: service, account: account)
     }
 
-    func addOpenRelay(name: String, baseURL: String) {
-        let provider = ProviderDescriptor.makeOpenRelay(name: name, baseURL: baseURL)
+    func hasOfficialManualCookie(for provider: ProviderDescriptor) -> Bool {
+        guard provider.family == .official,
+              let account = provider.officialConfig?.manualCookieAccount else {
+            return false
+        }
+        return keychain.readToken(service: "AIBalanceMonitor", account: account)?.isEmpty == false
+    }
+
+    func saveOfficialManualCookie(_ value: String, providerID: String) -> Bool {
+        guard let provider = config.providers.first(where: { $0.id == providerID }),
+              provider.family == .official,
+              let account = provider.officialConfig?.manualCookieAccount else {
+            return false
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return keychain.saveToken(trimmed, service: "AIBalanceMonitor", account: account)
+    }
+
+    func addOpenRelay(name: String, baseURL: String, preferredAdapterID: String? = nil) {
+        let provider = ProviderDescriptor.makeOpenRelay(
+            name: name,
+            baseURL: baseURL,
+            preferredAdapterID: preferredAdapterID
+        )
         config.providers.append(provider)
+        if config.statusBarProviderID == nil {
+            config.statusBarProviderID = provider.id
+        }
         persistAndRestart()
     }
 
     func removeProvider(providerID: String) {
         config.providers.removeAll { $0.id == providerID }
+        if config.statusBarProviderID == providerID {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
         snapshots.removeValue(forKey: providerID)
         errors.removeValue(forKey: providerID)
         consecutiveFailures.removeValue(forKey: providerID)
@@ -145,6 +292,8 @@ final class AppViewModel {
         providerID: String,
         name: String,
         baseURL: String,
+        preferredAdapterID: String? = nil,
+        balanceCredentialMode: RelayCredentialMode = .manualPreferred,
         tokenUsageEnabled: Bool,
         accountEnabled: Bool,
         authHeader: String,
@@ -159,107 +308,141 @@ final class AppViewModel {
         unit: String
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
-              (config.providers[idx].type == .open || config.providers[idx].type == .dragon) else {
+              config.providers[idx].isRelay else {
             return
         }
 
         var provider = config.providers[idx]
         provider.name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? provider.name : name.trimmingCharacters(in: .whitespacesAndNewlines)
-        provider.baseURL = normalizeBaseURL(baseURL.isEmpty ? (provider.baseURL ?? "") : baseURL)
+        let normalizedBaseURL = ProviderDescriptor.normalizeRelayBaseURL(baseURL.isEmpty ? (provider.baseURL ?? "") : baseURL)
+        provider.baseURL = normalizedBaseURL
 
-        var openConfig = provider.openConfig ?? provider.normalized().openConfig ?? OpenProviderConfig(tokenUsageEnabled: true, accountBalance: nil)
-        openConfig.tokenUsageEnabled = tokenUsageEnabled
+        let normalizedProvider = provider.normalized()
+        let currentRelayView = normalizedProvider.relayViewConfig?.accountBalance
+        let matchedManifest = RelayAdapterRegistry.shared.manifest(
+            for: normalizedBaseURL,
+            preferredID: trimmedOrNil(preferredAdapterID ?? "")
+        )
+        var relayConfig = normalizedProvider.relayConfig ?? ProviderDescriptor.makeOpenRelay(
+            name: provider.name,
+            baseURL: normalizedBaseURL,
+            preferredAdapterID: trimmedOrNil(preferredAdapterID ?? "")
+        ).relayConfig!
+        relayConfig.baseURL = normalizedBaseURL
+        relayConfig.adapterID = matchedManifest.id
+        relayConfig.tokenChannelEnabled = tokenUsageEnabled
+        relayConfig.balanceChannelEnabled = accountEnabled
+        relayConfig.balanceCredentialMode = balanceCredentialMode
 
-        var accountConfig = openConfig.accountBalance ?? provider.normalized().openConfig?.accountBalance
-        if accountConfig == nil {
-            accountConfig = provider.normalized().openConfig?.accountBalance
-        }
+        let templateRequest = matchedManifest.balanceRequest
+        let templateExtract = matchedManifest.extract
+        let useTemplateDefaults = config.simplifiedRelayConfig
 
-        if var accountConfig {
-            accountConfig.enabled = accountEnabled
-            accountConfig.authHeader = nonEmptyOrDefault(authHeader, fallback: "Authorization")
-            accountConfig.authScheme = authScheme.trimmingCharacters(in: .whitespacesAndNewlines)
-            accountConfig.userID = trimmedOrNil(userID)
-            accountConfig.userIDHeader = nonEmptyOrDefault(userIDHeader, fallback: "New-Api-User")
-            accountConfig.endpointPath = nonEmptyOrDefault(endpointPath, fallback: "/api/user/self")
-            accountConfig.remainingJSONPath = nonEmptyOrDefault(remainingJSONPath, fallback: "data.quota")
-            accountConfig.usedJSONPath = trimmedOrNil(usedJSONPath)
-            accountConfig.limitJSONPath = trimmedOrNil(limitJSONPath)
-            accountConfig.successJSONPath = trimmedOrNil(successJSONPath)
-            accountConfig.unit = nonEmptyOrDefault(unit, fallback: "quota")
-            openConfig.accountBalance = accountConfig
-        }
+        let resolvedAuthHeader = useTemplateDefaults
+            ? (templateRequest.authHeader ?? "Authorization")
+            : nonEmptyOrDefault(authHeader, fallback: "Authorization")
+        let resolvedAuthScheme = useTemplateDefaults
+            ? (templateRequest.authScheme ?? "Bearer")
+            : authScheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedUserID = useTemplateDefaults
+            ? (templateRequest.userID ?? trimmedOrNil(userID))
+            : trimmedOrNil(userID)
+        let resolvedUserIDHeader = useTemplateDefaults
+            ? (templateRequest.userIDHeader ?? "New-Api-User")
+            : nonEmptyOrDefault(userIDHeader, fallback: "New-Api-User")
+        let resolvedRequestMethod = useTemplateDefaults
+            ? templateRequest.method
+            : (currentRelayView?.requestMethod ?? relayConfig.manualOverrides?.requestMethod)
+        let resolvedRequestBody = useTemplateDefaults
+            ? templateRequest.bodyJSON
+            : (currentRelayView?.requestBodyJSON ?? relayConfig.manualOverrides?.requestBodyJSON)
+        let resolvedEndpointPath = useTemplateDefaults
+            ? templateRequest.path
+            : nonEmptyOrDefault(endpointPath, fallback: "/api/user/self")
+        let resolvedRemaining = useTemplateDefaults
+            ? templateExtract.remaining
+            : nonEmptyOrDefault(remainingJSONPath, fallback: "data.quota")
+        let resolvedUsed = useTemplateDefaults
+            ? templateExtract.used
+            : trimmedOrNil(usedJSONPath)
+        let resolvedLimit = useTemplateDefaults
+            ? templateExtract.limit
+            : trimmedOrNil(limitJSONPath)
+        let resolvedSuccess = useTemplateDefaults
+            ? templateExtract.success
+            : trimmedOrNil(successJSONPath)
+        let resolvedUnit = useTemplateDefaults
+            ? (templateExtract.unit ?? "quota")
+            : nonEmptyOrDefault(unit, fallback: "quota")
 
-        provider.openConfig = openConfig
-        config.providers[idx] = provider
+        relayConfig.manualOverrides = RelayManualOverride(
+            authHeader: resolvedAuthHeader,
+            authScheme: resolvedAuthScheme,
+            userID: resolvedUserID,
+            userIDHeader: resolvedUserIDHeader,
+            requestMethod: resolvedRequestMethod,
+            requestBodyJSON: resolvedRequestBody,
+            endpointPath: resolvedEndpointPath,
+            remainingExpression: resolvedRemaining,
+            usedExpression: resolvedUsed,
+            limitExpression: resolvedLimit,
+            successExpression: resolvedSuccess,
+            unitExpression: resolvedUnit,
+            accountLabelExpression: relayConfig.manualOverrides?.accountLabelExpression,
+            staticHeaders: useTemplateDefaults
+                ? templateRequest.headers
+                : relayConfig.manualOverrides?.staticHeaders
+        )
+        provider.relayConfig = relayConfig
+        provider.openConfig = nil
+        config.providers[idx] = provider.normalized()
         persistAndRestart()
     }
 
-    func updateKimiProviderSettings(
+    func relayAdapterName(for provider: ProviderDescriptor) -> String? {
+        provider.relayManifest?.displayName
+    }
+
+    func relayAuthSource(for providerID: String) -> String? {
+        snapshots[providerID]?.rawMeta["account.authSource"]
+            ?? snapshots[providerID]?.rawMeta["token.authSource"]
+    }
+
+    func testRelayConnection(providerID: String) async -> String {
+        guard let descriptor = descriptor(for: providerID), descriptor.isRelay else {
+            return text(.error)
+        }
+
+        let provider = providerFactory.makeProvider(for: descriptor)
+        do {
+            let snapshot = try await provider.fetch(forceRefresh: true)
+            snapshots[descriptor.id] = snapshot
+            errors.removeValue(forKey: descriptor.id)
+            lastUpdatedAt = Date()
+            return text(.connectionSuccess)
+        } catch {
+            errors[descriptor.id] = error.localizedDescription
+            return "\(text(.connectionFailed)): \(error.localizedDescription)"
+        }
+    }
+
+    func updateOfficialProviderSettings(
         providerID: String,
-        name: String,
-        authMode: KimiAuthMode,
-        autoCookieEnabled: Bool
+        sourceMode: OfficialSourceMode,
+        webMode: OfficialWebMode
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
-              config.providers[idx].type == .kimi else {
+              config.providers[idx].family == .official else {
             return
         }
 
         var provider = config.providers[idx]
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedName.isEmpty {
-            provider.name = trimmedName
-        }
-
-        var kimiConfig = provider.kimiConfig ?? KimiProviderConfig(
-            authMode: .auto,
-            manualTokenAccount: provider.auth.keychainAccount ?? "kimi.com/kimi-auth-manual",
-            autoCookieEnabled: true,
-            browserOrder: [.arc, .chrome, .safari, .edge, .brave, .chromium]
-        )
-        kimiConfig.authMode = authMode
-        kimiConfig.autoCookieEnabled = autoCookieEnabled
-        provider.kimiConfig = kimiConfig
-
+        var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type)
+        official.sourceMode = sourceMode
+        official.webMode = webMode
+        provider.officialConfig = official
         config.providers[idx] = provider
         persistAndRestart()
-    }
-
-    func saveKimiManualToken(_ token: String, providerID: String) -> Bool {
-        guard let provider = config.providers.first(where: { $0.id == providerID }),
-              provider.type == .kimi,
-              let service = provider.auth.keychainService else {
-            return false
-        }
-        let account = provider.kimiConfig?.manualTokenAccount ?? provider.auth.keychainAccount ?? "kimi.com/kimi-auth-manual"
-        let normalized = KimiProvider.normalizeToken(token)
-        guard !normalized.isEmpty else { return false }
-        return keychain.saveToken(normalized, service: service, account: account)
-    }
-
-    func detectAndCacheKimiToken(providerID: String) async -> String {
-        guard let provider = config.providers.first(where: { $0.id == providerID }),
-              provider.type == .kimi else {
-            return text(.error)
-        }
-        let order = provider.kimiConfig?.browserOrder ?? [.arc, .chrome, .safari, .edge, .brave, .chromium]
-        guard let detected = kimiCookieService.detectKimiAuthToken(order: order) else {
-            return text(.kimiAuthNotFound)
-        }
-
-        let normalized = KimiProvider.normalizeToken(detected.token)
-        if normalized.isEmpty || KimiJWT.isExpired(normalized) {
-            return text(.tokenInvalidOrExpired)
-        }
-
-        guard let service = provider.auth.keychainService else {
-            return text(.error)
-        }
-        let account = "kimi.com/kimi-auth-auto"
-        _ = keychain.saveToken(normalized, service: service, account: account)
-        restartPolling()
-        return "\(text(.kimiAuthDetected)): \(detected.source)"
     }
 
     var aggregateStatus: AggregateStatus {
@@ -283,6 +466,16 @@ final class AppViewModel {
     private func persistAndRestart() {
         try? configStore.save(config)
         restartPolling()
+    }
+
+    private func normalizedCredential(_ token: String, kind: AuthKind) -> String {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch kind {
+        case .bearer:
+            return KimiProvider.normalizeToken(trimmed)
+        case .none, .localCodex:
+            return trimmed
+        }
     }
 
     private func descriptor(for id: String) -> ProviderDescriptor? {
@@ -312,7 +505,14 @@ final class AppViewModel {
         let provider = providerFactory.makeProvider(for: descriptor)
 
         do {
-            let snapshot = try await provider.fetch(forceRefresh: forceRefresh)
+            let fetched = try await provider.fetch(forceRefresh: forceRefresh)
+            let snapshot: UsageSnapshot
+            if descriptor.type == .codex, descriptor.family == .official {
+                snapshot = markCodexSnapshotActive(fetched)
+                codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+            } else {
+                snapshot = fetched
+            }
             snapshots[descriptor.id] = snapshot
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
@@ -443,6 +643,20 @@ final class AppViewModel {
     private func nonEmptyOrDefault(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    private func markCodexSnapshotActive(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+        var copy = snapshot
+        let accountKey = CodexAccountSlotStore.accountKey(from: copy)
+        let label = CodexAccountSlotStore.accountLabel(from: copy)
+        copy.rawMeta["codex.accountKey"] = accountKey
+        copy.rawMeta["codex.accountLabel"] = label
+        copy.rawMeta["codex.lastSeenAt"] = ISO8601DateFormatter().string(from: Date())
+        copy.rawMeta["codex.isActive"] = "true"
+        if copy.accountLabel == nil || copy.accountLabel?.isEmpty == true {
+            copy.accountLabel = label == "Unknown" ? nil : label
+        }
+        return copy
     }
 }
 

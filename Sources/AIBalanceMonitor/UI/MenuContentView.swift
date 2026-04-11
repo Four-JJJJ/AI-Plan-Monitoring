@@ -4,26 +4,22 @@ import SwiftUI
 struct MenuContentView: View {
     @Bindable var viewModel: AppViewModel
     @State private var now = Date()
+
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let panelBackground = Color(hex: 0x232325)
+    private let cardBackground = Color.black
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            separator
             cards
-            separator
             footer
         }
         .frame(width: 360)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 16)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.80))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8)
+                .fill(panelBackground)
         )
         .environment(\.colorScheme, .dark)
         .onReceive(clock) { value in
@@ -49,7 +45,18 @@ struct MenuContentView: View {
 
     private var cards: some View {
         VStack(spacing: 8) {
-            ForEach(displayProviders) { provider in
+            if let codexProvider = codexProvider {
+                let slots = viewModel.codexSlotViewModels()
+                if slots.isEmpty {
+                    providerCard(codexProvider)
+                } else {
+                    ForEach(slots) { slot in
+                        codexSlotCard(slot, provider: codexProvider)
+                    }
+                }
+            }
+
+            ForEach(nonCodexProviders) { provider in
                 providerCard(provider)
             }
         }
@@ -60,144 +67,124 @@ struct MenuContentView: View {
         let snapshot = viewModel.snapshots[provider.id]
         let error = viewModel.errors[provider.id]
 
-        if provider.type == .codex || provider.type == .kimi {
-            quotaCard(provider: provider, snapshot: snapshot, error: error)
+        if provider.family == .official || provider.type == .kimi {
+            let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
+            let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+            let disconnected = error != nil
+
+            PercentageModelCard(
+                title: displayName(for: provider),
+                iconName: iconName(for: provider),
+                iconFallback: fallbackIcon(for: provider),
+                activeTag: nil,
+                status: percentageStatus(metrics: visibleMetrics, disconnected: disconnected),
+                metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: disconnected),
+                errorText: error,
+                backgroundColor: cardBackground,
+                isDisconnected: disconnected
+            )
         } else {
-            balanceCard(provider: provider, snapshot: snapshot, error: error, threshold: provider.threshold.lowRemaining)
+            let disconnected = error != nil
+            AmountModelCard(
+                title: displayName(for: provider),
+                iconName: iconName(for: provider),
+                iconFallback: fallbackIcon(for: provider),
+                status: amountStatus(remaining: snapshot?.remaining, disconnected: disconnected),
+                amountText: disconnected ? "-" : formattedBalanceNumber(snapshot?.remaining),
+                errorText: error,
+                backgroundColor: cardBackground,
+                isDisconnected: disconnected,
+                balanceLabel: viewModel.text(.balanceLabel)
+            )
         }
     }
 
-    private func quotaCard(provider: ProviderDescriptor, snapshot: UsageSnapshot?, error: String?) -> some View {
-        let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
-        let minPercent = metrics.map(\.percent).min() ?? 100
-        let warning = minPercent <= provider.threshold.lowRemaining
-        let disconnected = error != nil
+    private func codexSlotCard(_ slot: CodexSlotViewModel, provider: ProviderDescriptor) -> some View {
+        let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
+        let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
 
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                cardTitle(provider: provider)
-                Spacer()
-                Text(disconnected ? viewModel.text(.statusDisconnected) : (warning ? viewModel.text(.statusTight) : viewModel.text(.statusSufficient)))
-                    .font(.system(size: 10))
-                    .foregroundStyle(disconnected ? Color(hex: 0xD83E3E) : (warning ? Color(hex: 0xD87E3E) : Color(hex: 0x51DB42)))
-            }
-
-            HStack(spacing: 20) {
-                ForEach(metrics) { metric in
-                    quotaMetric(metric)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-
-            if let error {
-                Text(error)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(hex: 0xD83E3E))
-            }
-        }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(.black)
+        return PercentageModelCard(
+            title: slot.title,
+            iconName: "codex_icon",
+            iconFallback: "terminal.fill",
+            activeTag: slot.isActive ? viewModel.text(.statusActive) : nil,
+            status: percentageStatus(metrics: visibleMetrics, disconnected: false),
+            metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
+            errorText: nil,
+            backgroundColor: cardBackground,
+            isDisconnected: false
         )
     }
 
-    private func balanceCard(provider: ProviderDescriptor, snapshot: UsageSnapshot?, error: String?, threshold: Double) -> some View {
-        let remaining = snapshot?.remaining ?? 0
-        let level = balanceLevel(remaining: remaining, threshold: threshold, hasError: error != nil)
-        let statusText: String
-        let statusColor: Color
-        switch level {
-        case .sufficient:
-            statusText = viewModel.text(.statusSufficient)
-            statusColor = Color(hex: 0x51DB42)
-        case .tight:
-            statusText = viewModel.text(.statusTight)
-            statusColor = Color(hex: 0xD87E3E)
-        case .exhausted, .error:
-            statusText = level == .error ? viewModel.text(.statusDisconnected) : viewModel.text(.statusExhausted)
-            statusColor = Color(hex: 0xD83E3E)
-        }
-
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                cardTitle(provider: provider)
-                Spacer()
-                Text(statusText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(statusColor)
+    private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
+        metrics.map { metric in
+            let percent = disconnected ? nil : metric.percent
+            let displayPercent = percent.map { Int($0.rounded()) }
+            let valueText = displayPercent.map { "\($0)%" } ?? "-"
+            let resetLabel: String
+            if disconnected {
+                resetLabel = "-"
+            } else if let resetAt = metric.resetAt {
+                resetLabel = resetText(to: resetAt)
+            } else {
+                resetLabel = "-"
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(viewModel.text(.balanceLabel))
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.50))
-                HStack(spacing: 2) {
-                    Text("💰")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text(formattedBalanceNumber(remaining))
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-            }
-
-            if let error {
-                Text(error)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(hex: 0xD83E3E))
-            }
-        }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(.black)
-        )
-    }
-
-    private func cardTitle(provider: ProviderDescriptor?) -> some View {
-        HStack(spacing: 4) {
-            localIcon(name: iconName(for: provider), fallback: fallbackIcon(for: provider))
-            Text(displayName(for: provider))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+            return PercentageMetricDisplay(
+                id: metric.id,
+                title: metric.title,
+                valueText: valueText,
+                resetText: resetLabel,
+                percent: (displayPercent ?? 0) > 0 ? percent : 0,
+                barColor: percentageBarColor(percent, displayPercent: displayPercent)
+            )
         }
     }
 
-    private func quotaMetric(_ metric: QuotaMetric) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(metric.title)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                Spacer()
-                if let resetAt = metric.resetAt {
-                    Text(resetText(to: resetAt))
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.30))
-                        .lineLimit(1)
-                }
-            }
-
-            HStack(spacing: 6) {
-                Text("\(Int(metric.percent.rounded()))%")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, alignment: .leading)
-                    .lineLimit(1)
-                    .layoutPriority(2)
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule(style: .continuous)
-                            .fill(Color.white.opacity(0.30))
-                        Capsule(style: .continuous)
-                            .fill(barColor(for: metric.percent))
-                            .frame(width: max(8, geo.size.width * metric.percent / 100))
-                    }
-                }
-                .frame(height: 4)
-                .layoutPriority(0)
-            }
+    private func percentageStatus(metrics: [QuotaMetric], disconnected: Bool) -> CardStatus {
+        if disconnected {
+            return CardStatus(text: viewModel.text(.statusDisconnected), color: Color(hex: 0xD83E3E))
         }
+
+        let displayedMinimum = metrics.map { Int($0.percent.rounded()) }.min() ?? 0
+        if displayedMinimum <= 0 {
+            return CardStatus(text: viewModel.text(.statusExhausted), color: Color(hex: 0xD83E3E))
+        }
+        if displayedMinimum > 30 {
+            return CardStatus(text: viewModel.text(.statusSufficient), color: Color(hex: 0x51DB42))
+        }
+        if displayedMinimum < 10 {
+            return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD83E3E))
+        }
+        return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
+    }
+
+    private func amountStatus(remaining: Double?, disconnected: Bool) -> CardStatus {
+        if disconnected {
+            return CardStatus(text: viewModel.text(.statusDisconnected), color: Color(hex: 0xD83E3E))
+        }
+
+        guard let remaining else {
+            return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
+        }
+
+        if remaining > 50 {
+            return CardStatus(text: viewModel.text(.statusSufficient), color: Color(hex: 0x51DB42))
+        }
+        if remaining > 0 {
+            return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
+        }
+        return CardStatus(text: viewModel.text(.statusExhausted), color: Color(hex: 0xD83E3E))
+    }
+
+    private func percentageBarColor(_ percent: Double?, displayPercent: Int? = nil) -> Color {
+        guard let percent, percent > 0 else {
+            return .clear
+        }
+        let shownPercent = displayPercent ?? Int(percent.rounded())
+        if shownPercent <= 0 { return .clear }
+        if shownPercent < 10 { return Color(hex: 0xD83E3E) }
+        if shownPercent <= 30 { return Color(hex: 0xD87E3E) }
+        return Color(hex: 0x51DB42)
     }
 
     private var footer: some View {
@@ -208,52 +195,72 @@ struct MenuContentView: View {
             footerButton(title: viewModel.text(.settings).replacingOccurrences(of: "...", with: ""), iconName: "settings_icon", fallback: "gearshape") {
                 SettingsWindowController.shared.show(viewModel: viewModel)
             }
-            footerButton(title: viewModel.text(.quit), iconName: "quit_icon", fallback: "xmark", textColor: Color.white.opacity(0.80)) {
+            footerButton(title: viewModel.text(.quit), iconName: "quit_icon", fallback: "xmark") {
                 NSApplication.shared.terminate(nil)
             }
         }
+        .frame(height: 24)
     }
 
-    private func footerButton(title: String, iconName: String, fallback: String, textColor: Color = Color.white.opacity(0.80), action: @escaping () -> Void) -> some View {
+    private func footerButton(title: String, iconName: String, fallback: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                localIcon(name: iconName, fallback: fallback, size: 13, tint: textColor)
+                BundledIconView(name: iconName, fallback: fallback, size: 12, tint: Color.white.opacity(0.60))
                 Text(title)
                     .font(.system(size: 12))
-                    .foregroundStyle(textColor)
+                    .foregroundStyle(Color.white.opacity(0.50))
             }
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.white.opacity(0.10))
             )
         }
         .buttonStyle(.plain)
     }
 
-    private var separator: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.10))
-            .frame(height: 1)
-    }
-
     private var displayProviders: [ProviderDescriptor] {
         viewModel.config.providers
             .filter(\.enabled)
             .sorted { lhs, rhs in
-                let l = providerRank(lhs.type)
-                let r = providerRank(rhs.type)
+                let l = providerRank(lhs)
+                let r = providerRank(rhs)
                 if l != r { return l < r }
                 return lhs.id < rhs.id
             }
     }
 
-    private func providerRank(_ type: ProviderType) -> Int {
-        switch type {
-        case .codex: return 0
-        case .kimi: return 1
-        case .open, .dragon: return 2
+    private var codexProvider: ProviderDescriptor? {
+        displayProviders.first { $0.type == .codex && $0.family == .official }
+    }
+
+    private var nonCodexProviders: [ProviderDescriptor] {
+        displayProviders.filter { !($0.type == .codex && $0.family == .official) }
+    }
+
+    private func providerRank(_ provider: ProviderDescriptor) -> Int {
+        if provider.family == .official {
+            switch provider.type {
+            case .codex: return 0
+            case .claude: return 1
+            case .gemini: return 2
+            case .copilot: return 3
+            case .zai: return 4
+            case .cursor: return 5
+            case .windsurf: return 6
+            case .amp: return 7
+            case .jetbrains: return 8
+            case .kiro: return 9
+            case .kimi: return 10
+            case .relay, .open, .dragon: return 11
+            }
+        }
+        switch provider.type {
+        case .kimi: return 12
+        case .relay, .open, .dragon: return 13
+        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf: return 14
         }
     }
 
@@ -262,9 +269,27 @@ struct MenuContentView: View {
         switch provider.type {
         case .codex:
             return "Codex"
+        case .claude:
+            return "Claude"
+        case .gemini:
+            return "Gemini"
+        case .copilot:
+            return "Copilot"
+        case .zai:
+            return "Z.ai"
+        case .amp:
+            return "Amp"
+        case .cursor:
+            return "Cursor"
+        case .jetbrains:
+            return "JetBrains"
+        case .kiro:
+            return "Kiro"
+        case .windsurf:
+            return "Windsurf"
         case .kimi:
             return "KIMI"
-        case .open, .dragon:
+        case .relay, .open, .dragon:
             return provider.name
         }
     }
@@ -276,7 +301,9 @@ struct MenuContentView: View {
             return "codex_icon"
         case .kimi:
             return "kimi_icon"
-        case .open, .dragon:
+        case .relay, .open, .dragon:
+            return "relay_icon"
+        case .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf:
             return "relay_icon"
         }
     }
@@ -288,12 +315,341 @@ struct MenuContentView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .open, .dragon:
+        case .relay, .open, .dragon:
             return "link"
+        case .claude, .gemini:
+            return "sparkles"
+        case .copilot:
+            return "chevron.left.forwardslash.chevron.right"
+        case .zai:
+            return "z.square.fill"
+        case .amp:
+            return "bolt.fill"
+        case .cursor:
+            return "cursorarrow.rays"
+        case .jetbrains:
+            return "brain.head.profile"
+        case .kiro:
+            return "wand.and.stars.inverse"
+        case .windsurf:
+            return "wind"
         }
     }
 
-    private func localIcon(name: String, fallback: String, size: CGFloat = 12, tint: Color? = nil) -> some View {
+    private func quotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [QuotaMetric] {
+        guard let snapshot else { return [] }
+        if !snapshot.quotaWindows.isEmpty {
+            return snapshot.quotaWindows
+                .sorted { metricRank($0.kind) < metricRank($1.kind) }
+                .map {
+                    QuotaMetric(
+                        id: $0.id,
+                        title: metricTitle(for: $0, provider: provider),
+                        percent: clamp($0.remainingPercent),
+                        resetAt: $0.resetAt
+                    )
+                }
+        }
+        return []
+    }
+
+    private func placeholderQuotaMetrics(provider: ProviderDescriptor) -> [QuotaMetric] {
+        switch provider.type {
+        case .codex, .claude, .kimi:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-5h", title: viewModel.text(.quotaFiveHour), percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: viewModel.text(.quotaWeekly), percent: 0, resetAt: nil)
+            ]
+        case .gemini:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-pro", title: "Pro", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-flash", title: "Flash", percent: 0, resetAt: nil)
+            ]
+        case .copilot:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-premium", title: "Premium", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-chat", title: "Chat", percent: 0, resetAt: nil)
+            ]
+        case .zai:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-session", title: viewModel.text(.quotaFiveHour), percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: viewModel.text(.quotaWeekly), percent: 0, resetAt: nil)
+            ]
+        case .amp:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-free", title: "Free", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-credits", title: "Credits", percent: 0, resetAt: nil)
+            ]
+        case .cursor:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Monthly", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-ondemand", title: "On-Demand", percent: 0, resetAt: nil)
+            ]
+        case .jetbrains:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-quota", title: "Quota", percent: 0, resetAt: nil)
+            ]
+        case .kiro:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Credits", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-bonus", title: "Bonus", percent: 0, resetAt: nil)
+            ]
+        case .windsurf:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-prompt", title: "Prompt", percent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-flex", title: "Flex", percent: 0, resetAt: nil)
+            ]
+        case .relay, .open, .dragon:
+            return []
+        }
+    }
+
+    private func metricRank(_ kind: UsageQuotaKind) -> Int {
+        switch kind {
+        case .session: return 0
+        case .weekly: return 1
+        case .reviews: return 2
+        case .modelWeekly: return 3
+        case .credits: return 4
+        case .extraUsage: return 5
+        case .custom: return 6
+        }
+    }
+
+    private func metricTitle(for window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
+        switch window.kind {
+        case .session:
+            return viewModel.text(.quotaFiveHour)
+        case .weekly:
+            return viewModel.text(.quotaWeekly)
+        default:
+            if provider.type == .kimi,
+               window.kind == .custom,
+               window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "overall" {
+                return viewModel.text(.quotaWeekly)
+            }
+            return window.title
+        }
+    }
+
+    private func formattedBalanceNumber(_ value: Double?) -> String {
+        guard let value else { return "-" }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+    }
+
+    private func elapsedText(from date: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        switch viewModel.language {
+        case .zhHans:
+            if seconds < 60 { return "\(seconds) 秒前" }
+            if seconds < 3600 { return "\(seconds / 60) 分钟前" }
+            if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
+            return "\(seconds / 86_400) 天前"
+        case .en:
+            if seconds < 60 { return "\(seconds)s ago" }
+            if seconds < 3600 { return "\(seconds / 60)m ago" }
+            if seconds < 86_400 { return "\(seconds / 3600)h ago" }
+            return "\(seconds / 86_400)d ago"
+        }
+    }
+
+    private func resetText(to target: Date) -> String {
+        let interval = max(0, Int(target.timeIntervalSince(now)))
+        let days = interval / 86_400
+        let hours = (interval % 86_400) / 3_600
+        let minutes = (interval % 3_600) / 60
+        let seconds = interval % 60
+
+        switch viewModel.language {
+        case .zhHans:
+            if days > 0 {
+                return "\(days)天\(hours):\(String(format: "%02d", minutes)): \(String(format: "%02d", seconds)) 重置".replacingOccurrences(of: " ", with: "")
+            }
+            return "\(hours):\(String(format: "%02d", minutes)): \(String(format: "%02d", seconds)) 重置".replacingOccurrences(of: " ", with: "")
+        case .en:
+            if days > 0 {
+                return "resets in \(days)d \(hours):\(String(format: "%02d", minutes)): \(String(format: "%02d", seconds))"
+            }
+            return "resets in \(hours):\(String(format: "%02d", minutes)): \(String(format: "%02d", seconds))"
+        }
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        min(100, max(0, value))
+    }
+}
+
+private struct PercentageModelCard: View {
+    let title: String
+    let iconName: String
+    let iconFallback: String
+    let activeTag: String?
+    let status: CardStatus
+    let metrics: [PercentageMetricDisplay]
+    let errorText: String?
+    let backgroundColor: Color
+    let isDisconnected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    BundledIconView(name: iconName, fallback: iconFallback, size: 12)
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                    if let activeTag, !activeTag.isEmpty {
+                        Text(activeTag)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white)
+                            .padding(2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Color(hex: 0x296322))
+                            )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(status.text)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(status.color)
+            }
+
+            HStack(spacing: 24) {
+                ForEach(metrics) { metric in
+                    PercentageMetricView(metric: metric)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            if let errorText, !errorText.isEmpty {
+                Text(errorText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(hex: 0xD83E3E))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(hex: 0xD83E3E), lineWidth: isDisconnected ? 1 : 0)
+        )
+    }
+}
+
+private struct PercentageMetricView: View {
+    let metric: PercentageMetricDisplay
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(metric.title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                Spacer(minLength: 4)
+                Text(metric.resetText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.30))
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 6) {
+                Text(metric.valueText)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, alignment: .leading)
+                    .lineLimit(1)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(0.30))
+                        if let percent = metric.percent, percent > 0 {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(metric.barColor)
+                                .frame(width: max(1, geo.size.width * percent / 100))
+                        }
+                    }
+                }
+                .frame(height: 4)
+            }
+        }
+    }
+}
+
+private struct AmountModelCard: View {
+    let title: String
+    let iconName: String
+    let iconFallback: String
+    let status: CardStatus
+    let amountText: String
+    let errorText: String?
+    let backgroundColor: Color
+    let isDisconnected: Bool
+    let balanceLabel: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    BundledIconView(name: iconName, fallback: iconFallback, size: 12)
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(status.text)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(status.color)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(balanceLabel)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.50))
+                HStack(spacing: 2) {
+                    Text("💰")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(amountText)
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+            }
+
+            if let errorText, !errorText.isEmpty {
+                Text(errorText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(hex: 0xD83E3E))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(hex: 0xD83E3E), lineWidth: isDisconnected ? 1 : 0)
+        )
+    }
+}
+
+private struct BundledIconView: View {
+    let name: String
+    let fallback: String
+    let size: CGFloat
+    var tint: Color? = nil
+
+    var body: some View {
         Group {
             if let image = bundledImage(named: name) {
                 if let tint {
@@ -328,118 +684,20 @@ struct MenuContentView: View {
         }
         return nil
     }
+}
 
-    private func quotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [QuotaMetric] {
-        guard let snapshot else { return [] }
+private struct CardStatus {
+    let text: String
+    let color: Color
+}
 
-        switch provider.type {
-        case .codex:
-            return [
-                QuotaMetric(
-                    id: "\(provider.id)-primary",
-                    title: viewModel.text(.quotaFiveHour),
-                    percent: clamp(metaDouble("primaryRemainingPercent", in: snapshot) ?? snapshot.remaining ?? 0),
-                    resetAt: metaDate("primaryResetAt", in: snapshot)
-                ),
-                QuotaMetric(
-                    id: "\(provider.id)-secondary",
-                    title: viewModel.text(.quotaWeekly),
-                    percent: clamp(metaDouble("secondaryRemainingPercent", in: snapshot) ?? 0),
-                    resetAt: metaDate("secondaryResetAt", in: snapshot)
-                )
-            ]
-        case .kimi:
-            return [
-                QuotaMetric(
-                    id: "\(provider.id)-5h",
-                    title: viewModel.text(.quotaFiveHour),
-                    percent: clamp(metaDouble("kimi.window5h.remainingPercent", in: snapshot) ?? 0),
-                    resetAt: metaDate("kimi.window5h.resetAt", in: snapshot)
-                ),
-                QuotaMetric(
-                    id: "\(provider.id)-weekly",
-                    title: viewModel.text(.quotaWeekly),
-                    percent: clamp(metaDouble("kimi.weekly.remainingPercent", in: snapshot) ?? 0),
-                    resetAt: metaDate("kimi.weekly.resetAt", in: snapshot)
-                )
-            ]
-        case .open, .dragon:
-            return []
-        }
-    }
-
-    private func barColor(for percent: Double) -> Color {
-        if percent <= 20 { return Color(hex: 0xE64545) }
-        if percent <= 40 { return Color(hex: 0xD87E3E) }
-        return Color(hex: 0x51DB42)
-    }
-
-    private func balanceLevel(remaining: Double, threshold: Double, hasError: Bool) -> BalanceLevel {
-        if hasError { return .error }
-        if remaining <= 0.0001 { return .exhausted }
-        if remaining <= threshold { return .tight }
-        return .sufficient
-    }
-
-    private func formattedBalanceNumber(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
-    }
-
-    private func elapsedText(from date: Date) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince(date)))
-        switch viewModel.language {
-        case .zhHans:
-            if seconds < 60 { return "\(seconds) 秒前" }
-            if seconds < 3600 { return "\(seconds / 60) 分钟前" }
-            if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
-            return "\(seconds / 86_400) 天前"
-        case .en:
-            if seconds < 60 { return "\(seconds)s ago" }
-            if seconds < 3600 { return "\(seconds / 60)m ago" }
-            if seconds < 86_400 { return "\(seconds / 3600)h ago" }
-            return "\(seconds / 86_400)d ago"
-        }
-    }
-
-    private func resetText(to target: Date) -> String {
-        let interval = max(0, Int(target.timeIntervalSince(now)))
-        let days = interval / 86_400
-        let hours = (interval % 86_400) / 3_600
-        let minutes = (interval % 3_600) / 60
-        let seconds = interval % 60
-
-        switch viewModel.language {
-        case .zhHans:
-            if days > 0 {
-                return "\(days)天\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))后重置"
-            }
-            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))后重置"
-        case .en:
-            if days > 0 {
-                return "resets in \(days)d \(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))"
-            }
-            return "resets in \(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))"
-        }
-    }
-
-    private func metaDouble(_ key: String, in snapshot: UsageSnapshot) -> Double? {
-        snapshot.rawMeta[key].flatMap(Double.init)
-    }
-
-    private func metaDate(_ key: String, in snapshot: UsageSnapshot) -> Date? {
-        guard let raw = snapshot.rawMeta[key], let epoch = TimeInterval(raw), epoch > 0 else {
-            return nil
-        }
-        return Date(timeIntervalSince1970: epoch)
-    }
-
-    private func clamp(_ value: Double) -> Double {
-        min(100, max(0, value))
-    }
+private struct PercentageMetricDisplay: Identifiable {
+    let id: String
+    let title: String
+    let valueText: String
+    let resetText: String
+    let percent: Double?
+    let barColor: Color
 }
 
 private struct QuotaMetric: Identifiable {
@@ -447,13 +705,6 @@ private struct QuotaMetric: Identifiable {
     let title: String
     let percent: Double
     let resetAt: Date?
-}
-
-private enum BalanceLevel {
-    case sufficient
-    case tight
-    case exhausted
-    case error
 }
 
 private extension Color {

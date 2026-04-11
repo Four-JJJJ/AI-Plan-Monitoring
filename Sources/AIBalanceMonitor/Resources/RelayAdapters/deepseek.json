@@ -1,0 +1,33 @@
+{
+  "id": "deepseek",
+  "displayName": "platform.deepseek.com",
+  "match": {
+    "hostPatterns": ["platform.deepseek.com"],
+    "defaultDisplayName": "platform.deepseek.com",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "setup": {
+    "recommendedBaseURL": "https://platform.deepseek.com",
+    "requiredInputs": ["balanceAuth"],
+    "balanceAuthHint": {
+      "zhHans": "填写 DeepSeek 平台后台生成的 Bearer Token 或登录态令牌。",
+      "en": "Enter the Bearer token or dashboard session token from the DeepSeek platform."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedBearer" },
+    { "kind": "browserBearer" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api/v0/users/get_user_summary",
+    "authHeader": "Authorization",
+    "authScheme": "Bearer"
+  },
+  "extract": {
+    "remaining": "add(coalesce(sum(data.biz_data.normal_wallets.*.balance),0),coalesce(sum(data.biz_data.bonus_wallets.*.balance),0))",
+    "used": "coalesce(sum(data.biz_data.monthly_costs.*.amount),data.biz_data.monthly_usage,monthly_usage)",
+    "unit": "\"CNY\""
+  }
+}
