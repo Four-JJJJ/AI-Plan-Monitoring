@@ -131,4 +131,4 @@ Build a universal DMG:
 
 ## License
 
-Add the license you want before broader public distribution if you plan to open source the project long term.
+MIT. See [LICENSE](LICENSE).
