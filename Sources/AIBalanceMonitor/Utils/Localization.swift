@@ -7,6 +7,8 @@ enum L10nKey {
     case settingsTitle
     case done
     case general
+    case launchAtLogin
+    case launchAtLoginHint
     case providers
     case relaySimpleMode
     case relaySimpleModeHint
@@ -114,6 +116,30 @@ enum L10nKey {
     case connectionFailed
     case advancedSettings
     case statusBarDisplayProvider
+    case codexProfiles
+    case codexProfileSlotA
+    case codexProfileSlotB
+    case codexAuthJSON
+    case codexImportProfile
+    case codexProfileImported
+    case codexProfileImportFailed
+    case codexProfileMissing
+    case codexCurrentAccount
+    case codexSwitchAction
+    case codexSwitchSuccess
+    case codexSwitchNeedsVerification
+    case codexSwitchFailed
+    case codexSwitchAppliedNeedsRestart
+    case codexImportedAt
+    case codexProfileHint
+    case codexProfileDetails
+    case codexAuthJSONHowTo
+    case codexProfileEmailUnknown
+    case codexDeleteProfile
+    case codexDeleteProfileTitle
+    case codexDeleteProfileMessage
+    case codexDeleteConfirm
+    case codexImportNextProfile
 }
 
 enum Localizer {
@@ -127,6 +153,8 @@ enum Localizer {
             case .settingsTitle: return "设置"
             case .done: return "完成"
             case .general: return "通用"
+            case .launchAtLogin: return "开机时自动启动"
+            case .launchAtLoginHint: return "勾选后会把 AI Plan Monitor 注册为登录项。建议安装到“应用程序”后再启用。"
             case .providers: return "数据源"
             case .relaySimpleMode: return "第三方极简配置（推荐）"
             case .relaySimpleModeHint: return "开启后仅保留核心项，接口路径与字段解析自动使用站点模板。"
@@ -234,6 +262,30 @@ enum Localizer {
             case .connectionFailed: return "连接失败"
             case .advancedSettings: return "高级设置"
             case .statusBarDisplayProvider: return "在状态栏展示该模型"
+            case .codexProfiles: return "Codex 账号档案"
+            case .codexProfileSlotA: return "账号 A"
+            case .codexProfileSlotB: return "账号 B"
+            case .codexAuthJSON: return "auth.json 内容"
+            case .codexImportProfile: return "导入账号"
+            case .codexProfileImported: return "账号档案已导入"
+            case .codexProfileImportFailed: return "导入失败"
+            case .codexProfileMissing: return "该槽位还没有导入可切换的 Codex 账号"
+            case .codexCurrentAccount: return "当前账号"
+            case .codexSwitchAction: return "切换"
+            case .codexSwitchSuccess: return "已切换，可直接使用；如桌面端未刷新，请重开 Codex"
+            case .codexSwitchNeedsVerification: return "已切换到该账号，但需要重新验证"
+            case .codexSwitchFailed: return "切换失败"
+            case .codexSwitchAppliedNeedsRestart: return "已写入本机登录，请重开 Codex 桌面端"
+            case .codexImportedAt: return "最近导入"
+            case .codexProfileHint: return "粘贴该账号完整 auth.json 内容。切换时会写回本机 Codex 当前登录，并立即做一次轻量校验。"
+            case .codexProfileDetails: return "详情"
+            case .codexAuthJSONHowTo: return "获取方法：先登录目标 Codex 账号，再复制 ~/.codex/auth.json 的完整内容。"
+            case .codexProfileEmailUnknown: return "未识别邮箱"
+            case .codexDeleteProfile: return "删除"
+            case .codexDeleteProfileTitle: return "删除 Codex 账号"
+            case .codexDeleteProfileMessage: return "删除后将移除该账号保存的 auth.json，本机当前已登录状态不会立刻受影响。"
+            case .codexDeleteConfirm: return "确认删除"
+            case .codexImportNextProfile: return "导入下一个账号"
             }
         case .en:
             switch key {
@@ -243,6 +295,8 @@ enum Localizer {
             case .settingsTitle: return "Settings"
             case .done: return "Done"
             case .general: return "General"
+            case .launchAtLogin: return "Launch at login"
+            case .launchAtLoginHint: return "When enabled, AI Plan Monitor is registered as a login item. It's best to enable this after moving the app to Applications."
             case .providers: return "Providers"
             case .relaySimpleMode: return "Minimal third-party setup (Recommended)"
             case .relaySimpleModeHint: return "When enabled, only core fields are shown and endpoint/JSON paths follow site templates."
@@ -350,6 +404,30 @@ enum Localizer {
             case .connectionFailed: return "Connection failed"
             case .advancedSettings: return "Advanced settings"
             case .statusBarDisplayProvider: return "Show this provider in menu bar"
+            case .codexProfiles: return "Codex Profiles"
+            case .codexProfileSlotA: return "Account A"
+            case .codexProfileSlotB: return "Account B"
+            case .codexAuthJSON: return "auth.json content"
+            case .codexImportProfile: return "Import Account"
+            case .codexProfileImported: return "Profile imported"
+            case .codexProfileImportFailed: return "Import failed"
+            case .codexProfileMissing: return "No imported Codex profile is available for this slot"
+            case .codexCurrentAccount: return "Current"
+            case .codexSwitchAction: return "Switch"
+            case .codexSwitchSuccess: return "Switched successfully. Reopen Codex if the desktop app does not refresh."
+            case .codexSwitchNeedsVerification: return "Switched to this account, but re-verification is required"
+            case .codexSwitchFailed: return "Switch failed"
+            case .codexSwitchAppliedNeedsRestart: return "Local Codex auth was updated. Reopen Codex desktop to apply it."
+            case .codexImportedAt: return "Imported"
+            case .codexProfileHint: return "Paste the full auth.json content for this account. Switching writes it back to local Codex auth and runs a lightweight validation."
+            case .codexProfileDetails: return "Details"
+            case .codexAuthJSONHowTo: return "How to get it: sign in to the target Codex account first, then copy the full contents of ~/.codex/auth.json."
+            case .codexProfileEmailUnknown: return "Email unavailable"
+            case .codexDeleteProfile: return "Delete"
+            case .codexDeleteProfileTitle: return "Delete Codex account"
+            case .codexDeleteProfileMessage: return "This removes the saved auth.json for the account. It does not immediately sign the current local Codex session out."
+            case .codexDeleteConfirm: return "Delete"
+            case .codexImportNextProfile: return "Import another account"
             }
         }
     }
@@ -360,6 +438,15 @@ enum Localizer {
             return "\(providerName) 剩余 \(remaining) \(unit)"
         case .en:
             return "\(providerName) remaining \(remaining) \(unit)"
+        }
+    }
+
+    static func lowQuotaWindowBody(providerName: String, windowTitle: String, remaining: String, language: AppLanguage) -> String {
+        switch language {
+        case .zhHans:
+            return "\(providerName) \(windowTitle) 剩余 \(remaining)%"
+        case .en:
+            return "\(providerName) \(windowTitle) remaining \(remaining)%"
         }
     }
 

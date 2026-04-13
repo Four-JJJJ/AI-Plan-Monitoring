@@ -132,19 +132,22 @@ struct RelaySetupManifest: Codable, Equatable {
     var quotaAuthHint: LocalizedText?
     var balanceAuthHint: LocalizedText?
     var userIDHint: LocalizedText?
+    var diagnosticHints: LocalizedText?
 
     init(
         recommendedBaseURL: String? = nil,
         requiredInputs: [RelayRequiredInputKind] = [],
         quotaAuthHint: LocalizedText? = nil,
         balanceAuthHint: LocalizedText? = nil,
-        userIDHint: LocalizedText? = nil
+        userIDHint: LocalizedText? = nil,
+        diagnosticHints: LocalizedText? = nil
     ) {
         self.recommendedBaseURL = recommendedBaseURL
         self.requiredInputs = requiredInputs
         self.quotaAuthHint = quotaAuthHint
         self.balanceAuthHint = balanceAuthHint
         self.userIDHint = userIDHint
+        self.diagnosticHints = diagnosticHints
     }
 }
 
@@ -230,8 +233,70 @@ struct RelayAdapterManifest: Codable, Equatable, Identifiable {
     var match: RelayAdapterMatch
     var setup: RelaySetupManifest?
     var authStrategies: [RelayAuthStrategy]
+    var displayMode: RelayDisplayMode
+    var supportsBrowserFallback: Bool
+    var supportsSeparateBalanceAuth: Bool
     var balanceRequest: RelayRequestManifest
     var tokenRequest: RelayTokenRequestManifest?
     var extract: RelayExtractManifest
     var postprocessID: RelayPostprocessID?
+
+    init(
+        id: String,
+        displayName: String,
+        match: RelayAdapterMatch,
+        setup: RelaySetupManifest? = nil,
+        authStrategies: [RelayAuthStrategy],
+        displayMode: RelayDisplayMode = .balance,
+        supportsBrowserFallback: Bool = true,
+        supportsSeparateBalanceAuth: Bool = true,
+        balanceRequest: RelayRequestManifest,
+        tokenRequest: RelayTokenRequestManifest? = nil,
+        extract: RelayExtractManifest,
+        postprocessID: RelayPostprocessID? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.match = match
+        self.setup = setup
+        self.authStrategies = authStrategies
+        self.displayMode = displayMode
+        self.supportsBrowserFallback = supportsBrowserFallback
+        self.supportsSeparateBalanceAuth = supportsSeparateBalanceAuth
+        self.balanceRequest = balanceRequest
+        self.tokenRequest = tokenRequest
+        self.extract = extract
+        self.postprocessID = postprocessID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case match
+        case setup
+        case authStrategies
+        case displayMode
+        case supportsBrowserFallback
+        case supportsSeparateBalanceAuth
+        case balanceRequest
+        case tokenRequest
+        case extract
+        case postprocessID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        match = try container.decode(RelayAdapterMatch.self, forKey: .match)
+        setup = try container.decodeIfPresent(RelaySetupManifest.self, forKey: .setup)
+        authStrategies = try container.decode([RelayAuthStrategy].self, forKey: .authStrategies)
+        displayMode = try container.decodeIfPresent(RelayDisplayMode.self, forKey: .displayMode) ?? .balance
+        supportsBrowserFallback = try container.decodeIfPresent(Bool.self, forKey: .supportsBrowserFallback) ?? true
+        supportsSeparateBalanceAuth = try container.decodeIfPresent(Bool.self, forKey: .supportsSeparateBalanceAuth) ?? true
+        balanceRequest = try container.decode(RelayRequestManifest.self, forKey: .balanceRequest)
+        tokenRequest = try container.decodeIfPresent(RelayTokenRequestManifest.self, forKey: .tokenRequest)
+        extract = try container.decode(RelayExtractManifest.self, forKey: .extract)
+        postprocessID = try container.decodeIfPresent(RelayPostprocessID.self, forKey: .postprocessID)
+    }
 }

@@ -2,32 +2,304 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="AIBalanceMonitor"
-BIN_PATH="$ROOT_DIR/.build/arm64-apple-macosx/release/$APP_NAME"
+APP_NAME="AI Plan Monitor"
+EXECUTABLE_NAME="AIBalanceMonitor"
 DIST_DIR="$ROOT_DIR/dist"
 TMP_ROOT="$(mktemp -d /tmp/aibm_pkg.XXXXXX)"
 APP_DIR="$TMP_ROOT/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RES_DIR="$CONTENTS_DIR/Resources"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 DMG_STAGING="$TMP_ROOT/dmg-root"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
+RW_DMG_PATH="$TMP_ROOT/$APP_NAME-rw.dmg"
+MOUNT_POINT="$TMP_ROOT/mount"
+APP_ZIP_PATH="$TMP_ROOT/$APP_NAME.zip"
+INSTALL_GUIDE_NAME="安装说明（请先看这里）.txt"
+ICON_SOURCE_PATH="$ROOT_DIR/Sources/AIBalanceMonitor/Resources/app_icon_source.png"
+ICONSET_DIR="$TMP_ROOT/AppIcon.iconset"
+ICNS_PATH="$TMP_ROOT/AppIcon.icns"
+INSTALL_GUIDE_PATH="$DMG_STAGING/$INSTALL_GUIDE_NAME"
+
+log() {
+  echo "[$APP_NAME] $*"
+}
+
+warn() {
+  echo "[$APP_NAME] warning: $*" >&2
+}
+
+die() {
+  echo "[$APP_NAME] error: $*" >&2
+  exit 1
+}
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+require_cmd() {
+  have_cmd "$1" || die "missing required command: $1"
+}
+
+has_notary_profile() {
+  [[ -n "${NOTARYTOOL_PROFILE:-}" ]]
+}
+
+has_notary_apple_id() {
+  [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]
+}
+
+has_notary_api_key() {
+  [[ -n "${APPLE_API_KEY_PATH:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]
+}
+
+should_notarize() {
+  if [[ "${NOTARIZE_DMG:-}" == "" ]]; then
+    has_notary_profile || has_notary_apple_id || has_notary_api_key
+    return
+  fi
+
+  is_truthy "${NOTARIZE_DMG:-false}"
+}
+
+signing_identity() {
+  if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
+    echo "$DEVELOPER_ID_APPLICATION"
+  elif [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+    echo "$CODESIGN_IDENTITY"
+  else
+    echo ""
+  fi
+}
+
+sign_mode() {
+  local identity
+  identity="$(signing_identity)"
+  if [[ -n "$identity" ]]; then
+    echo "developer-id"
+  else
+    echo "ad-hoc"
+  fi
+}
+
+resolve_binary_path() {
+  local candidates=(
+    "$ROOT_DIR/.build/apple/Products/Release/$EXECUTABLE_NAME"
+    "$ROOT_DIR/.build/arm64-apple-macosx/release/$EXECUTABLE_NAME"
+    "$ROOT_DIR/.build/x86_64-apple-macosx/release/$EXECUTABLE_NAME"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+build_products_dir() {
+  local binary_path="$1"
+  dirname "$binary_path"
+}
+
+copy_support_files() {
+  local products_dir="$1"
+  mkdir -p "$RES_DIR" "$FRAMEWORKS_DIR"
+
+  local resource_bundle="$products_dir/${EXECUTABLE_NAME}_${EXECUTABLE_NAME}.bundle"
+  if [[ -d "$resource_bundle" ]]; then
+    log "Copying SwiftPM resource bundle"
+    cp -R "$resource_bundle" "$RES_DIR/"
+  fi
+
+  local package_frameworks="$products_dir/PackageFrameworks"
+  if [[ -d "$package_frameworks" ]]; then
+    log "Copying PackageFrameworks"
+    cp -R "$package_frameworks"/. "$FRAMEWORKS_DIR/"
+  fi
+}
+
+generate_icns() {
+  [[ -f "$ICON_SOURCE_PATH" ]] || return 0
+  require_cmd sips
+  require_cmd iconutil
+
+  rm -rf "$ICONSET_DIR" "$ICNS_PATH"
+  mkdir -p "$ICONSET_DIR"
+
+  local sizes=(16 32 128 256 512)
+  for size in "${sizes[@]}"; do
+    sips -z "$size" "$size" "$ICON_SOURCE_PATH" --out "$ICONSET_DIR/icon_${size}x${size}.png" >/dev/null
+    local retina=$((size * 2))
+    sips -z "$retina" "$retina" "$ICON_SOURCE_PATH" --out "$ICONSET_DIR/icon_${size}x${size}@2x.png" >/dev/null
+  done
+
+  log "Generating AppIcon.icns"
+  iconutil -c icns "$ICONSET_DIR" -o "$ICNS_PATH"
+  cp "$ICNS_PATH" "$RES_DIR/AppIcon.icns"
+}
+
+sign_app_bundle() {
+  local target="$1"
+  local identity
+  identity="$(signing_identity)"
+
+  if ! have_cmd codesign; then
+    warn "codesign not found; app bundle will remain unsigned"
+    return 0
+  fi
+
+  if [[ -n "$identity" ]]; then
+    log "Signing app bundle with Developer ID identity"
+    codesign --force --deep --options runtime --timestamp --sign "$identity" "$target"
+  else
+    log "Signing app bundle with ad-hoc identity"
+    codesign --force --deep --sign - --timestamp=none "$target"
+  fi
+
+  codesign --verify --deep --strict --verbose=2 "$target" >/dev/null
+}
+
+sign_disk_image() {
+  local target="$1"
+  local identity
+  identity="$(signing_identity)"
+
+  if ! have_cmd codesign; then
+    return 0
+  fi
+
+  if [[ -n "$identity" ]]; then
+    log "Signing disk image with Developer ID identity"
+    codesign --force --timestamp --sign "$identity" "$target"
+    codesign --verify --strict --verbose=2 "$target" >/dev/null
+  fi
+}
+
+assess_bundle() {
+  local target="$1"
+  if have_cmd spctl; then
+    spctl --assess --type exec --verbose=2 "$target" || true
+  fi
+}
+
+notary_submit() {
+  local artifact="$1"
+  require_cmd xcrun
+
+  if has_notary_profile; then
+    xcrun notarytool submit "$artifact" --keychain-profile "$NOTARYTOOL_PROFILE" --wait
+    return 0
+  fi
+
+  if has_notary_api_key; then
+    xcrun notarytool submit "$artifact" \
+      --key "$APPLE_API_KEY_PATH" \
+      --key-id "$APPLE_API_KEY_ID" \
+      --issuer "$APPLE_API_ISSUER_ID" \
+      --wait
+    return 0
+  fi
+
+  if has_notary_apple_id; then
+    xcrun notarytool submit "$artifact" \
+      --apple-id "$APPLE_ID" \
+      --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+      --team-id "$APPLE_TEAM_ID" \
+      --wait
+    return 0
+  fi
+
+  die "NOTARIZE_DMG is enabled but no notarization credentials were provided"
+}
+
+staple_artifact() {
+  local target="$1"
+  require_cmd xcrun
+  xcrun stapler staple "$target"
+}
+
+prepare_install_guide() {
+  cat > "$INSTALL_GUIDE_PATH" <<EOF
+AI Plan Monitor 安装说明
+
+1. 将 “AI Plan Monitor.app” 拖到 “Applications” 文件夹。
+2. 第一次打开时，请前往“应用程序”文件夹，右键 AI Plan Monitor，选择“打开”。
+3. 如果系统仍然拦截：
+   打开“系统设置” -> “隐私与安全性” -> 找到 AI Plan Monitor -> 点击“仍要打开”。
+
+说明：
+- 这是 GitHub 开源分发版本，可能会被 macOS Gatekeeper 首次拦截。
+- 完成一次“右键打开”后，后续通常可以正常启动。
+EOF
+}
+
+customize_dmg_window() {
+  local volume_name="$1"
+  require_cmd osascript
+
+  osascript <<EOF || warn "Skipping Finder DMG window customization"
+tell application "Finder"
+  tell disk "$volume_name"
+    open
+    delay 1
+    tell container window
+      set current view to icon view
+      set toolbar visible to false
+      set statusbar visible to false
+      set bounds to {120, 120, 840, 540}
+    end tell
+    tell icon view options of container window
+      set arrangement to not arranged
+      set icon size to 128
+      set text size to 14
+    end tell
+    set position of item "$APP_NAME.app" of container window to {180, 360}
+    set position of item "Applications" of container window to {540, 360}
+    update without registering applications
+    delay 2
+    close
+    open
+    delay 2
+    close
+  end tell
+end tell
+EOF
+}
 
 # Always build fresh release before packaging to avoid stale DMG content.
-echo "Building release binary..."
-swift build -c release
+log "Building universal release binary..."
+swift build -c release --arch arm64 --arch x86_64
+
+BIN_PATH="$(resolve_binary_path || true)"
 
 if [[ ! -x "$BIN_PATH" ]]; then
-  echo "Release binary not found at: $BIN_PATH"
-  exit 1
+  die "release binary not found at: $BIN_PATH"
 fi
+
+PRODUCTS_DIR="$(build_products_dir "$BIN_PATH")"
 
 mkdir -p "$DIST_DIR"
 rm -rf "$DIST_DIR/$APP_NAME.app" "$DIST_DIR/dmg-root" "$DMG_PATH"
-mkdir -p "$MACOS_DIR" "$RES_DIR" "$DMG_STAGING"
+mkdir -p "$MACOS_DIR" "$RES_DIR" "$FRAMEWORKS_DIR" "$DMG_STAGING"
 
-cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
-chmod +x "$MACOS_DIR/$APP_NAME"
+cp "$BIN_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
+chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
+copy_support_files "$PRODUCTS_DIR"
+generate_icns
+log "Using binary: $BIN_PATH"
+file "$MACOS_DIR/$EXECUTABLE_NAME" || true
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -37,15 +309,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>AIBalanceMonitor</string>
+  <string>AI Plan Monitor</string>
   <key>CFBundleExecutable</key>
   <string>AIBalanceMonitor</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.fourj.aibalancemonitor</string>
+  <string>com.aibalancemonitor.app</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>AIBalanceMonitor</string>
+  <string>AI Plan Monitor</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -67,21 +341,51 @@ if command -v xattr >/dev/null 2>&1; then
   xattr -cr "$APP_DIR" >/dev/null 2>&1 || true
 fi
 
-# Ad-hoc sign for local distribution consistency.
-if command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - --timestamp=none "$APP_DIR" >/dev/null
-  codesign --verify --deep --strict --verbose=2 "$APP_DIR" >/dev/null
+if should_notarize && [[ -z "$(signing_identity)" ]]; then
+  die "notarization requires DEVELOPER_ID_APPLICATION (or CODESIGN_IDENTITY) to be set"
+fi
+
+log "Packaging mode: $(sign_mode)"
+sign_app_bundle "$APP_DIR"
+assess_bundle "$APP_DIR"
+
+if should_notarize; then
+  log "Creating app zip for notarization"
+  require_cmd ditto
+  rm -f "$APP_ZIP_PATH"
+  ditto -c -k --keepParent "$APP_DIR" "$APP_ZIP_PATH"
+  log "Submitting app zip for notarization"
+  notary_submit "$APP_ZIP_PATH"
+  log "Stapling app bundle"
+  staple_artifact "$APP_DIR"
 fi
 
 cp -R "$APP_DIR" "$DMG_STAGING/"
+prepare_install_guide
 ln -s /Applications "$DMG_STAGING/Applications"
 
 hdiutil create \
   -volname "$APP_NAME" \
   -srcfolder "$DMG_STAGING" \
   -ov \
-  -format UDZO \
-  "$DMG_PATH" >/dev/null
+  -format UDRW \
+  "$RW_DMG_PATH" >/dev/null
 
-echo "DMG: $DMG_PATH"
-echo "TMP_APP: $APP_DIR"
+mkdir -p "$MOUNT_POINT"
+hdiutil attach "$RW_DMG_PATH" -mountpoint "$MOUNT_POINT" -noautoopen >/dev/null
+customize_dmg_window "$APP_NAME"
+hdiutil detach "$MOUNT_POINT" >/dev/null
+
+hdiutil convert "$RW_DMG_PATH" -ov -format UDZO -o "$DMG_PATH" >/dev/null
+
+sign_disk_image "$DMG_PATH"
+
+if should_notarize; then
+  log "Submitting DMG for notarization"
+  notary_submit "$DMG_PATH"
+  log "Stapling DMG"
+  staple_artifact "$DMG_PATH"
+fi
+
+log "DMG: $DMG_PATH"
+log "TMP_APP: $APP_DIR"

@@ -297,7 +297,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
     private func resolveClaudeCookieHeader() throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
-        let service = "AIBalanceMonitor"
+        let service = KeychainService.defaultServiceName
         if let account = official.manualCookieAccount,
            let stored = keychain.readToken(service: service, account: account),
            !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

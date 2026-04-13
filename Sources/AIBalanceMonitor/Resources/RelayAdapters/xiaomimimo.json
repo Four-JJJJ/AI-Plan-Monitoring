@@ -29,9 +29,10 @@
     }
   },
   "extract": {
-    "remaining": "coalesce(data.balance,data.user.balance,data.wallet.balance,data.walletBalance,data.accountBalance,data.availableBalance,balance,walletBalance,accountBalance,availableBalance)",
-    "used": "coalesce(data.monthlyUsage,data.monthlySpend,data.used,data.consume,monthlyUsage,monthlySpend,used,consume)",
+    "remaining": "coalesce(data.balance,data.data.balance,data.result.balance,data.user.balance,data.data.user.balance,data.account.balance,data.data.account.balance,data.result.account.balance,data.wallet.balance,data.data.wallet.balance,data.result.wallet.balance,data.walletBalance,data.data.walletBalance,data.result.walletBalance,data.accountBalance,data.data.accountBalance,data.result.accountBalance,data.availableBalance,data.data.availableBalance,data.result.availableBalance,data.available_amount,data.data.available_amount,data.result.available_amount,data.availableAmount,data.data.availableAmount,data.result.availableAmount,data.currentBalance,data.data.currentBalance,data.result.currentBalance,data.remainBalance,data.data.remainBalance,data.result.remainBalance,data.remainingBalance,data.data.remainingBalance,data.result.remainingBalance,data.amount,data.data.amount,data.result.amount,balance,availableBalance,available_amount,availableAmount,currentBalance,walletBalance,accountBalance,remainBalance,remainingBalance,amount)",
+    "used": "coalesce(data.monthlyUsage,data.data.monthlyUsage,data.result.monthlyUsage,data.monthlySpend,data.data.monthlySpend,data.result.monthlySpend,data.monthly_spend,data.data.monthly_spend,data.result.monthly_spend,data.used,data.data.used,data.result.used,data.consume,data.data.consume,data.result.consume,data.totalUsage,data.data.totalUsage,data.result.totalUsage,data.totalSpend,data.data.totalSpend,data.result.totalSpend,monthlyUsage,monthlySpend,monthly_spend,used,consume,totalUsage,totalSpend)",
+    "limit": "coalesce(data.totalLimit,data.data.totalLimit,data.result.totalLimit,data.limit,data.data.limit,data.result.limit,data.totalAmount,data.data.totalAmount,data.result.totalAmount,data.total_amount,data.data.total_amount,data.result.total_amount,data.quota,data.data.quota,data.result.quota,totalLimit,limit,totalAmount,total_amount,quota)",
     "unit": "\"CNY\"",
-    "accountLabel": "coalesce(data.nickName,data.nickname,data.userName,data.user.name,nickName,nickname,userName,name)"
+    "accountLabel": "coalesce(data.nickName,data.nickname,data.userName,data.user.name,data.data.nickName,data.data.nickname,data.data.userName,data.data.user.name,data.result.nickName,data.result.nickname,data.result.userName,data.result.user.name,nickName,nickname,userName,name)"
   }
 }

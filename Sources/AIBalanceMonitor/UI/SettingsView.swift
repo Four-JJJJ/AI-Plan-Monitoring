@@ -26,7 +26,11 @@ struct SettingsView: View {
     @State private var officialSourceModeInputs: [String: OfficialSourceMode] = [:]
     @State private var officialWebModeInputs: [String: OfficialWebMode] = [:]
     @State private var officialCookieInputs: [String: String] = [:]
-    @State private var relayTestResult: [String: String] = [:]
+    @State private var codexProfileJSONInputs: [String: String] = [:]
+    @State private var codexProfileResult: [String: String] = [:]
+    @State private var codexProfileExpanded: Set<String> = []
+    @State private var codexProfilePendingDelete: CodexSlotID?
+    @State private var relayTestResult: [String: RelayDiagnosticResult] = [:]
     @State private var relayAdvancedExpanded: [String: Bool] = [:]
     @State private var selectedRelayTemplateInputs: [String: String] = [:]
     @State private var relayCredentialModeInputs: [String: RelayCredentialMode] = [:]
@@ -111,6 +115,32 @@ struct SettingsView: View {
         }
         .onChange(of: selectedGroup) { _, _ in
             syncSelection()
+        }
+        .alert(
+            viewModel.text(.codexDeleteProfileTitle),
+            isPresented: Binding(
+                get: { codexProfilePendingDelete != nil },
+                set: { newValue in
+                    if !newValue {
+                        codexProfilePendingDelete = nil
+                    }
+                }
+            ),
+            presenting: codexProfilePendingDelete
+        ) { slotID in
+            Button(viewModel.text(.codexDeleteConfirm), role: .destructive) {
+                let key = slotID.rawValue
+                viewModel.removeCodexProfile(slotID: slotID)
+                codexProfileJSONInputs.removeValue(forKey: key)
+                codexProfileResult.removeValue(forKey: key)
+                codexProfileExpanded.remove(key)
+                codexProfilePendingDelete = nil
+            }
+            Button(viewModel.text(.done), role: .cancel) {
+                codexProfilePendingDelete = nil
+            }
+        } message: { _ in
+            Text(viewModel.text(.codexDeleteProfileMessage))
         }
     }
 
@@ -229,6 +259,22 @@ struct SettingsView: View {
 
             HStack(spacing: 8) {
                 Toggle(
+                    viewModel.text(.launchAtLogin),
+                    isOn: Binding(
+                        get: { viewModel.launchAtLoginEnabled },
+                        set: { viewModel.setLaunchAtLoginEnabled($0) }
+                    )
+                )
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
+
+            Text(viewModel.text(.launchAtLoginHint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Toggle(
                     viewModel.text(.relaySimpleMode),
                     isOn: Binding(
                         get: { viewModel.simplifiedRelayConfig },
@@ -266,7 +312,7 @@ struct SettingsView: View {
                 showsManualUserID: relayTemplateNeedsManualUserID($0)
             )
         } ?? [.displayName, .baseURL]
-        let showNameField = !simpleMode || selectedRequiredInputs.contains(.displayName)
+        let showNameField = true
         let showBaseURLField = !simpleMode || selectedRequiredInputs.contains(.baseURL)
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -316,11 +362,6 @@ struct SettingsView: View {
             }
 
             if simpleMode {
-                if !showNameField, let selectedManifest {
-                    Text("\(viewModel.text(.providerName)): \(selectedManifest.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 if !showBaseURLField, let selectedManifest, let suggestedBaseURL = suggestedBaseURL(for: selectedManifest) {
                     Text("Base URL: \(suggestedBaseURL)")
                         .font(.caption)
@@ -372,6 +413,9 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func providerSettingsCard(_ provider: ProviderDescriptor) -> some View {
+        let snapshot = viewModel.snapshots[provider.id]
+        let error = viewModel.errors[provider.id]
+
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 HStack(spacing: 8) {
@@ -381,6 +425,10 @@ struct SettingsView: View {
                     .font(.headline)
                 Spacer()
                 toggleStateBadge(isOn: provider.enabled)
+            }
+
+            if snapshot != nil || error != nil {
+                providerUsageSummarySection(snapshot: snapshot, error: error)
             }
 
             HStack(spacing: 8) {
@@ -432,6 +480,81 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(outlineColor, lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private func providerUsageSummarySection(snapshot: UsageSnapshot?, error: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let snapshot {
+                HStack(spacing: 16) {
+                    if let remaining = snapshot.remaining {
+                        providerUsageMetric(
+                            title: snapshot.unit == "quota" ? viewModel.text(.balanceLabel) : viewModel.text(.remaining),
+                            value: formattedSettingsAmount(remaining),
+                            unit: snapshot.unit
+                        )
+                    }
+
+                    if let used = snapshot.used {
+                        providerUsageMetric(
+                            title: viewModel.text(.used),
+                            value: formattedSettingsAmount(used),
+                            unit: snapshot.unit
+                        )
+                    }
+
+                    if let limit = snapshot.limit {
+                        providerUsageMetric(
+                            title: viewModel.text(.limit),
+                            value: formattedSettingsAmount(limit),
+                            unit: snapshot.unit
+                        )
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 8) {
+                    Text("\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: snapshot.updatedAt))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !snapshot.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(snapshot.note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            } else if let error, !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private func providerUsageMetric(title: String, value: String, unit: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(unit.isEmpty ? value : "\(value) \(unit)")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+        }
     }
 
     @ViewBuilder
@@ -511,6 +634,10 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if provider.type == .codex {
+                codexProfileManagementSection()
+            }
+
             Button(viewModel.text(.saveConfig)) {
                 viewModel.updateOfficialProviderSettings(
                     providerID: provider.id,
@@ -519,6 +646,223 @@ struct SettingsView: View {
                 )
             }
             .buttonStyle(.borderedProminent)
+        }
+    }
+
+    @ViewBuilder
+    private func codexProfileManagementSection() -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(viewModel.text(.codexProfiles))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(viewModel.text(.codexProfileHint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            let profiles = viewModel.codexProfilesForSettings()
+            let slotIDs = profiles.map(\.slotID).sorted()
+
+            ForEach(slotIDs, id: \.rawValue) { slotID in
+                let key = slotID.rawValue
+                let profile = profiles.first(where: { $0.slotID == slotID })
+                let isExpanded = codexProfileExpanded.contains(key)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(viewModel.codexSettingsTitle(for: slotID))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                        if profile?.isCurrentSystemAccount == true {
+                            Text(viewModel.text(.codexCurrentAccount))
+                                .font(.system(size: 8))
+                                .foregroundStyle(.white)
+                                .padding(2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(Color(hex: 0x296322))
+                                )
+                        }
+                        Text(profile?.accountEmail ?? viewModel.text(.codexProfileEmailUnknown))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        if let importedAt = profile?.lastImportedAt {
+                            Text("\(viewModel.text(.codexImportedAt)) \(settingsElapsedText(from: importedAt))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if profile != nil, profile?.isCurrentSystemAccount != true {
+                            Button(viewModel.text(.codexDeleteProfile), role: .destructive) {
+                                codexProfilePendingDelete = slotID
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .foregroundStyle(Color(hex: 0xD83E3E))
+                        }
+                    }
+
+                    if profile == nil {
+                        Text(viewModel.text(.codexImportNextProfile))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        if isExpanded {
+                            codexProfileExpanded.remove(key)
+                        } else {
+                            codexProfileExpanded.insert(key)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.semibold))
+                            Text(viewModel.text(.codexProfileDetails))
+                                .font(.caption.weight(.semibold))
+                            Text(viewModel.text(.codexAuthJSONHowTo))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Spacer()
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                    }
+                    .buttonStyle(.plain)
+
+                    if isExpanded {
+                        TextEditor(text: Binding(
+                            get: { codexProfileJSONInputs[key] ?? profile?.authJSON ?? "" },
+                            set: { codexProfileJSONInputs[key] = $0 }
+                        ))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 88)
+                        .padding(6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(outlineColor, lineWidth: 1)
+                        )
+
+                        HStack {
+                            Button(viewModel.text(.codexImportProfile)) {
+                                codexProfileResult[key] = viewModel.saveCodexProfile(
+                                    slotID: slotID,
+                                    displayName: "Codex \(slotID.rawValue)",
+                                    authJSON: codexProfileJSONInputs[key] ?? profile?.authJSON ?? ""
+                                )
+                            }
+                            .buttonStyle(.bordered)
+
+                            Spacer()
+                        }
+                    }
+
+                    if let result = codexProfileResult[key], !result.isEmpty {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.contains(viewModel.text(.codexProfileImportFailed)) ? .red : .green)
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(outlineColor, lineWidth: 1)
+                )
+            }
+
+            let nextSlotID = viewModel.nextCodexProfileSlotID()
+            let nextKey = nextSlotID.rawValue
+            let nextExpanded = codexProfileExpanded.contains(nextKey)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(viewModel.codexSettingsTitle(for: nextSlotID))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(viewModel.text(.codexImportNextProfile))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+
+                Button {
+                    if nextExpanded {
+                        codexProfileExpanded.remove(nextKey)
+                    } else {
+                        codexProfileExpanded.insert(nextKey)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: nextExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold))
+                        Text(viewModel.text(.codexProfileDetails))
+                            .font(.caption.weight(.semibold))
+                        Text(viewModel.text(.codexAuthJSONHowTo))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+
+                if nextExpanded {
+                    TextEditor(text: Binding(
+                        get: { codexProfileJSONInputs[nextKey] ?? "" },
+                        set: { codexProfileJSONInputs[nextKey] = $0 }
+                    ))
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 88)
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(outlineColor, lineWidth: 1)
+                    )
+
+                    HStack {
+                        Button(viewModel.text(.codexImportProfile)) {
+                            codexProfileResult[nextKey] = viewModel.saveCodexProfile(
+                                slotID: nextSlotID,
+                                displayName: "Codex \(nextSlotID.rawValue)",
+                                authJSON: codexProfileJSONInputs[nextKey] ?? ""
+                            )
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+                    }
+
+                    if let result = codexProfileResult[nextKey], !result.isEmpty {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.contains(viewModel.text(.codexProfileImportFailed)) ? .red : .green)
+                    }
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(outlineColor, lineWidth: 1)
+            )
         }
     }
 
@@ -564,15 +908,12 @@ struct SettingsView: View {
         )
         let showTokenCredential = tokenChannelEnabled
         let showBalanceCredential = accountChannelEnabled
-        let hasUserIDHeader = !(selectedTemplate.balanceRequest.userIDHeader?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let existingUserID = relayViewConfig?.accountBalance?.userID ?? ""
-        let typedUserID = userIDInputs[provider.id] ?? ""
-        let showUserIDField = showBalanceCredential &&
-            selectedTemplate.balanceRequest.userID == nil &&
-            (hasUserIDHeader || !existingUserID.isEmpty || !typedUserID.isEmpty)
-        let currentName = providerNameInputs[provider.id] ?? provider.name
+        let defaultUserID = relayViewConfig?.accountBalance?.userID
+            ?? selectedTemplate.balanceRequest.userID
+            ?? ""
+        let showUserIDField = showBalanceCredential && relayTemplateNeedsManualUserID(selectedTemplate)
         let currentBaseURL = baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
-        let showNameField = !simpleMode || requiresDisplayNameInput(for: selectedTemplate, currentName: currentName)
+        let showNameField = true
         let showBaseURLField = !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
         let credentialMode = relayCredentialModeInputs[provider.id]
             ?? provider.relayConfig?.balanceCredentialMode
@@ -615,11 +956,6 @@ struct SettingsView: View {
             }
 
             if simpleMode {
-                if !showNameField {
-                    Text("\(viewModel.text(.providerName)): \(selectedTemplate.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 if !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
                     Text("Base URL: \(suggestedBaseURL)")
                         .font(.caption)
@@ -628,11 +964,16 @@ struct SettingsView: View {
             }
 
             if showUserIDField {
+                Text(viewModel.text(.userID))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
                 TextField(viewModel.text(.userID), text: Binding(
-                    get: { userIDInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userID ?? "") },
+                    get: { userIDInputs[provider.id] ?? defaultUserID },
                     set: { userIDInputs[provider.id] = $0 }
                 ))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .relayProminentInput()
 
                 if let userIDHint = relaySetupHint(for: selectedTemplate, field: .userID) {
                     Text(userIDHint)
@@ -651,7 +992,8 @@ struct SettingsView: View {
                         get: { systemTokenInputs[provider.id, default: ""] },
                         set: { systemTokenInputs[provider.id] = $0 }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .relayProminentInput()
 
                     Button(relayCredentialSaveLabel(templateKind: balanceTemplate.kind)) {
                         guard let accountAuth else { return }
@@ -695,7 +1037,8 @@ struct SettingsView: View {
                         get: { tokenInputs[provider.id, default: ""] },
                         set: { tokenInputs[provider.id] = $0 }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .relayProminentInput()
 
                     Button(relayCredentialSaveLabel(templateKind: tokenTemplate.kind)) {
                         let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -749,12 +1092,9 @@ struct SettingsView: View {
                 Text("\(viewModel.text(.matchedAdapter)): \(selectedTemplate.displayName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let authSource = viewModel.relayAuthSource(for: provider.id) {
-                    Text("\(viewModel.text(.authSourceLabel)): \(authSource)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
+
+            relayRuntimeStatusSection(provider, selectedTemplate: selectedTemplate)
 
             Text(relayRequiredInputSummary(
                 manifest: selectedTemplate,
@@ -768,6 +1108,12 @@ struct SettingsView: View {
             Text(relayFixedTemplateSummary(for: selectedTemplate))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if let diagnosticHint = relayDiagnosticHint(for: selectedTemplate) {
+                Text(diagnosticHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if simpleMode {
                 Text(viewModel.text(.relaySimpleModeHint))
@@ -795,7 +1141,7 @@ struct SettingsView: View {
                         accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
                         authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
                         authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
-                        userID: userIDInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userID ?? ""),
+                        userID: userIDInputs[provider.id] ?? defaultUserID,
                         userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
                         endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
                         remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
@@ -809,7 +1155,44 @@ struct SettingsView: View {
 
                 Button(viewModel.text(.testConnection)) {
                     Task {
-                        relayTestResult[provider.id] = await viewModel.testRelayConnection(providerID: provider.id)
+                        guard let previewDescriptor = viewModel.relayDescriptorForPreview(
+                            providerID: provider.id,
+                            name: resolvedRelayNameInput(
+                                typedName: providerNameInputs[provider.id] ?? provider.name,
+                                manifest: selectedTemplate
+                            ),
+                            baseURL: resolvedRelayBaseURLInput(
+                                typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
+                                manifest: selectedTemplate
+                            ),
+                            preferredAdapterID: selectedTemplateID,
+                            balanceCredentialMode: relayCredentialModeInputs[provider.id]
+                                ?? provider.relayConfig?.balanceCredentialMode
+                                ?? .manualPreferred,
+                            tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
+                            accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
+                            authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
+                            authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
+                            userID: userIDInputs[provider.id] ?? defaultUserID,
+                            userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
+                            endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
+                            remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
+                            usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
+                            limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
+                            successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
+                            unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
+                        ) else {
+                            relayTestResult[provider.id] = RelayDiagnosticResult(
+                                success: false,
+                                fetchHealth: .endpointMisconfigured,
+                                resolvedAdapterID: selectedTemplateID,
+                                resolvedAuthSource: nil,
+                                message: viewModel.text(.error),
+                                snapshotPreview: nil
+                            )
+                            return
+                        }
+                        relayTestResult[provider.id] = await viewModel.testRelayConnection(descriptor: previewDescriptor)
                     }
                 }
                 .buttonStyle(.bordered)
@@ -822,10 +1205,8 @@ struct SettingsView: View {
                 }
             }
 
-            if let relayTestResult = relayTestResult[provider.id], !relayTestResult.isEmpty {
-                Text(relayTestResult)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if let relayTestResult = relayTestResult[provider.id] {
+                relayDiagnosticSection(relayTestResult)
             }
 
             DisclosureGroup(
@@ -1090,6 +1471,15 @@ struct SettingsView: View {
         }
     }
 
+    private func relayDiagnosticHint(for manifest: RelayAdapterManifest) -> String? {
+        switch viewModel.language {
+        case .zhHans:
+            return manifest.setup?.diagnosticHints?.zhHans ?? manifest.setup?.diagnosticHints?.en
+        case .en:
+            return manifest.setup?.diagnosticHints?.en ?? manifest.setup?.diagnosticHints?.zhHans
+        }
+    }
+
     private func relayRequiredInputs(
         for manifest: RelayAdapterManifest,
         tokenChannelEnabled: Bool,
@@ -1178,7 +1568,7 @@ struct SettingsView: View {
             tokenChannelEnabled: tokenChannelEnabled,
             accountChannelEnabled: accountChannelEnabled,
             showsManualUserID: showsManualUserID
-        ).map { item in
+        ).filter { $0 != .displayName }.map { item in
             switch item {
             case .displayName:
                 return viewModel.language == .zhHans ? "名称" : "Name"
@@ -1195,9 +1585,15 @@ struct SettingsView: View {
 
         let joined = items.joined(separator: viewModel.language == .zhHans ? "、" : ", ")
         if viewModel.language == .zhHans {
-            return "当前模板 `\(manifest.displayName)` 只需要你填写：\(joined)。"
+            if joined.isEmpty {
+                return "当前模板 `\(manifest.displayName)` 的接口配置已固定，名称可自定义。"
+            }
+            return "当前模板 `\(manifest.displayName)` 的核心必填项：\(joined)。名称可自定义。"
         } else {
-            return "Template `\(manifest.displayName)` only asks you to fill: \(joined)."
+            if joined.isEmpty {
+                return "Template `\(manifest.displayName)` already fixes the endpoint details; the display name is optional and customizable."
+            }
+            return "Template `\(manifest.displayName)` only needs these core fields: \(joined). Display name is optional and customizable."
         }
     }
 
@@ -1348,6 +1744,11 @@ struct SettingsView: View {
     private func seedInputsFromConfig() {
         for provider in viewModel.config.providers where provider.isRelay {
             let relayViewConfig = provider.relayViewConfig
+            let defaultManifest = provider.relayManifest
+                ?? RelayAdapterRegistry.shared.manifest(
+                    for: provider.baseURL ?? "",
+                    preferredID: provider.relayConfig?.adapterID
+                )
             if selectedRelayTemplateInputs[provider.id] == nil {
                 selectedRelayTemplateInputs[provider.id] =
                     provider.relayConfig?.adapterID
@@ -1373,7 +1774,9 @@ struct SettingsView: View {
                 authSchemeInputs[provider.id] = relayViewConfig?.accountBalance?.authScheme ?? "Bearer"
             }
             if userIDInputs[provider.id] == nil {
-                userIDInputs[provider.id] = relayViewConfig?.accountBalance?.userID ?? ""
+                userIDInputs[provider.id] = relayViewConfig?.accountBalance?.userID
+                    ?? defaultManifest.balanceRequest.userID
+                    ?? ""
             }
             if userHeaderInputs[provider.id] == nil {
                 userHeaderInputs[provider.id] = relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"
@@ -1407,6 +1810,13 @@ struct SettingsView: View {
             }
             if officialWebModeInputs[provider.id] == nil {
                 officialWebModeInputs[provider.id] = provider.officialConfig?.webMode ?? .disabled
+            }
+        }
+
+        for profile in viewModel.codexProfilesForSettings() {
+            let key = profile.slotID.rawValue
+            if codexProfileJSONInputs[key] == nil {
+                codexProfileJSONInputs[key] = profile.authJSON
             }
         }
     }
@@ -1576,6 +1986,231 @@ struct SettingsView: View {
         }
     }
 
+    private func formattedSettingsAmount(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+    }
+
+    @ViewBuilder
+    private func relayDiagnosticSection(_ result: RelayDiagnosticResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(result.success ? viewModel.text(.connectionSuccess) : viewModel.text(.connectionFailed))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(result.success ? .green : Color(hex: 0xD83E3E))
+
+                Text(relayFetchHealthLabel(result.fetchHealth))
+                    .font(.caption)
+                    .foregroundStyle(relayFetchHealthColor(result.fetchHealth))
+            }
+
+            Text("\(viewModel.text(.matchedAdapter)): \(result.resolvedAdapterID)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let authSource = result.resolvedAuthSource, !authSource.isEmpty {
+                Text("\(viewModel.text(.authSourceLabel)): \(authSource)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(result.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let preview = result.snapshotPreview {
+                Text(relayDiagnosticPreviewText(preview))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func relayRuntimeStatusSection(_ provider: ProviderDescriptor, selectedTemplate: RelayAdapterManifest) -> some View {
+        let snapshot = viewModel.snapshots[provider.id]
+        let authSource = viewModel.relayAuthSource(for: provider.id)
+        let fetchHealth = viewModel.relayFetchHealth(for: provider.id)
+        let freshness = viewModel.relayValueFreshness(for: provider.id)
+        let error = viewModel.errors[provider.id]
+
+        VStack(alignment: .leading, spacing: 6) {
+            Text(relayRuntimeStatusTitle())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text("\(viewModel.text(.matchedAdapter)): \(selectedTemplate.displayName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let authSource, !authSource.isEmpty {
+                Text("\(viewModel.text(.authSourceLabel)): \(authSource)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let fetchHealth {
+                HStack(spacing: 8) {
+                    Text(relayFetchHealthTitle())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(relayFetchHealthLabel(fetchHealth))
+                        .font(.caption)
+                        .foregroundStyle(relayFetchHealthColor(fetchHealth))
+                }
+            }
+
+            if let freshness {
+                HStack(spacing: 8) {
+                    Text(relayFreshnessTitle())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(relayValueFreshnessLabel(freshness))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let snapshot {
+                Text("\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: snapshot.updatedAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let error, !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private func relayFetchHealthLabel(_ health: FetchHealth) -> String {
+        switch (viewModel.language, health) {
+        case (.zhHans, .ok):
+            return "接口正常"
+        case (.zhHans, .authExpired):
+            return "认证失效"
+        case (.zhHans, .rateLimited):
+            return "接口限流"
+        case (.zhHans, .endpointMisconfigured):
+            return "接口配置异常"
+        case (.zhHans, .unreachable):
+            return "站点不可达"
+        case (.en, .ok):
+            return "Live"
+        case (.en, .authExpired):
+            return "Auth expired"
+        case (.en, .rateLimited):
+            return "Rate limited"
+        case (.en, .endpointMisconfigured):
+            return "Config issue"
+        case (.en, .unreachable):
+            return "Unreachable"
+        }
+    }
+
+    private func relayFetchHealthColor(_ health: FetchHealth) -> Color {
+        switch health {
+        case .ok:
+            return .green
+        case .rateLimited:
+            return Color(hex: 0xD87E3E)
+        case .authExpired, .endpointMisconfigured, .unreachable:
+            return Color(hex: 0xD83E3E)
+        }
+    }
+
+    private func relayValueFreshnessLabel(_ freshness: ValueFreshness) -> String {
+        switch (viewModel.language, freshness) {
+        case (.zhHans, .live):
+            return "实时值"
+        case (.zhHans, .cachedFallback):
+            return "缓存回退"
+        case (.zhHans, .empty):
+            return "暂无可用值"
+        case (.en, .live):
+            return "Live"
+        case (.en, .cachedFallback):
+            return "Cached fallback"
+        case (.en, .empty):
+            return "No usable value"
+        }
+    }
+
+    private func relayRuntimeStatusTitle() -> String {
+        switch viewModel.language {
+        case .zhHans:
+            return "当前连接状态"
+        case .en:
+            return "Current connection status"
+        }
+    }
+
+    private func relayFetchHealthTitle() -> String {
+        switch viewModel.language {
+        case .zhHans:
+            return "抓取状态"
+        case .en:
+            return "Fetch health"
+        }
+    }
+
+    private func relayFreshnessTitle() -> String {
+        switch viewModel.language {
+        case .zhHans:
+            return "数据状态"
+        case .en:
+            return "Value state"
+        }
+    }
+
+    private func relayDiagnosticPreviewText(_ preview: RelayDiagnosticSnapshotPreview) -> String {
+        let unit = preview.unit.isEmpty ? "" : " \(preview.unit)"
+        let remaining = preview.remaining.map { formattedSettingsAmount($0) } ?? "-"
+        let used = preview.used.map { formattedSettingsAmount($0) } ?? "-"
+        let limit = preview.limit.map { formattedSettingsAmount($0) } ?? "-"
+        if viewModel.language == .zhHans {
+            return "预览: 剩余 \(remaining)\(unit) / 已用 \(used)\(unit) / 上限 \(limit)\(unit)"
+        }
+        return "Preview: remaining \(remaining)\(unit) / used \(used)\(unit) / limit \(limit)\(unit)"
+    }
+
+    private func settingsElapsedText(from date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        switch viewModel.language {
+        case .zhHans:
+            if seconds < 60 { return "\(seconds) 秒前" }
+            if seconds < 3600 { return "\(seconds / 60) 分钟前" }
+            if seconds < 86_400 { return "\(seconds / 3600) 小时前" }
+            return "\(seconds / 86_400) 天前"
+        case .en:
+            if seconds < 60 { return "\(seconds)s ago" }
+            if seconds < 3600 { return "\(seconds / 60)m ago" }
+            if seconds < 86_400 { return "\(seconds / 3600)h ago" }
+            return "\(seconds / 86_400)d ago"
+        }
+    }
+
 }
 
 private extension Color {
@@ -1584,5 +2219,24 @@ private extension Color {
         let g = Double((hex >> 8) & 0xFF) / 255
         let b = Double(hex & 0xFF) / 255
         self = Color(red: r, green: g, blue: b)
+    }
+}
+
+private extension View {
+    func relayProminentInput() -> some View {
+        self
+            .font(.body.weight(.medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.7), lineWidth: 1.2)
+            )
+            .shadow(color: Color.accentColor.opacity(0.16), radius: 8, y: 2)
     }
 }

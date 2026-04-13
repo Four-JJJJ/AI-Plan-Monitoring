@@ -9,10 +9,14 @@
   },
   "setup": {
     "recommendedBaseURL": "https://open.ailinyu.de",
-    "requiredInputs": ["balanceAuth"],
+    "requiredInputs": ["balanceAuth", "userID"],
     "balanceAuthHint": {
-      "zhHans": "粘贴浏览器请求头里的完整 Cookie。这个站点模板已经内置固定用户 ID，一般不需要再额外填写。",
-      "en": "Paste the full Cookie value from your browser request headers. This template already includes the fixed user ID."
+      "zhHans": "粘贴浏览器请求头里的完整 Cookie。",
+      "en": "Paste the full Cookie value from your browser request headers."
+    },
+    "userIDHint": {
+      "zhHans": "这里需要填写你自己账号对应的用户 ID。请从站点请求头里的 `New-Api-User` 或相关账户请求中复制，不会再使用模板预填值。",
+      "en": "Enter the user ID for your own account here. Copy it from the site's `New-Api-User` request header or a related account request; the template no longer pre-fills one."
     }
   },
   "authStrategies": [
@@ -24,7 +28,6 @@
     "path": "/api/user/self",
     "authHeader": "Cookie",
     "authScheme": "",
-    "userID": "136",
     "userIDHeader": "New-Api-User"
   },
   "tokenRequest": {

@@ -77,7 +77,8 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         let statusProvider = viewModel.statusBarProvider()
         button.image = composedStatusImage(
             icon: image(for: statusProvider),
-            text: statusText(for: statusProvider)
+            text: statusText(for: statusProvider),
+            appearance: button.effectiveAppearance
         )
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
@@ -172,13 +173,17 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         return String(format: "%.2f", value)
     }
 
-    private func composedStatusImage(icon: NSImage?, text: String) -> NSImage? {
+    private func composedStatusImage(icon: NSImage?, text: String, appearance: NSAppearance) -> NSImage? {
         let hasText = !text.isEmpty
         guard icon != nil || hasText else { return nil }
 
+        let isDarkAppearance = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let textColor: NSColor = isDarkAppearance
+            ? NSColor.white.withAlphaComponent(0.95)
+            : NSColor.labelColor
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: statusFont,
-            .foregroundColor: NSColor.labelColor
+            .foregroundColor: textColor
         ]
         let textSize = hasText
             ? (text as NSString).size(withAttributes: textAttributes)

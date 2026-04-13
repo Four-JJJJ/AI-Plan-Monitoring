@@ -92,9 +92,14 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             }
         }
 
+        let authSource = rawMeta["account.authSource"] ?? rawMeta["token.authSource"]
+        rawMeta["relay.displayMode"] = manifest.displayMode.rawValue
+
         return UsageSnapshot(
             source: normalized.id,
             status: status,
+            fetchHealth: .ok,
+            valueFreshness: .live,
             remaining: remaining,
             used: used,
             limit: limit,
@@ -104,8 +109,11 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             quotaWindows: [],
             sourceLabel: "Third-Party",
             accountLabel: balanceChannel?.accountLabel,
+            authSourceLabel: authSource,
+            diagnosticCode: nil,
             extras: [
-                "relayAdapter": manifest.displayName
+                "relayAdapter": manifest.displayName,
+                "relayDisplayMode": manifest.displayMode.rawValue
             ],
             rawMeta: rawMeta
         )
@@ -124,7 +132,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         }
 
         guard !candidates.isEmpty else {
-            throw ProviderError.missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
+            throw relayTokenPreflightError(baseURL: baseURL, credentialMode: relayConfig.balanceCredentialMode ?? .manualPreferred)
         }
 
         var lastError: ProviderError = .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
@@ -201,7 +209,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             }
         }
 
-        throw lastError
+        throw relayFriendlyTokenError(lastError, baseURL: baseURL)
     }
 
     private func attemptBalanceFetch(
@@ -283,6 +291,15 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             candidate: candidate
            ) {
             return moonshotFallback
+        }
+
+        if manifest.id == "xiaomimimo",
+           let mimoFallback = extractXiaomimimoAccountValues(
+            root: root,
+            request: request,
+            candidate: candidate
+           ) {
+            return mimoFallback
         }
 
         guard var remaining = numericValue(for: request.remainingExpression, in: root) else {
@@ -388,10 +405,31 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         }
 
         let trimmedPath = request.path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedPath.contains("endpoint=userInfo") else {
+        let organizationIDs = extractMoonshotOrganizationIDs(from: initialRoot)
+
+        if !trimmedPath.contains("endpoint=userInfo") &&
+            !trimmedPath.contains("endpoint=organizationAccountInfo") {
             return nil
         }
 
+        for oid in organizationIDs where !oid.isEmpty {
+            let path = "/api?endpoint=organizationAccountInfo&oid=\(oid)"
+            let root = try await requestJSON(
+                url: relayURL(baseURL: baseURL, rawPath: path),
+                headers: headers.merging(request.staticHeaders, uniquingKeysWith: { _, rhs in rhs }),
+                method: "GET",
+                bodyJSON: nil
+            )
+
+            if let extracted = extractMoonshotOrganizationAccountValues(root: root, oid: oid, candidate: candidate) {
+                return extracted
+            }
+        }
+
+        return nil
+    }
+
+    private func extractMoonshotOrganizationIDs(from root: Any) -> [String] {
         let oidExpressions = [
             "data.organizations.0.organization.id",
             "data.organizations.0.id",
@@ -413,8 +451,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             "oid"
         ]
 
-        let organizationIDs = oidExpressions.compactMap { expression -> String? in
-            guard let raw = value(at: expression, in: initialRoot) else { return nil }
+        return oidExpressions.compactMap { expression -> String? in
+            guard let raw = value(at: expression, in: root) else { return nil }
             if let string = raw as? String {
                 let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : trimmed
@@ -424,60 +462,56 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             }
             return nil
         }
-        for oid in organizationIDs where !oid.isEmpty {
-            let path = "/api?endpoint=organizationAccountInfo&oid=\(oid)"
-            let root = try await requestJSON(
-                url: relayURL(baseURL: baseURL, rawPath: path),
-                headers: headers.merging(request.staticHeaders, uniquingKeysWith: { _, rhs in rhs }),
-                method: "GET",
-                bodyJSON: nil
-            )
+    }
 
-            if let remaining = numericValue(for: "coalesce(data.cur,data.balance,data.account.balance,data.wallet.balance,data.availableBalance,data.accountBalance,data.remaining,cur,balance,availableBalance,accountBalance,remaining)", in: root) {
-                var used = numericValue(for: "coalesce(data.use,data.used,data.monthlyUsage,data.monthlySpend,data.consume,use,used,monthlyUsage,monthlySpend,consume)", in: root)
-                var limit = numericValue(for: "coalesce(data.acc,data.limit,data.totalLimit,data.totalQuota,acc,limit,totalLimit,totalQuota)", in: root)
-                if limit == nil, let used {
-                    limit = max(0, remaining + used)
-                }
-                var normalizedRemaining = remaining
-                var normalizedUsed = used
-                var normalizedLimit = limit
-                var extraMeta: [String: String] = [
-                    "endpointPath": "/api?endpoint=organizationAccountInfo&oid=\(oid)",
-                    "requestMethod": "GET",
-                    "remainingPath": "coalesce(data.cur,data.balance,data.account.balance,data.wallet.balance,data.availableBalance,data.accountBalance,data.remaining,cur,balance,availableBalance,accountBalance,remaining)",
-                    "usedPath": "coalesce(data.use,data.used,data.monthlyUsage,data.monthlySpend,data.consume,use,used,monthlyUsage,monthlySpend,consume)",
-                    "limitPath": "coalesce(data.acc,data.limit,data.totalLimit,data.totalQuota,acc,limit,totalLimit,totalQuota)",
-                    "authSource": candidate.source,
-                    "organizationID": oid
-                ]
-                if moonshotUsesScaledCurrencyShape(root: root) {
-                    normalizedRemaining = remaining / 100_000
-                    normalizedUsed = used.map { $0 / 100_000 }
-                    normalizedLimit = limit.map { $0 / 100_000 }
-                    extraMeta["valueScale"] = "100000"
-                    extraMeta["rawRemaining"] = String(remaining)
-                    if let used {
-                        extraMeta["rawUsed"] = String(used)
-                    }
-                    if let limit {
-                        extraMeta["rawLimit"] = String(limit)
-                    }
-                }
-                let unit = stringValue(for: "\"CNY\"", in: root) ?? "CNY"
-                let accountLabel = stringValue(for: "coalesce(data.user.nickname,data.user.nickName,data.user.name,data.nickName,data.nickname,data.userName,nickName,nickname,userName,name)", in: root)
-                return AccountChannelResult(
-                    remaining: normalizedRemaining,
-                    used: normalizedUsed,
-                    limit: normalizedLimit,
-                    unit: unit,
-                    accountLabel: accountLabel,
-                    note: "Account remaining \(String(format: "%.2f", normalizedRemaining))",
-                    rawMeta: extraMeta
-                )
+    private func extractMoonshotOrganizationAccountValues(
+        root: Any,
+        oid: String,
+        candidate: RelayCredentialCandidate
+    ) -> AccountChannelResult? {
+        if let remaining = numericValue(for: "coalesce(data.cur,data.balance,data.account.balance,data.wallet.balance,data.availableBalance,data.accountBalance,data.remaining,cur,balance,availableBalance,accountBalance,remaining)", in: root) {
+            var used = numericValue(for: "coalesce(data.use,data.used,data.monthlyUsage,data.monthlySpend,data.consume,use,used,monthlyUsage,monthlySpend,consume)", in: root)
+            var limit = numericValue(for: "coalesce(data.acc,data.limit,data.totalLimit,data.totalQuota,acc,limit,totalLimit,totalQuota)", in: root)
+            if limit == nil, let used {
+                limit = max(0, remaining + used)
             }
+            var normalizedRemaining = remaining
+            var normalizedUsed = used
+            var normalizedLimit = limit
+            var extraMeta: [String: String] = [
+                "endpointPath": "/api?endpoint=organizationAccountInfo&oid=\(oid)",
+                "requestMethod": "GET",
+                "remainingPath": "coalesce(data.cur,data.balance,data.account.balance,data.wallet.balance,data.availableBalance,data.accountBalance,data.remaining,cur,balance,availableBalance,accountBalance,remaining)",
+                "usedPath": "coalesce(data.use,data.used,data.monthlyUsage,data.monthlySpend,data.consume,use,used,monthlyUsage,monthlySpend,consume)",
+                "limitPath": "coalesce(data.acc,data.limit,data.totalLimit,data.totalQuota,acc,limit,totalLimit,totalQuota)",
+                "authSource": candidate.source,
+                "organizationID": oid
+            ]
+            if moonshotUsesScaledCurrencyShape(root: root) {
+                normalizedRemaining = remaining / 100_000
+                normalizedUsed = used.map { $0 / 100_000 }
+                normalizedLimit = limit.map { $0 / 100_000 }
+                extraMeta["valueScale"] = "100000"
+                extraMeta["rawRemaining"] = String(remaining)
+                if let used {
+                    extraMeta["rawUsed"] = String(used)
+                }
+                if let limit {
+                    extraMeta["rawLimit"] = String(limit)
+                }
+            }
+            let unit = stringValue(for: "\"CNY\"", in: root) ?? "CNY"
+            let accountLabel = stringValue(for: "coalesce(data.user.nickname,data.user.nickName,data.user.name,data.nickName,data.nickname,data.userName,nickName,nickname,userName,name)", in: root)
+            return AccountChannelResult(
+                remaining: normalizedRemaining,
+                used: normalizedUsed,
+                limit: normalizedLimit,
+                unit: unit,
+                accountLabel: accountLabel,
+                note: "Account remaining \(String(format: "%.2f", normalizedRemaining))",
+                rawMeta: extraMeta
+            )
         }
-
         return nil
     }
 
@@ -488,6 +522,76 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         value(at: "cur", in: root) != nil ||
         value(at: "acc", in: root) != nil ||
         value(at: "use", in: root) != nil
+    }
+
+    private func extractXiaomimimoAccountValues(
+        root: Any,
+        request: ResolvedRelayRequest,
+        candidate: RelayCredentialCandidate
+    ) -> AccountChannelResult? {
+        let remainingKeys = [
+            "available_amount",
+            "availableAmount",
+            "availableBalance",
+            "currentBalance",
+            "remainBalance",
+            "remainingBalance",
+            "walletBalance",
+            "accountBalance",
+            "balance",
+            "amount"
+        ]
+        guard let remaining = firstNestedNumericValue(for: remainingKeys, in: root) else {
+            return nil
+        }
+
+        let used = firstNestedNumericValue(
+            for: [
+                "monthly_spend",
+                "monthlySpend",
+                "monthlyUsage",
+                "totalSpend",
+                "totalUsage",
+                "used",
+                "consume"
+            ],
+            in: root
+        )
+        var limit = firstNestedNumericValue(
+            for: [
+                "total_amount",
+                "totalAmount",
+                "totalLimit",
+                "limit",
+                "quota"
+            ],
+            in: root
+        )
+        if limit == nil, let used {
+            limit = max(0, remaining + used)
+        }
+
+        let accountLabel = firstNestedStringValue(
+            for: ["nickName", "nickname", "userName", "name"],
+            in: root
+        )
+
+        return AccountChannelResult(
+            remaining: remaining,
+            used: used,
+            limit: limit,
+            unit: "CNY",
+            accountLabel: accountLabel,
+            note: "Account remaining \(String(format: "%.2f", remaining))",
+            rawMeta: [
+                "endpointPath": normalizedPath(request.path),
+                "requestMethod": request.method,
+                "remainingPath": "xiaomimimoRecursiveFallback",
+                "usedPath": request.usedExpression ?? "",
+                "limitPath": request.limitExpression ?? "",
+                "authSource": candidate.source
+            ]
+        )
     }
 
     private func resolveTokenCandidates(host: String, includeBrowserFallback: Bool) -> [RelayRawTokenCandidate] {
@@ -742,6 +846,17 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             )
             fallbackCandidates = []
         }
+        if let preflightError = relayBalancePreflightError(
+            baseURL: baseURL,
+            manifest: manifest,
+            relayConfig: relayConfig,
+            request: requestForCandidates,
+            credentialMode: credentialMode,
+            primaryCandidates: primaryCandidates,
+            fallbackCandidates: fallbackCandidates
+        ) {
+            throw preflightError
+        }
         if !primaryCandidates.isEmpty,
            let snapshot = try? await attemptBalanceFetch(
             candidates: primaryCandidates,
@@ -764,13 +879,23 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 "moonshot cookie appears incomplete; paste the full Cookie header from an authenticated platform request"
             )
         }
-        return try await attemptBalanceFetch(
-            candidates: candidates,
-            requests: requests,
-            baseURL: baseURL,
-            relayConfig: relayConfig,
-            manifest: manifest
-        )
+        do {
+            return try await attemptBalanceFetch(
+                candidates: candidates,
+                requests: requests,
+                baseURL: baseURL,
+                relayConfig: relayConfig,
+                manifest: manifest
+            )
+        } catch let error as ProviderError {
+            throw relayFriendlyBalanceError(
+                error,
+                baseURL: baseURL,
+                manifest: manifest,
+                request: requestForCandidates,
+                credentialMode: credentialMode
+            )
+        }
     }
 
     private func resolveBalanceRequest(
@@ -897,7 +1022,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func xiaomimimoProbeRequests(from base: ResolvedRelayRequest) -> [ResolvedRelayRequest] {
-        [
+        let remainingExpression = "coalesce(data.balance,data.data.balance,data.result.balance,data.user.balance,data.data.user.balance,data.account.balance,data.data.account.balance,data.result.account.balance,data.wallet.balance,data.data.wallet.balance,data.result.wallet.balance,data.walletBalance,data.data.walletBalance,data.result.walletBalance,data.accountBalance,data.data.accountBalance,data.result.accountBalance,data.availableBalance,data.data.availableBalance,data.result.availableBalance,data.available_amount,data.data.available_amount,data.result.available_amount,data.availableAmount,data.data.availableAmount,data.result.availableAmount,data.currentBalance,data.data.currentBalance,data.result.currentBalance,data.remainBalance,data.data.remainBalance,data.result.remainBalance,data.remainingBalance,data.data.remainingBalance,data.result.remainingBalance,data.amount,data.data.amount,data.result.amount,balance,availableBalance,available_amount,availableAmount,currentBalance,walletBalance,accountBalance,remainBalance,remainingBalance,amount)"
+        let usedExpression = "coalesce(data.monthlyUsage,data.data.monthlyUsage,data.result.monthlyUsage,data.monthlySpend,data.data.monthlySpend,data.result.monthlySpend,data.monthly_spend,data.data.monthly_spend,data.result.monthly_spend,data.used,data.data.used,data.result.used,data.consume,data.data.consume,data.result.consume,data.totalUsage,data.data.totalUsage,data.result.totalUsage,data.totalSpend,data.data.totalSpend,data.result.totalSpend,monthlyUsage,monthlySpend,monthly_spend,used,consume,totalUsage,totalSpend)"
+        let limitExpression = "coalesce(data.totalLimit,data.data.totalLimit,data.result.totalLimit,data.limit,data.data.limit,data.result.limit,data.totalAmount,data.data.totalAmount,data.result.totalAmount,data.total_amount,data.data.total_amount,data.result.total_amount,data.quota,data.data.quota,data.result.quota,totalLimit,limit,totalAmount,total_amount,quota)"
+        return [
             ResolvedRelayRequest(
                 method: "GET",
                 path: "/api/v1/balance",
@@ -908,9 +1036,9 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 authHeader: base.authHeader,
                 authScheme: base.authScheme,
                 successExpression: nil,
-                remainingExpression: "coalesce(data.balance,data.availableBalance,data.wallet.balance,data.walletBalance,data.accountBalance,balance,availableBalance,walletBalance,accountBalance)",
-                usedExpression: "coalesce(data.monthlyUsage,data.monthlySpend,data.used,data.consume,monthlyUsage,monthlySpend,used,consume)",
-                limitExpression: "coalesce(data.totalLimit,data.limit,totalLimit,limit)",
+                remainingExpression: remainingExpression,
+                usedExpression: usedExpression,
+                limitExpression: limitExpression,
                 unitExpression: "\"CNY\"",
                 accountLabelExpression: base.accountLabelExpression
             )
@@ -1090,6 +1218,126 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         return KimiJWT.isExpired(token)
     }
 
+    private func relayBalancePreflightError(
+        baseURL: URL,
+        manifest: RelayAdapterManifest,
+        relayConfig: RelayProviderConfig,
+        request: ResolvedRelayRequest,
+        credentialMode: RelayCredentialMode,
+        primaryCandidates: [RelayCredentialCandidate],
+        fallbackCandidates: [RelayCredentialCandidate]
+    ) -> ProviderError? {
+        let allCandidates = primaryCandidates + fallbackCandidates
+        let host = baseURL.host?.lowercased() ?? ""
+        let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth)
+        let browserCookie = browserCredentialService.detectCookieHeader(host: host)
+        let browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
+
+        if request.userID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+           manifest.setup?.requiredInputs.contains(.userID) == true {
+            if manifest.id == "minimax" {
+                return .unauthorizedDetail("MiniMax needs GroupId before it can query balance. Fill User ID with the GroupId from the account request URL, for example /account/query_balance?GroupId=...")
+            }
+            let fieldName = request.userIDHeader.caseInsensitiveCompare("New-Api-User") == .orderedSame ? "User ID" : request.userIDHeader
+            return .unauthorizedDetail("\(manifest.displayName) needs \(fieldName) before it can query balance. Fill the User ID field in site settings and try again.")
+        }
+
+        guard allCandidates.isEmpty else {
+            return nil
+        }
+
+        switch manifest.id {
+        case "moonshot":
+            if let savedRaw, looksLikeCookieHeader(savedRaw), looksLikeMoonshotNonAuthCookieHeader(savedRaw) {
+                return .unauthorizedDetail("Moonshot cookie looks incomplete. Paste the full Cookie header from an authenticated platform request, or paste Authorization: Bearer ... instead.")
+            }
+            if credentialMode != .manualPreferred, browserCookie == nil && browserBearers.isEmpty {
+                return .unauthorizedDetail("No live Moonshot login was found in the browser. Log in to platform.moonshot.cn first, or switch back to Manual First and paste a bearer token.")
+            }
+            return .unauthorizedDetail("No usable Moonshot credential was found. Paste an Authorization bearer token, or switch to Browser First and make sure platform.moonshot.cn is logged in.")
+        case "xiaomimimo":
+            if credentialMode != .manualPreferred, browserCookie == nil {
+                return .unauthorizedDetail("No live XiaomiMIMO login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
+            }
+            if let savedRaw, !savedRaw.lowercased().contains("api-platform_servicetoken") {
+                return .unauthorizedDetail("XiaomiMIMO cookie looks incomplete. Paste the full Cookie header and make sure it includes api-platform_serviceToken and userId.")
+            }
+            return .unauthorizedDetail("No usable XiaomiMIMO cookie was found. Paste the full Cookie header, or switch to Browser First and make sure platform.xiaomimimo.com is logged in.")
+        case "minimax":
+            if credentialMode != .manualPreferred, browserCookie == nil {
+                return .unauthorizedDetail("No live MiniMax login was found in the browser. Log in to platform.minimaxi.com first, or switch back to Manual First and paste the full Cookie header.")
+            }
+            return .unauthorizedDetail("No usable MiniMax cookie was found. Paste the full Cookie header, and make sure GroupId is filled in User ID.")
+        case "ailinyu":
+            return .unauthorizedDetail("No usable open.ailinyu.de cookie was found. Paste the full Cookie header, and check that User ID matches your site account.")
+        default:
+            return .unauthorizedDetail("No usable credential was found for \(manifest.displayName). Paste the required cookie/token, or switch to Browser First and make sure the site is logged in.")
+        }
+    }
+
+    private func relayFriendlyBalanceError(
+        _ error: ProviderError,
+        baseURL: URL,
+        manifest: RelayAdapterManifest,
+        request: ResolvedRelayRequest,
+        credentialMode: RelayCredentialMode
+    ) -> ProviderError {
+        let _ = (baseURL, request, credentialMode)
+        switch error {
+        case .unauthorized:
+            switch manifest.id {
+            case "moonshot":
+                return .unauthorizedDetail("Moonshot login expired. Paste a fresh bearer token, or switch to Browser First and log in again in platform.moonshot.cn.")
+            case "xiaomimimo":
+                return .unauthorizedDetail("XiaomiMIMO login expired. Paste a fresh Cookie, or switch to Browser First and log in again in platform.xiaomimimo.com.")
+            case "minimax":
+                return .unauthorizedDetail("MiniMax login expired. Paste a fresh Cookie, or switch to Browser First and log in again in platform.minimaxi.com.")
+            default:
+                return .unauthorized
+            }
+        case .invalidResponse(let detail):
+            if detail.contains("missing remaining path") {
+                switch manifest.id {
+                case "moonshot":
+                    return .invalidResponse("Moonshot connected, but the returned payload still does not contain balance fields. Try Browser First and Test Connection again; if it still fails, the site response likely changed and the template needs an update.")
+                case "xiaomimimo":
+                    return .invalidResponse("XiaomiMIMO connected, but the balance payload did not contain balance fields. Re-login in browser first; if it still fails, the site response likely changed.")
+                case "minimax":
+                    return .invalidResponse("MiniMax connected, but the balance payload did not contain balance fields. Make sure GroupId is correct; if it is, the site response likely changed and the template needs an update.")
+                default:
+                    return .invalidResponse("\(manifest.displayName) connected, but the current response does not match the template. Test Connection can help re-check the site, or open Advanced settings if the site response changed.")
+                }
+            }
+            if detail.contains("account balance JSON decode failed") {
+                return .invalidResponse("\(manifest.displayName) returned a non-JSON page. This usually means the credential is expired, the request was redirected to a login page, or the site is blocking the current auth method.")
+            }
+            return error
+        default:
+            return error
+        }
+    }
+
+    private func relayTokenPreflightError(
+        baseURL: URL,
+        credentialMode: RelayCredentialMode
+    ) -> ProviderError {
+        let host = baseURL.host?.lowercased() ?? baseURL.absoluteString
+        let browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
+        if credentialMode != .manualPreferred, browserBearers.isEmpty {
+            return .unauthorizedDetail("No live browser bearer token was found for \(host). Log in in the browser first, or switch back to Manual First and paste a token.")
+        }
+        return .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
+    }
+
+    private func relayFriendlyTokenError(_ error: ProviderError, baseURL: URL) -> ProviderError {
+        switch error {
+        case .unauthorized:
+            return .unauthorizedDetail("The saved token for \(baseURL.host ?? descriptor.name) is no longer valid. Paste a fresh token or switch to Browser First if the site supports browser auth.")
+        default:
+            return error
+        }
+    }
+
     private func normalizedPath(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "/" }
@@ -1159,6 +1407,9 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         if http.statusCode == 401 {
             if let message = extractErrorMessage(from: data), !message.isEmpty {
                 throw ProviderError.unauthorizedDetail(message)
+            }
+            if url.host?.contains("xiaomimimo.com") == true {
+                throw ProviderError.unauthorizedDetail("xiaomimimo login expired; paste a fresh Cookie or switch to Browser First")
             }
             throw ProviderError.unauthorized
         }
@@ -1326,6 +1577,56 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             return []
         }
         return collectValues(current: next, steps: steps, index: index + 1)
+    }
+
+    private func firstNestedNumericValue(for keys: [String], in root: Any) -> Double? {
+        for key in keys {
+            if let value = firstNestedValue(matchingKey: key, in: root),
+               let number = coerceDouble(value) {
+                return number
+            }
+        }
+        return nil
+    }
+
+    private func firstNestedStringValue(for keys: [String], in root: Any) -> String? {
+        for key in keys {
+            if let value = firstNestedValue(matchingKey: key, in: root) {
+                if let string = value as? String {
+                    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        return trimmed
+                    }
+                } else if let number = value as? NSNumber {
+                    return number.stringValue
+                }
+            }
+        }
+        return nil
+    }
+
+    private func firstNestedValue(matchingKey key: String, in root: Any) -> Any? {
+        if let dict = root as? [String: Any] {
+            if let direct = dict[key] {
+                return direct
+            }
+            for value in dict.values {
+                if let nested = firstNestedValue(matchingKey: key, in: value) {
+                    return nested
+                }
+            }
+            return nil
+        }
+
+        if let array = root as? [Any] {
+            for value in array {
+                if let nested = firstNestedValue(matchingKey: key, in: value) {
+                    return nested
+                }
+            }
+        }
+
+        return nil
     }
 
     private func coerceDouble(_ value: Any) -> Double? {

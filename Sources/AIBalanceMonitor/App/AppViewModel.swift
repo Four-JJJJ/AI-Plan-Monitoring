@@ -7,16 +7,24 @@ final class AppViewModel {
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
     private let codexSlotStore = CodexAccountSlotStore()
+    private let codexProfileStore = CodexAccountProfileStore()
+    private let codexDesktopAuthService = CodexDesktopAuthService()
+    private let codexDesktopAppService = CodexDesktopAppService()
+    private let launchAtLoginService = LaunchAtLoginService()
     private let notifications = NotificationService()
     private let providerFactory: ProviderFactory
 
     private(set) var config: AppConfig
     private(set) var snapshots: [String: UsageSnapshot] = [:]
     private(set) var codexSlots: [CodexAccountSlot] = []
+    private(set) var codexProfiles: [CodexAccountProfile] = []
+    private(set) var codexSwitchFeedback: [CodexSlotID: CodexSwitchFeedback] = [:]
     private(set) var errors: [String: String] = [:]
     private(set) var lastUpdatedAt: Date?
 
     private var pollTasks: [String: Task<Void, Never>] = [:]
+    private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
+    private var codexSwitchingSlots: Set<CodexSlotID> = []
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
     private var hasStarted = false
@@ -25,7 +33,14 @@ final class AppViewModel {
         self.config = (try? configStore.load()) ?? .default
         self.providerFactory = ProviderFactory(keychain: keychain)
         self.codexSlots = codexSlotStore.visibleSlots()
+        self.codexProfiles = []
+        let launchAtLoginEnabled = launchAtLoginService.isEnabled()
+        if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
+            self.config.launchAtLoginEnabled = launchAtLoginEnabled
+            try? configStore.save(self.config)
+        }
         notifications.requestPermissionIfNeeded()
+        syncCodexProfilesCurrentState()
     }
 
     func start() {
@@ -65,6 +80,10 @@ final class AppViewModel {
         config.simplifiedRelayConfig
     }
 
+    var launchAtLoginEnabled: Bool {
+        config.launchAtLoginEnabled
+    }
+
     var statusBarProviderID: String? {
         config.statusBarProviderID
     }
@@ -79,6 +98,17 @@ final class AppViewModel {
         guard config.simplifiedRelayConfig != enabled else { return }
         config.simplifiedRelayConfig = enabled
         try? configStore.save(config)
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        guard config.launchAtLoginEnabled != enabled else { return }
+        do {
+            try launchAtLoginService.setEnabled(enabled)
+            config.launchAtLoginEnabled = enabled
+            try? configStore.save(config)
+        } catch {
+            errors["launch-at-login"] = error.localizedDescription
+        }
     }
 
     func isStatusBarProvider(providerID: String) -> Bool {
@@ -122,23 +152,146 @@ final class AppViewModel {
     }
 
     func codexSlotViewModels() -> [CodexSlotViewModel] {
+        syncCodexProfilesCurrentState()
         codexSlots = codexSlotStore.visibleSlots()
+        let now = Date()
         return codexSlots
             .sorted { lhs, rhs in
                 if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
                 if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
-                return lhs.slotID.rawValue < rhs.slotID.rawValue
+                return lhs.slotID < rhs.slotID
             }
             .map { slot in
-                CodexSlotViewModel(
-                    slotID: slot.slotID,
-                    title: "Codex \(slot.slotID.rawValue)",
+                let profile = matchedCodexProfile(for: slot)
+                let feedback = codexSwitchFeedback[slot.slotID]
+                let displaySnapshot = CodexQuotaDisplayNormalizer.normalize(
                     snapshot: slot.lastSnapshot,
                     isActive: slot.isActive,
+                    now: now
+                )
+                return CodexSlotViewModel(
+                    slotID: slot.slotID,
+                    title: codexMenuTitle(for: slot.slotID),
+                    snapshot: displaySnapshot,
+                    isActive: slot.isActive,
                     lastSeenAt: slot.lastSeenAt,
-                    displayName: slot.displayName
+                    displayName: profile?.displayName ?? slot.displayName,
+                    isSwitching: codexSwitchingSlots.contains(slot.slotID),
+                    canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
+                    isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
+                    profileDisplayName: profile?.displayName,
+                    switchMessage: feedback?.message,
+                    switchMessageIsError: feedback?.isError ?? false
                 )
             }
+    }
+
+    func codexProfilesForSettings() -> [CodexAccountProfile] {
+        syncCodexProfilesCurrentState()
+        return codexProfiles.sorted { $0.slotID < $1.slotID }
+    }
+
+    func nextCodexProfileSlotID() -> CodexSlotID {
+        codexProfileStore.nextAvailableSlotID()
+    }
+
+    func codexSettingsTitle(for slotID: CodexSlotID) -> String {
+        "Codex \(slotID.rawValue)"
+    }
+
+    func saveCodexProfile(slotID: CodexSlotID, displayName: String, authJSON: String) -> String {
+        do {
+            _ = try codexProfileStore.saveProfile(
+                slotID: slotID,
+                displayName: displayName,
+                authJSON: authJSON,
+                currentFingerprint: codexDesktopAuthService.currentCredentialFingerprint()
+            )
+            syncCodexProfilesCurrentState()
+            return text(.codexProfileImported)
+        } catch {
+            return "\(text(.codexProfileImportFailed)): \(error.localizedDescription)"
+        }
+    }
+
+    func removeCodexProfile(slotID: CodexSlotID) {
+        syncCodexProfilesCurrentState()
+        guard codexProfiles.first(where: { $0.slotID == slotID })?.isCurrentSystemAccount != true else {
+            return
+        }
+        codexProfiles = codexProfileStore.removeProfile(slotID: slotID)
+    }
+
+    func switchCodexProfile(slotID: CodexSlotID) async {
+        guard !codexSwitchingSlots.contains(slotID) else { return }
+        syncCodexProfilesCurrentState()
+        codexSwitchingSlots.insert(slotID)
+        setCodexSwitchFeedback(nil, for: slotID)
+        defer { codexSwitchingSlots.remove(slotID) }
+
+        guard let profile = codexProfiles.first(where: { $0.slotID == slotID }) else {
+            setCodexSwitchFeedback(
+                CodexSwitchFeedback(message: text(.codexProfileMissing), isError: true),
+                for: slotID
+            )
+            return
+        }
+
+        do {
+            try codexDesktopAuthService.applyProfile(profile)
+            _ = await codexDesktopAppService.restartIfRunning()
+            syncCodexProfilesCurrentState()
+
+            guard let descriptor = config.providers.first(where: { $0.type == .codex && $0.family == .official }) else {
+                setCodexSwitchFeedback(
+                    CodexSwitchFeedback(message: text(.codexSwitchAppliedNeedsRestart), isError: false),
+                    for: slotID
+                )
+                return
+            }
+
+            let provider = providerFactory.makeProvider(for: descriptor)
+            do {
+                let fetched = try await provider.fetch(forceRefresh: true)
+                let snapshot = markCodexSnapshotActive(fetched, preferredSlotID: slotID)
+                codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+                snapshots[descriptor.id] = snapshot
+                errors.removeValue(forKey: descriptor.id)
+                consecutiveFailures[descriptor.id] = 0
+                lastUpdatedAt = Date()
+                setCodexSwitchFeedback(
+                    CodexSwitchFeedback(message: text(.codexSwitchSuccess), isError: false),
+                    for: slotID
+                )
+                notifications.notify(
+                    title: "Codex",
+                    body: text(.codexSwitchSuccess),
+                    identifier: "codex-switch-\(slotID.rawValue.lowercased())"
+                )
+            } catch {
+                errors[descriptor.id] = error.localizedDescription
+                setCodexSwitchFeedback(
+                    CodexSwitchFeedback(
+                        message: "\(text(.codexSwitchNeedsVerification)): \(error.localizedDescription)",
+                        isError: true
+                    ),
+                    for: slotID
+                )
+                notifications.notify(
+                    title: "Codex",
+                    body: "\(text(.codexSwitchNeedsVerification)): \(error.localizedDescription)",
+                    identifier: "codex-switch-\(slotID.rawValue.lowercased())"
+                )
+            }
+        } catch {
+            setCodexSwitchFeedback(
+                CodexSwitchFeedback(
+                    message: "\(text(.codexSwitchFailed)): \(error.localizedDescription)",
+                    isError: true
+                ),
+                for: slotID
+            )
+        }
     }
 
     func setEnabled(_ enabled: Bool, providerID: String) {
@@ -247,7 +400,7 @@ final class AppViewModel {
               let account = provider.officialConfig?.manualCookieAccount else {
             return false
         }
-        return keychain.readToken(service: "AIBalanceMonitor", account: account)?.isEmpty == false
+        return keychain.readToken(service: KeychainService.defaultServiceName, account: account)?.isEmpty == false
     }
 
     func saveOfficialManualCookie(_ value: String, providerID: String) -> Bool {
@@ -258,7 +411,7 @@ final class AppViewModel {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        return keychain.saveToken(trimmed, service: "AIBalanceMonitor", account: account)
+        return keychain.saveToken(trimmed, service: KeychainService.defaultServiceName, account: account)
     }
 
     func addOpenRelay(name: String, baseURL: String, preferredAdapterID: String? = nil) {
@@ -308,8 +461,53 @@ final class AppViewModel {
         unit: String
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
-              config.providers[idx].isRelay else {
+              let updated = relayDescriptorForPreview(
+                providerID: providerID,
+                name: name,
+                baseURL: baseURL,
+                preferredAdapterID: preferredAdapterID,
+                balanceCredentialMode: balanceCredentialMode,
+                tokenUsageEnabled: tokenUsageEnabled,
+                accountEnabled: accountEnabled,
+                authHeader: authHeader,
+                authScheme: authScheme,
+                userID: userID,
+                userIDHeader: userIDHeader,
+                endpointPath: endpointPath,
+                remainingJSONPath: remainingJSONPath,
+                usedJSONPath: usedJSONPath,
+                limitJSONPath: limitJSONPath,
+                successJSONPath: successJSONPath,
+                unit: unit
+              ) else {
             return
+        }
+        config.providers[idx] = updated
+        persistAndRestart()
+    }
+
+    func relayDescriptorForPreview(
+        providerID: String,
+        name: String,
+        baseURL: String,
+        preferredAdapterID: String? = nil,
+        balanceCredentialMode: RelayCredentialMode = .manualPreferred,
+        tokenUsageEnabled: Bool,
+        accountEnabled: Bool,
+        authHeader: String,
+        authScheme: String,
+        userID: String,
+        userIDHeader: String,
+        endpointPath: String,
+        remainingJSONPath: String,
+        usedJSONPath: String,
+        limitJSONPath: String,
+        successJSONPath: String,
+        unit: String
+    ) -> ProviderDescriptor? {
+        guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
+              config.providers[idx].isRelay else {
+            return nil
         }
 
         var provider = config.providers[idx]
@@ -345,7 +543,7 @@ final class AppViewModel {
             ? (templateRequest.authScheme ?? "Bearer")
             : authScheme.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedUserID = useTemplateDefaults
-            ? (templateRequest.userID ?? trimmedOrNil(userID))
+            ? (trimmedOrNil(userID) ?? templateRequest.userID)
             : trimmedOrNil(userID)
         let resolvedUserIDHeader = useTemplateDefaults
             ? (templateRequest.userIDHeader ?? "New-Api-User")
@@ -395,8 +593,7 @@ final class AppViewModel {
         )
         provider.relayConfig = relayConfig
         provider.openConfig = nil
-        config.providers[idx] = provider.normalized()
-        persistAndRestart()
+        return provider.normalized()
     }
 
     func relayAdapterName(for provider: ProviderDescriptor) -> String? {
@@ -404,25 +601,65 @@ final class AppViewModel {
     }
 
     func relayAuthSource(for providerID: String) -> String? {
-        snapshots[providerID]?.rawMeta["account.authSource"]
+        snapshots[providerID]?.authSourceLabel
+            ?? snapshots[providerID]?.rawMeta["account.authSource"]
             ?? snapshots[providerID]?.rawMeta["token.authSource"]
     }
 
-    func testRelayConnection(providerID: String) async -> String {
+    func relayFetchHealth(for providerID: String) -> FetchHealth? {
+        snapshots[providerID]?.fetchHealth
+    }
+
+    func relayValueFreshness(for providerID: String) -> ValueFreshness? {
+        snapshots[providerID]?.valueFreshness
+    }
+
+    func testRelayConnection(providerID: String) async -> RelayDiagnosticResult {
         guard let descriptor = descriptor(for: providerID), descriptor.isRelay else {
-            return text(.error)
+            return RelayDiagnosticResult(
+                success: false,
+                fetchHealth: .endpointMisconfigured,
+                resolvedAdapterID: "unknown",
+                resolvedAuthSource: nil,
+                message: text(.error),
+                snapshotPreview: nil
+            )
         }
 
+        return await testRelayConnection(descriptor: descriptor)
+    }
+
+    func testRelayConnection(descriptor: ProviderDescriptor) async -> RelayDiagnosticResult {
         let provider = providerFactory.makeProvider(for: descriptor)
         do {
             let snapshot = try await provider.fetch(forceRefresh: true)
             snapshots[descriptor.id] = snapshot
             errors.removeValue(forKey: descriptor.id)
             lastUpdatedAt = Date()
-            return text(.connectionSuccess)
+            return RelayDiagnosticResult(
+                success: true,
+                fetchHealth: snapshot.fetchHealth,
+                resolvedAdapterID: snapshot.rawMeta["relay.adapterID"] ?? descriptor.relayManifest?.id ?? "generic-newapi",
+                resolvedAuthSource: snapshot.authSourceLabel,
+                message: text(.connectionSuccess),
+                snapshotPreview: RelayDiagnosticSnapshotPreview(
+                    remaining: snapshot.remaining,
+                    used: snapshot.used,
+                    limit: snapshot.limit,
+                    unit: snapshot.unit
+                )
+            )
         } catch {
             errors[descriptor.id] = error.localizedDescription
-            return "\(text(.connectionFailed)): \(error.localizedDescription)"
+            let health = classifyFetchHealth(error)
+            return RelayDiagnosticResult(
+                success: false,
+                fetchHealth: health,
+                resolvedAdapterID: descriptor.relayManifest?.id ?? descriptor.relayConfig?.adapterID ?? "generic-newapi",
+                resolvedAuthSource: nil,
+                message: "\(text(.connectionFailed)): \(error.localizedDescription)",
+                snapshotPreview: nil
+            )
         }
     }
 
@@ -502,6 +739,9 @@ final class AppViewModel {
     }
 
     private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
+        if descriptor.type == .codex, descriptor.family == .official {
+            syncCodexProfilesCurrentState()
+        }
         let provider = providerFactory.makeProvider(for: descriptor)
 
         do {
@@ -518,24 +758,7 @@ final class AppViewModel {
             consecutiveFailures[descriptor.id] = 0
             lastUpdatedAt = Date()
 
-            if AlertEngine.shouldAlertLowRemaining(snapshot: snapshot, rule: descriptor.threshold) {
-                let key = "low:\(descriptor.id)"
-                if !activeAlerts.contains(key) {
-                    notifications.notify(
-                        title: text(.lowBalanceWarning),
-                        body: Localizer.lowBalanceBody(
-                            providerName: descriptor.name,
-                            remaining: format(snapshot.remaining),
-                            unit: snapshot.unit,
-                            language: config.language
-                        ),
-                        identifier: key
-                    )
-                    activeAlerts.insert(key)
-                }
-            } else {
-                activeAlerts.remove("low:\(descriptor.id)")
-            }
+            handleLowRemainingAlerts(for: descriptor, snapshot: snapshot)
 
             activeAlerts.remove("fail:\(descriptor.id)")
             activeAlerts.remove("auth:\(descriptor.id)")
@@ -547,7 +770,10 @@ final class AppViewModel {
             if isRateLimitedError(error),
                var previous = snapshots[descriptor.id] {
                 previous.status = .warning
+                previous.fetchHealth = .rateLimited
+                previous.valueFreshness = .cachedFallback
                 previous.updatedAt = Date()
+                previous.diagnosticCode = "rate-limited"
                 previous.note = "\(previous.note) | rate limited, showing cached value"
                 snapshots[descriptor.id] = previous
                 errors.removeValue(forKey: descriptor.id)
@@ -558,6 +784,34 @@ final class AppViewModel {
 
             errors[descriptor.id] = error.localizedDescription
             consecutiveFailures[descriptor.id, default: 0] += 1
+            let health = classifyFetchHealth(error)
+            if descriptor.isRelay {
+                if var previous = snapshots[descriptor.id] {
+                    previous.fetchHealth = health
+                    previous.valueFreshness = .cachedFallback
+                    previous.updatedAt = Date()
+                    previous.diagnosticCode = diagnosticCode(for: health)
+                    previous.note = "\(previous.note) | \(error.localizedDescription)"
+                    snapshots[descriptor.id] = previous
+                } else {
+                    snapshots[descriptor.id] = UsageSnapshot(
+                        source: descriptor.id,
+                        status: .error,
+                        fetchHealth: health,
+                        valueFreshness: .empty,
+                        remaining: nil,
+                        used: nil,
+                        limit: nil,
+                        unit: descriptor.relayViewConfig?.accountBalance?.unit ?? "quota",
+                        updatedAt: Date(),
+                        note: error.localizedDescription,
+                        sourceLabel: "Third-Party",
+                        accountLabel: nil,
+                        authSourceLabel: nil,
+                        diagnosticCode: diagnosticCode(for: health)
+                    )
+                }
+            }
 
             let failureCount = consecutiveFailures[descriptor.id, default: 0]
             if AlertEngine.shouldAlertFailures(consecutiveFailures: failureCount, rule: descriptor.threshold) {
@@ -616,6 +870,121 @@ final class AppViewModel {
         return description.contains("rate limited") || description.contains("429")
     }
 
+    private func classifyFetchHealth(_ error: Error) -> FetchHealth {
+        if let providerError = error as? ProviderError {
+            switch providerError {
+            case .missingCredential, .unauthorized, .unauthorizedDetail:
+                return .authExpired
+            case .rateLimited:
+                return .rateLimited
+            case .invalidResponse:
+                return .endpointMisconfigured
+            case .timeout:
+                return .unreachable
+            case .commandFailed, .unavailable:
+                break
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorUserAuthenticationRequired,
+                 NSURLErrorNoPermissionsToReadFile:
+                return .authExpired
+            case NSURLErrorTimedOut,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorNotConnectedToInternet,
+                 NSURLErrorDNSLookupFailed:
+                return .unreachable
+            default:
+                break
+            }
+        }
+
+        let description = nsError.localizedDescription.lowercased()
+        if description.contains("unauthorized") || description.contains("expired") || description.contains("forbidden") {
+            return .authExpired
+        }
+        if description.contains("rate limited") || description.contains("429") {
+            return .rateLimited
+        }
+        if description.contains("invalid") || description.contains("missing") || description.contains("path") || description.contains("base url") {
+            return .endpointMisconfigured
+        }
+        return .unreachable
+    }
+
+    private func diagnosticCode(for health: FetchHealth) -> String {
+        switch health {
+        case .ok:
+            return "ok"
+        case .authExpired:
+            return "auth-expired"
+        case .rateLimited:
+            return "rate-limited"
+        case .endpointMisconfigured:
+            return "endpoint-misconfigured"
+        case .unreachable:
+            return "unreachable"
+        }
+    }
+
+    private func handleLowRemainingAlerts(for descriptor: ProviderDescriptor, snapshot: UsageSnapshot) {
+        let genericKey = "low:\(descriptor.id)"
+        let lowWindows = AlertEngine.lowQuotaWindows(snapshot: snapshot, rule: descriptor.threshold)
+
+        if !lowWindows.isEmpty {
+            activeAlerts.remove(genericKey)
+
+            let activeWindowKeys = Set(lowWindows.map { "low:\(descriptor.id):\($0.id)" })
+            for existingKey in activeAlerts.filter({ $0.hasPrefix("low:\(descriptor.id):") && !activeWindowKeys.contains($0) }) {
+                activeAlerts.remove(existingKey)
+            }
+
+            for window in lowWindows {
+                let key = "low:\(descriptor.id):\(window.id)"
+                if !activeAlerts.contains(key) {
+                    notifications.notify(
+                        title: text(.lowBalanceWarning),
+                        body: Localizer.lowQuotaWindowBody(
+                            providerName: descriptor.name,
+                            windowTitle: window.title,
+                            remaining: String(Int(window.remainingPercent.rounded())),
+                            language: config.language
+                        ),
+                        identifier: key
+                    )
+                    activeAlerts.insert(key)
+                }
+            }
+            return
+        }
+
+        for existingKey in activeAlerts.filter({ $0.hasPrefix("low:\(descriptor.id):") }) {
+            activeAlerts.remove(existingKey)
+        }
+
+        if AlertEngine.shouldAlertLowRemaining(snapshot: snapshot, rule: descriptor.threshold) {
+            if !activeAlerts.contains(genericKey) {
+                notifications.notify(
+                    title: text(.lowBalanceWarning),
+                    body: Localizer.lowBalanceBody(
+                        providerName: descriptor.name,
+                        remaining: format(snapshot.remaining),
+                        unit: snapshot.unit,
+                        language: config.language
+                    ),
+                    identifier: genericKey
+                )
+                activeAlerts.insert(genericKey)
+            }
+        } else {
+            activeAlerts.remove(genericKey)
+        }
+    }
+
     private func format(_ value: Double?) -> String {
         guard let value else { return text(.unlimited) }
         return String(format: "%.2f", value)
@@ -645,10 +1014,14 @@ final class AppViewModel {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    private func markCodexSnapshotActive(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+    private func markCodexSnapshotActive(_ snapshot: UsageSnapshot, preferredSlotID: CodexSlotID? = nil) -> UsageSnapshot {
         var copy = snapshot
+        let resolvedSlotID = preferredSlotID ?? matchedCodexProfile(for: copy)?.slotID
         let accountKey = CodexAccountSlotStore.accountKey(from: copy)
         let label = CodexAccountSlotStore.accountLabel(from: copy)
+        if let resolvedSlotID {
+            copy.rawMeta["codex.slotID"] = resolvedSlotID.rawValue
+        }
         copy.rawMeta["codex.accountKey"] = accountKey
         copy.rawMeta["codex.accountLabel"] = label
         copy.rawMeta["codex.lastSeenAt"] = ISO8601DateFormatter().string(from: Date())
@@ -657,6 +1030,65 @@ final class AppViewModel {
             copy.accountLabel = label == "Unknown" ? nil : label
         }
         return copy
+    }
+
+    private func syncCodexProfilesCurrentState() {
+        codexProfiles = codexProfileStore.captureCurrentAuthIfNeeded(
+            authJSON: codexDesktopAuthService.currentAuthJSON()
+        )
+    }
+
+    private func codexMenuTitle(for slotID: CodexSlotID) -> String {
+        "Codex \(slotID.rawValue)"
+    }
+
+    private func setCodexSwitchFeedback(_ feedback: CodexSwitchFeedback?, for slotID: CodexSlotID) {
+        codexFeedbackTasks[slotID]?.cancel()
+        codexFeedbackTasks.removeValue(forKey: slotID)
+
+        guard let feedback else {
+            codexSwitchFeedback.removeValue(forKey: slotID)
+            return
+        }
+
+        codexSwitchFeedback[slotID] = feedback
+        codexFeedbackTasks[slotID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if self.codexSwitchFeedback[slotID] == feedback {
+                self.codexSwitchFeedback.removeValue(forKey: slotID)
+            }
+            self.codexFeedbackTasks.removeValue(forKey: slotID)
+        }
+    }
+
+    private func matchedCodexProfile(for slot: CodexAccountSlot) -> CodexAccountProfile? {
+        matchedCodexProfile(for: slot.lastSnapshot) ?? codexProfiles.first(where: { $0.slotID == slot.slotID })
+    }
+
+    private func matchedCodexProfile(for snapshot: UsageSnapshot) -> CodexAccountProfile? {
+        syncCodexProfilesCurrentState()
+        let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = (snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"])?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if let explicitSlotID = CodexAccountSlotStore.explicitSlotID(from: snapshot),
+           let matched = codexProfiles.first(where: { $0.slotID == explicitSlotID }) {
+            return matched
+        }
+        if let accountID, !accountID.isEmpty,
+           let matched = codexProfiles.first(where: { $0.accountId?.caseInsensitiveCompare(accountID) == .orderedSame }) {
+            return matched
+        }
+        if let fingerprint, !fingerprint.isEmpty,
+           let matched = codexProfiles.first(where: { $0.credentialFingerprint?.lowercased() == fingerprint }) {
+            return matched
+        }
+        if let email, !email.isEmpty,
+           let matched = codexProfiles.first(where: { $0.accountEmail?.lowercased() == email }) {
+            return matched
+        }
+        return nil
     }
 }
 

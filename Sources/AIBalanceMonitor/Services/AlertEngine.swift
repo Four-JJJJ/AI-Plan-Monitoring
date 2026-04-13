@@ -8,6 +8,10 @@ struct AlertEngine {
         return remaining <= rule.lowRemaining
     }
 
+    static func lowQuotaWindows(snapshot: UsageSnapshot, rule: AlertRule) -> [UsageQuotaWindow] {
+        snapshot.quotaWindows.filter { $0.remainingPercent <= rule.lowRemaining }
+    }
+
     static func shouldAlertFailures(consecutiveFailures: Int, rule: AlertRule) -> Bool {
         consecutiveFailures >= rule.maxConsecutiveFailures
     }

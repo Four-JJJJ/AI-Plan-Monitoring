@@ -3,25 +3,44 @@ import LocalAuthentication
 import Security
 
 final class KeychainService {
+    static let defaultServiceName = "AI Plan Monitor"
+    static let legacyServiceName = "AIBalanceMonitor"
+    private static let vaultAccount = "__credential_vault__"
+    private static let legacyMigrationDefaultsKey = "AIPlanMonitor.Keychain.LegacyMigrationComplete"
+
     private let lock = NSLock()
+    private let fileManager: FileManager
+    private let storageURL: URL?
+    private let useFileStorage: Bool
+    private let defaults: UserDefaults
     private var tokenCache: [String: String] = [:]
     private var missingCache: Set<String> = []
-    private var diskTokens: [String: String] = [:]
-    private var diskLoaded = false
-    private let tokensFileURL: URL
+    private var secureVaultLoaded = false
 
-    init(fileManager: FileManager = .default) {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let directory = appSupport.appendingPathComponent("AIBalanceMonitor", isDirectory: true)
-        self.tokensFileURL = directory.appendingPathComponent("tokens.json")
+    init(
+        fileManager: FileManager = .default,
+        storageURL: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        self.fileManager = fileManager
+        self.storageURL = storageURL
+        self.defaults = defaults
+        self.useFileStorage = storageURL != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if useFileStorage {
+            loadFromDisk()
+        } else {
+            loadSecureVaultIfNeeded()
+            migrateLegacyServiceOnceIfNeeded()
+        }
     }
 
     private func cacheKey(service: String, account: String) -> String {
-        "\(service)::\(account)"
+        "\(normalizedServiceName(service))::\(account)"
     }
 
     func readToken(service: String, account: String) -> String? {
-        let key = cacheKey(service: service, account: account)
+        let normalizedService = normalizedServiceName(service)
+        let key = cacheKey(service: normalizedService, account: account)
 
         lock.lock()
         if let cached = tokenCache[key] {
@@ -34,119 +53,310 @@ final class KeychainService {
         }
         lock.unlock()
 
-        if let token = readDiskToken(for: key) {
-            lock.lock()
-            tokenCache[key] = token
-            missingCache.remove(key)
-            lock.unlock()
-            return token
+        let token: String?
+        if useFileStorage {
+            token = readFromDisk(service: normalizedService, account: account)
+        } else {
+            token = readFromVault(service: normalizedService, account: account)
+                ?? readCurrentServiceAndMigrateIfPossible(service: normalizedService, account: account)
         }
 
+        lock.lock()
+        if let token, !token.isEmpty {
+            tokenCache[key] = token
+            missingCache.remove(key)
+        } else {
+            missingCache.insert(key)
+        }
+        lock.unlock()
+        return token
+    }
+
+    @discardableResult
+    func saveToken(_ token: String, service: String, account: String) -> Bool {
+        let normalizedService = normalizedServiceName(service)
+        let key = cacheKey(service: normalizedService, account: account)
+
+        lock.lock()
+        tokenCache[key] = token
+        missingCache.remove(key)
+        let snapshot = tokenCache
+        lock.unlock()
+
+        if useFileStorage {
+            return persist(snapshot)
+        }
+
+        return persistSecureSnapshot(snapshot)
+    }
+
+    private func normalizedServiceName(_ service: String) -> String {
+        let trimmed = service.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == Self.legacyServiceName {
+            return Self.defaultServiceName
+        }
+        return trimmed
+    }
+
+    private func readFromVault(service: String, account: String) -> String? {
+        loadSecureVaultIfNeeded()
+
+        let key = cacheKey(service: service, account: account)
+        lock.lock()
+        defer { lock.unlock() }
+        return tokenCache[key]
+    }
+
+    private func readCurrentServiceAndMigrateIfPossible(service: String, account: String) -> String? {
+        guard service != Self.defaultServiceName || account != Self.vaultAccount,
+              let token = readFromSecureStore(service: service, account: account, interactive: false),
+              !token.isEmpty else {
+            return nil
+        }
+
+        _ = storeInVault(token: token, service: service, account: account)
+        return token
+    }
+
+    private func loadSecureVaultIfNeeded() {
+        lock.lock()
+        if secureVaultLoaded {
+            lock.unlock()
+            return
+        }
+        secureVaultLoaded = true
+        lock.unlock()
+
+        if let snapshot = readVaultSnapshotFromSecureStore(), !snapshot.isEmpty {
+            mergeIntoCache(snapshot)
+        }
+
+        if let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: false)?
+            .filter({ $0.key != Self.vaultAccount && !$0.key.isEmpty && !$0.value.isEmpty }),
+           !currentItems.isEmpty {
+            let normalized = currentItems.reduce(into: [String: String]()) { partialResult, entry in
+                partialResult[cacheKey(service: Self.defaultServiceName, account: entry.key)] = entry.value
+            }
+            _ = mergeIntoVault(normalized)
+        }
+    }
+
+    private func migrateLegacyServiceOnceIfNeeded() {
+        guard !defaults.bool(forKey: Self.legacyMigrationDefaultsKey) else {
+            return
+        }
+
+        guard let legacyItems = readAllFromSecureStore(service: Self.legacyServiceName, interactive: true)?
+            .filter({ !$0.key.isEmpty && !$0.value.isEmpty }),
+           !legacyItems.isEmpty else {
+            defaults.set(true, forKey: Self.legacyMigrationDefaultsKey)
+            return
+        }
+
+        let normalized = legacyItems.reduce(into: [String: String]()) { partialResult, entry in
+            partialResult[cacheKey(service: Self.defaultServiceName, account: entry.key)] = entry.value
+        }
+
+        guard mergeIntoVault(normalized) else { return }
+
+        for account in legacyItems.keys {
+            deleteSecureStoreItem(service: Self.legacyServiceName, account: account)
+        }
+        defaults.set(true, forKey: Self.legacyMigrationDefaultsKey)
+    }
+
+    private func mergeIntoVault(_ items: [String: String]) -> Bool {
+        guard !items.isEmpty else { return true }
+
+        lock.lock()
+        var merged = tokenCache
+        for (key, value) in items where !value.isEmpty {
+            merged[key] = value
+        }
+        lock.unlock()
+
+        guard persistSecureSnapshot(merged) else {
+            return false
+        }
+
+        mergeIntoCache(items)
+        return true
+    }
+
+    private func storeInVault(token: String, service: String, account: String) -> Bool {
+        mergeIntoVault([cacheKey(service: service, account: account): token])
+    }
+
+    private func mergeIntoCache(_ items: [String: String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        for (key, value) in items where !value.isEmpty {
+            tokenCache[key] = value
+            missingCache.remove(key)
+        }
+    }
+
+    private func readVaultSnapshotFromSecureStore() -> [String: String]? {
+        guard let data = readDataFromSecureStore(
+            service: Self.defaultServiceName,
+            account: Self.vaultAccount,
+            interactive: true
+        ) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    private func persistSecureSnapshot(_ snapshot: [String: String]) -> Bool {
+        let encoded: Data
+        do {
+            encoded = try JSONEncoder().encode(snapshot)
+        } catch {
+            return false
+        }
+        return saveDataToSecureStore(encoded, service: Self.defaultServiceName, account: Self.vaultAccount)
+    }
+
+    private func readFromSecureStore(service: String, account: String, interactive: Bool) -> String? {
+        guard let data = readDataFromSecureStore(service: service, account: account, interactive: interactive),
+              let token = String(data: data, encoding: .utf8),
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    private func readDataFromSecureStore(service: String, account: String, interactive: Bool) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: nonInteractiveContext()
+            kSecUseAuthenticationContext as String: authenticationContext(interactive: interactive)
         ]
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess,
               let data = item as? Data,
-              let token = String(data: data, encoding: .utf8) else {
-            lock.lock()
-            missingCache.insert(key)
-            lock.unlock()
+              !data.isEmpty else {
             return nil
         }
-
-        lock.lock()
-        tokenCache[key] = token
-        missingCache.remove(key)
-        lock.unlock()
-
-        _ = writeDiskToken(token, for: key)
-        return token
+        return data
     }
 
-    @discardableResult
-    func saveToken(_ token: String, service: String, account: String) -> Bool {
-        let key = cacheKey(service: service, account: account)
-        let diskSaved = writeDiskToken(token, for: key)
-
-        lock.lock()
-        tokenCache[key] = token
-        missingCache.remove(key)
-        lock.unlock()
-
-        let data = token.data(using: .utf8) ?? Data()
+    private func readAllFromSecureStore(service: String, interactive: Bool) -> [String: String]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecUseAuthenticationContext as String: nonInteractiveContext()
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecUseAuthenticationContext as String: authenticationContext(interactive: interactive)
         ]
 
-        SecItemDelete(query as CFDictionary)
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess else {
+            return nil
+        }
 
-        let attributes: [String: Any] = [
+        let rows: [[String: Any]]
+        if let array = item as? [[String: Any]] {
+            rows = array
+        } else if let dict = item as? [String: Any] {
+            rows = [dict]
+        } else {
+            return nil
+        }
+
+        var result: [String: String] = [:]
+        for row in rows {
+            guard let account = row[kSecAttrAccount as String] as? String,
+                  let data = row[kSecValueData as String] as? Data,
+                  let token = String(data: data, encoding: .utf8),
+                  !token.isEmpty else {
+                continue
+            }
+            result[account] = token
+        }
+        return result
+    }
+
+    private func saveDataToSecureStore(_ data: Data, service: String, account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        let updateAttributes: [String: Any] = [
+            kSecValueData as String: data
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return true
+        }
+
+        if updateStatus != errSecItemNotFound {
+            SecItemDelete(query as CFDictionary)
+        }
+
+        let addAttributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecUseAuthenticationContext as String: nonInteractiveContext()
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
-
-        _ = SecItemAdd(attributes as CFDictionary, nil)
-        return diskSaved
+        let addStatus = SecItemAdd(addAttributes as CFDictionary, nil)
+        return addStatus == errSecSuccess
     }
 
-    private func readDiskToken(for key: String) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        loadDiskTokensIfNeededLocked()
-        return diskTokens[key]
+    private func deleteSecureStoreItem(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
-    @discardableResult
-    private func writeDiskToken(_ token: String, for key: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        loadDiskTokensIfNeededLocked()
-        diskTokens[key] = token
-        return persistDiskTokensLocked()
+    private func authenticationContext(interactive: Bool) -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = !interactive
+        return context
     }
 
-    private func loadDiskTokensIfNeededLocked() {
-        guard !diskLoaded else { return }
-        diskLoaded = true
-        guard let data = try? Data(contentsOf: tokensFileURL),
+    private func readFromDisk(service: String, account: String) -> String? {
+        tokenCache["\(service)::\(account)"]
+    }
+
+    private func loadFromDisk() {
+        guard let storageURL,
+              fileManager.fileExists(atPath: storageURL.path),
+              let data = try? Data(contentsOf: storageURL),
               let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
-            diskTokens = [:]
             return
         }
-        diskTokens = decoded
+
+        lock.lock()
+        tokenCache = decoded
+        missingCache.removeAll()
+        lock.unlock()
     }
 
-    @discardableResult
-    private func persistDiskTokensLocked() -> Bool {
-        let directory = tokensFileURL.deletingLastPathComponent()
+    private func persist(_ snapshot: [String: String]) -> Bool {
+        guard let storageURL else { return false }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(diskTokens)
-            try data.write(to: tokensFileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokensFileURL.path)
+            try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: storageURL, options: .atomic)
             return true
         } catch {
             return false
         }
-    }
-
-    private func nonInteractiveContext() -> LAContext {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        return context
     }
 }

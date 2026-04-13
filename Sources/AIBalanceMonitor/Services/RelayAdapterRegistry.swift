@@ -18,7 +18,7 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         let all = availableManifests()
         if let preferredID,
            let matched = all.first(where: { $0.id == preferredID }) {
-            return matched
+            return decorate(matched)
         }
 
         let host = URL(string: ProviderDescriptor.normalizeRelayBaseURL(baseURL))?.host?.lowercased()
@@ -29,14 +29,14 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             .first(where: { manifest in
                 manifest.match.hostPatterns.contains(where: { Self.host(host, matches: $0) && $0 != "*" })
             }) {
-            return matched
+            return decorate(matched)
         }
 
-        return all.first(where: { $0.id == "generic-newapi" }) ?? Self.genericManifest
+        return decorate(all.first(where: { $0.id == "generic-newapi" }) ?? Self.genericManifest)
     }
 
     func manifest(id: String) -> RelayAdapterManifest? {
-        availableManifests().first(where: { $0.id == id })
+        availableManifests().first(where: { $0.id == id }).map(decorate)
     }
 
     func availableManifests() -> [RelayAdapterManifest] {
@@ -47,7 +47,52 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         for manifest in loadLocalManifests() {
             merged[manifest.id] = manifest
         }
-        return merged.values.sorted { $0.id < $1.id }
+        return merged.values.sorted { $0.id < $1.id }.map(decorate)
+    }
+
+    private func decorate(_ manifest: RelayAdapterManifest) -> RelayAdapterManifest {
+        var copy = manifest
+        switch copy.id {
+        case "ailinyu":
+            copy.displayMode = .hybrid
+            copy.supportsBrowserFallback = true
+            copy.supportsSeparateBalanceAuth = true
+        case "generic-newapi", "deepseek", "hongmacc", "xiaomimimo", "moonshot", "minimax":
+            copy.displayMode = .balance
+            copy.supportsBrowserFallback = true
+            copy.supportsSeparateBalanceAuth = true
+        default:
+            break
+        }
+
+        if copy.setup?.diagnosticHints == nil {
+            var setup = copy.setup ?? RelaySetupManifest()
+            setup.diagnosticHints = diagnosticHints(for: copy.id)
+            copy.setup = setup
+        }
+        return copy
+    }
+
+    private func diagnosticHints(for id: String) -> RelaySetupManifest.LocalizedText? {
+        switch id {
+        case "ailinyu":
+            return .init(
+                zhHans: "优先确认 API Key 与后台访问令牌分别填写正确；该站点可同时展示 token 配额和账户余额。",
+                en: "Confirm the API key and dashboard access token separately. This site can expose both token quota and account balance."
+            )
+        case "deepseek", "hongmacc", "xiaomimimo", "moonshot", "minimax":
+            return .init(
+                zhHans: "测试连接时会优先使用当前模板的默认余额接口；若站点返回结构不同，再展开高级设置覆盖路径。",
+                en: "Connection testing uses the template's default balance endpoint first. Open Advanced settings only if the site returns a different shape."
+            )
+        case "generic-newapi":
+            return .init(
+                zhHans: "先尝试标准 New API 配置；只有当站点接口路径或字段不兼容时再改高级设置。",
+                en: "Start with the standard New API template. Change Advanced settings only when the site uses different paths or field names."
+            )
+        default:
+            return nil
+        }
     }
 
     private func loadLocalManifests() -> [RelayAdapterManifest] {
@@ -134,6 +179,9 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             RelayAuthStrategy(kind: .savedCookieHeader),
             RelayAuthStrategy(kind: .browserCookieHeader)
         ],
+        displayMode: .balance,
+        supportsBrowserFallback: true,
+        supportsSeparateBalanceAuth: true,
         balanceRequest: RelayRequestManifest(
             method: "GET",
             path: "/api/user/self",

@@ -18,7 +18,7 @@ final class SettingsWindowController {
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "AI Balance Monitor Settings"
+            panel.title = "AI Plan Monitor Settings"
             panel.isReleasedWhenClosed = false
             panel.minSize = NSSize(width: 860, height: 620)
             panel.center()

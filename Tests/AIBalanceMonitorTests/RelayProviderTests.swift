@@ -23,7 +23,7 @@ final class RelayProviderTests: XCTestCase {
                     requestMethod: "GET",
                     requestBodyJSON: nil,
                     endpointPath: "/api/user/self",
-                    userID: "136",
+                    userID: "example-user-id",
                     userIDHeader: "New-Api-User",
                     remainingJSONPath: "data.quota",
                     usedJSONPath: "data.used_quota",
@@ -129,6 +129,18 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(manifest.id, "moonshot")
     }
 
+    func testCustomRelayNameSurvivesNormalizationForKnownTemplate() {
+        let descriptor = ProviderDescriptor.makeOpenRelay(
+            name: "Moonshot 主账号",
+            baseURL: "https://platform.moonshot.cn",
+            preferredAdapterID: "moonshot"
+        )
+
+        let normalized = descriptor.normalized()
+        XCTAssertEqual(normalized.name, "Moonshot 主账号")
+        XCTAssertEqual(normalized.relayConfig?.adapterID, "moonshot")
+    }
+
     func testRegistryMatchesMinimaxManifest() {
         let manifest = RelayAdapterRegistry.shared.manifest(for: "https://platform.minimaxi.com")
         XCTAssertEqual(manifest.id, "minimax")
@@ -143,6 +155,14 @@ final class RelayProviderTests: XCTestCase {
             manifest.setup?.balanceAuthHint?.zhHans,
             "填写 DeepSeek 平台后台生成的 Bearer Token 或登录态令牌。"
         )
+    }
+
+    func testRegistryDecoratesDisplayModeAndDiagnosticHints() {
+        let manifest = RelayAdapterRegistry.shared.manifest(for: "https://open.ailinyu.de")
+        XCTAssertEqual(manifest.displayMode, .hybrid)
+        XCTAssertTrue(manifest.supportsBrowserFallback)
+        XCTAssertTrue(manifest.supportsSeparateBalanceAuth)
+        XCTAssertNotNil(manifest.setup?.diagnosticHints?.zhHans)
     }
 
     func testMoonshotTemplatePrefersCookieStrategy() {
@@ -201,6 +221,9 @@ final class RelayProviderTests: XCTestCase {
         let snapshot = try await provider.fetch()
         XCTAssertEqual(snapshot.remaining ?? -1, 12, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserBearer:browser")
+        XCTAssertEqual(snapshot.fetchHealth, .ok)
+        XCTAssertEqual(snapshot.valueFreshness, .live)
+        XCTAssertEqual(snapshot.authSourceLabel, "browserBearer:browser")
         XCTAssertEqual(
             keychain.readToken(service: service, account: "relay.example.com/system-token"),
             "good-token"
@@ -371,6 +394,7 @@ final class RelayProviderTests: XCTestCase {
 
     func testPostprocessConvertsAilinyuQuotaToDisplayAmount() async throws {
         RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "New-Api-User"), "777")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             if request.url?.path == "/api/status" {
                 let json = #"{"data":{"quota_per_unit":2,"quota_display_type":"CNY","usd_exchange_rate":7}}"#
@@ -395,14 +419,20 @@ final class RelayProviderTests: XCTestCase {
             baseURL: "https://open.ailinyu.de"
         )
         descriptor.relayConfig?.balanceAuth.keychainAccount = "open.ailinyu.de/session-cookie"
-        descriptor.relayConfig?.manualOverrides?.authHeader = "Cookie"
-        descriptor.relayConfig?.manualOverrides?.authScheme = ""
+        descriptor.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Cookie",
+            authScheme: "",
+            userID: "777"
+        )
 
         let provider = RelayProvider(
             descriptor: descriptor,
             session: session,
             keychain: keychain,
-            browserCredentialService: BrowserCredentialService()
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in [] },
+                cookieHeaderOverride: { _ in nil }
+            )
         )
 
         let snapshot = try await provider.fetch()
@@ -572,6 +602,170 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserCookieHeader:browser")
     }
 
+    func testXiaomimimoBalanceProbeSupportsNestedResultPayload() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=cookie123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/userProfile":
+                return (response, Data(#"{"data":{"nickname":"mimo-user"}}"#.utf8))
+            case "/api/v1/balance":
+                return (response, Data(#"{"data":{"result":{"available_amount":"5.00","monthly_spend":"0.25","total_amount":"20.00"}}}"#.utf8))
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=cookie123; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/system-token"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 5.00, accuracy: 0.001)
+        XCTAssertEqual(snapshot.used ?? -1, 0.25, accuracy: 0.001)
+        XCTAssertEqual(snapshot.limit ?? -1, 20.00, accuracy: 0.001)
+    }
+
+    func testXiaomimimoBalanceProbeSupportsRecursiveFallbackKeys() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=cookie456; userId=10002")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/userProfile":
+                return (response, Data(#"{"data":{"nickname":"mimo-user"}}"#.utf8))
+            case "/api/v1/balance":
+                return (response, Data(#"{"payload":{"wallet":{"available_amount":"6.66"},"usage":{"monthly_spend":"1.11"},"quota":{"total_amount":"30.00"}}}"#.utf8))
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=cookie456; userId=10002",
+                service: service,
+                account: "platform.xiaomimimo.com/system-token"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 6.66, accuracy: 0.001)
+        XCTAssertEqual(snapshot.used ?? -1, 1.11, accuracy: 0.001)
+        XCTAssertEqual(snapshot.limit ?? -1, 30.00, accuracy: 0.001)
+        XCTAssertEqual(snapshot.rawMeta["account.remainingPath"], "xiaomimimoRecursiveFallback")
+    }
+
+    func testXiaomimimoUnauthorizedShowsHelpfulLoginExpiredMessage() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=staleCookie; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/system-token"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected unauthorizedDetail")
+        } catch let error as ProviderError {
+            guard case .unauthorizedDetail(let message) = error else {
+                return XCTFail("Expected unauthorizedDetail, got \(error)")
+            }
+            XCTAssertTrue(message.contains("xiaomimimo login expired"))
+        }
+    }
+
+    func testXiaomimimoBrowserOnlyWithoutBrowserCookieShowsHelpfulPreflightMessage() async throws {
+        RelayMockURLProtocol.requestHandler = { _ in
+            XCTFail("Preflight should stop before any network request")
+            let response = HTTPURLResponse(url: URL(string: "https://platform.xiaomimimo.com/api/v1/userProfile")!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        var descriptor = makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com")
+        descriptor.relayConfig?.balanceCredentialMode = .browserOnly
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in [] },
+                cookieHeaderOverride: { _ in nil }
+            )
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected unauthorizedDetail")
+        } catch let error as ProviderError {
+            guard case .unauthorizedDetail(let message) = error else {
+                return XCTFail("Expected unauthorizedDetail, got \(error)")
+            }
+            XCTAssertTrue(message.contains("No live XiaomiMIMO login"))
+        }
+    }
+
     func testMinimaxTemplateInjectsGroupIDIntoAbsoluteAccountEndpoint() async throws {
         RelayMockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.url?.host, "www.minimaxi.com")
@@ -620,6 +814,39 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.unit, "CNY")
         XCTAssertEqual(snapshot.rawMeta["relay.adapterID"], "minimax")
         XCTAssertEqual(snapshot.rawMeta["account.userID"], "2026882600953450775")
+    }
+
+    func testMinimaxMissingGroupIDShowsHelpfulPreflightMessage() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "SESSION=minimax-cookie",
+                service: service,
+                account: "platform.minimaxi.com/system-token"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "minimax", baseURL: "https://platform.minimaxi.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected unauthorizedDetail")
+        } catch let error as ProviderError {
+            guard case .unauthorizedDetail(let message) = error else {
+                return XCTFail("Expected unauthorizedDetail, got \(error)")
+            }
+            XCTAssertTrue(message.contains("GroupId"))
+        }
     }
 
     func testMinimaxAutoProbeFallsBackToQueryBalanceEndpoint() async throws {
@@ -844,6 +1071,48 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.rawMeta["account.organizationID"], "org-live-shape")
         XCTAssertEqual(snapshot.rawMeta["account.valueScale"], "100000")
         XCTAssertEqual(snapshot.rawMeta["account.rawRemaining"], "158833.0")
+    }
+
+    func testMoonshotOrganizationAccountInfoFallsBackViaOrganizationListWithoutUserInfoOID() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.query {
+            case "endpoint=userInfo":
+                return (response, Data(#"{"data":{"nickname":"moon-user"}}"#.utf8))
+            case "endpoint=organizationAccountInfo":
+                return (response, Data(#"{"data":{"organizations":[{"organization":{"id":"org-probe-002"}}]}}"#.utf8))
+            case "endpoint=organizationAccountInfo&oid=org-probe-002":
+                return (response, Data(#"{"data":{"balance":"123.45","monthlySpend":"6.78","totalLimit":"200.00"}}"#.utf8))
+            default:
+                XCTFail("Unexpected query \(request.url?.query ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIBalanceMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("moon-token", service: service, account: "platform.moonshot.cn/system-token"))
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "moonshot", baseURL: "https://platform.moonshot.cn"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in [] },
+                cookieHeaderOverride: { _ in nil }
+            )
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 123.45, accuracy: 0.0001)
+        XCTAssertEqual(snapshot.used ?? -1, 6.78, accuracy: 0.0001)
+        XCTAssertEqual(snapshot.limit ?? -1, 200.00, accuracy: 0.0001)
+        XCTAssertEqual(snapshot.rawMeta["account.organizationID"], "org-probe-002")
     }
 
     func testMoonshotAnalyticsOnlyCookieShowsHelpfulError() async throws {

@@ -1,5 +1,6 @@
 import Foundation
 import CommonCrypto
+import LocalAuthentication
 import Security
 
 struct BrowserCookieHeader: Equatable {
@@ -72,6 +73,7 @@ enum SecurityCredentialReader {
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
+            kSecUseAuthenticationContext as String: nonInteractiveContext(),
         ]
         if let account {
             query[kSecAttrAccount as String] = account
@@ -82,17 +84,47 @@ enum SecurityCredentialReader {
         if status == errSecSuccess, let data = result as? Data, let text = String(data: data, encoding: .utf8) {
             return text
         }
+        return nil
+    }
 
-        var args = ["find-generic-password", "-w", "-s", service]
-        if let account {
-            args += ["-a", account]
+    @discardableResult
+    static func saveGenericPassword(service: String, account: String? = nil, text: String) -> Bool {
+        let normalizedAccount = account ?? service
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        let data = Data(text.utf8)
+        let addAttributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: normalizedAccount,
+            kSecValueData as String: data,
+        ]
+        let status = SecItemAdd(addAttributes as CFDictionary, nil)
+        if status == errSecSuccess {
+            return true
         }
-        guard let output = ShellCommand.run(executable: "/usr/bin/security", arguments: args, timeout: 5),
-              output.status == 0 else {
-            return nil
+
+        let args = [
+            "add-generic-password",
+            "-U",
+            "-s", service,
+            "-a", normalizedAccount,
+            "-w", text
+        ]
+        guard let output = ShellCommand.run(executable: "/usr/bin/security", arguments: args, timeout: 5) else {
+            return false
         }
-        let text = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        return output.status == 0
+    }
+
+    private static func nonInteractiveContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 }
 

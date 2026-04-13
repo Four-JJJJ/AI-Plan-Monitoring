@@ -84,16 +84,17 @@ struct MenuContentView: View {
                 isDisconnected: disconnected
             )
         } else {
-            let disconnected = error != nil
+            let stale = snapshot?.valueFreshness == .cachedFallback
+            let disconnected = error != nil && !stale
             AmountModelCard(
                 title: displayName(for: provider),
                 iconName: iconName(for: provider),
                 iconFallback: fallbackIcon(for: provider),
-                status: amountStatus(remaining: snapshot?.remaining, disconnected: disconnected),
-                amountText: disconnected ? "-" : formattedBalanceNumber(snapshot?.remaining),
+                status: amountStatus(snapshot: snapshot, disconnected: disconnected),
+                amountText: (disconnected || stale) ? "-" : formattedBalanceNumber(snapshot?.remaining),
                 errorText: error,
                 backgroundColor: cardBackground,
-                isDisconnected: disconnected,
+                isDisconnected: disconnected || stale,
                 balanceLabel: viewModel.text(.balanceLabel)
             )
         }
@@ -102,6 +103,7 @@ struct MenuContentView: View {
     private func codexSlotCard(_ slot: CodexSlotViewModel, provider: ProviderDescriptor) -> some View {
         let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
         let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+        let showsSwitchAction = !slot.isActive && slot.canSwitch
 
         return PercentageModelCard(
             title: slot.title,
@@ -112,7 +114,16 @@ struct MenuContentView: View {
             metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
             errorText: nil,
             backgroundColor: cardBackground,
-            isDisconnected: false
+            isDisconnected: false,
+            actionLabel: showsSwitchAction ? viewModel.text(.codexSwitchAction) : nil,
+            actionDisabled: slot.isSwitching,
+            action: showsSwitchAction ? {
+                Task {
+                    await viewModel.switchCodexProfile(slotID: slot.slotID)
+                }
+            } : nil,
+            infoText: slot.switchMessage,
+            infoTextColor: slot.switchMessageIsError ? Color(hex: 0xD83E3E) : Color(hex: 0x51DB42)
         )
     }
 
@@ -158,11 +169,31 @@ struct MenuContentView: View {
         return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
     }
 
-    private func amountStatus(remaining: Double?, disconnected: Bool) -> CardStatus {
+    private func amountStatus(snapshot: UsageSnapshot?, disconnected: Bool) -> CardStatus {
+        if let snapshot, snapshot.valueFreshness == .cachedFallback {
+            return cachedRelayStatus(fetchHealth: snapshot.fetchHealth)
+        }
+
+        if let snapshot, snapshot.valueFreshness == .empty {
+            switch snapshot.fetchHealth {
+            case .authExpired:
+                return CardStatus(text: localizedRelayState(authExpired: true), color: Color(hex: 0xD83E3E))
+            case .endpointMisconfigured:
+                return CardStatus(text: localizedRelayState(configIssue: true), color: Color(hex: 0xD83E3E))
+            case .rateLimited:
+                return CardStatus(text: localizedRelayState(rateLimited: true), color: Color(hex: 0xD87E3E))
+            case .unreachable:
+                return CardStatus(text: viewModel.text(.statusDisconnected), color: Color(hex: 0xD83E3E))
+            case .ok:
+                break
+            }
+        }
+
         if disconnected {
             return CardStatus(text: viewModel.text(.statusDisconnected), color: Color(hex: 0xD83E3E))
         }
 
+        let remaining = snapshot?.remaining
         guard let remaining else {
             return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
         }
@@ -174,6 +205,51 @@ struct MenuContentView: View {
             return CardStatus(text: viewModel.text(.statusTight), color: Color(hex: 0xD87E3E))
         }
         return CardStatus(text: viewModel.text(.statusExhausted), color: Color(hex: 0xD83E3E))
+    }
+
+    private func cachedRelayStatus(fetchHealth: FetchHealth) -> CardStatus {
+        switch fetchHealth {
+        case .authExpired:
+            return CardStatus(text: localizedRelayState(authExpired: true, cached: true), color: Color(hex: 0xD83E3E))
+        case .endpointMisconfigured:
+            return CardStatus(text: localizedRelayState(configIssue: true, cached: true), color: Color(hex: 0xD83E3E))
+        case .rateLimited:
+            return CardStatus(text: localizedRelayState(rateLimited: true, cached: true), color: Color(hex: 0xD87E3E))
+        case .unreachable:
+            return CardStatus(text: localizedRelayState(cached: true), color: Color(hex: 0xD87E3E))
+        case .ok:
+            return CardStatus(text: localizedRelayState(cached: true), color: Color(hex: 0xD87E3E))
+        }
+    }
+
+    private func localizedRelayState(
+        authExpired: Bool = false,
+        configIssue: Bool = false,
+        rateLimited: Bool = false,
+        cached: Bool = false
+    ) -> String {
+        if viewModel.language == .zhHans {
+            if cached {
+                if authExpired { return "认证失效(缓存)" }
+                if configIssue { return "配置异常(缓存)" }
+                if rateLimited { return "限流回退" }
+                return "缓存回退"
+            }
+            if authExpired { return "认证失效" }
+            if configIssue { return "配置异常" }
+            if rateLimited { return "限流" }
+            return "异常"
+        }
+        if cached {
+            if authExpired { return "Auth Expired (Cached)" }
+            if configIssue { return "Config Issue (Cached)" }
+            if rateLimited { return "Rate Limited (Cached)" }
+            return "Cached Fallback"
+        }
+        if authExpired { return "Auth Expired" }
+        if configIssue { return "Config Issue" }
+        if rateLimited { return "Rate Limited" }
+        return "Error"
     }
 
     private func percentageBarColor(_ percent: Double?, displayPercent: Int? = nil) -> Color {
@@ -228,6 +304,15 @@ struct MenuContentView: View {
                 let l = providerRank(lhs)
                 let r = providerRank(rhs)
                 if l != r { return l < r }
+                if lhs.family == .thirdParty && rhs.family == .thirdParty {
+                    let lHealth = relayHealthRank(lhs)
+                    let rHealth = relayHealthRank(rhs)
+                    if lHealth != rHealth { return lHealth < rHealth }
+
+                    let lRemaining = viewModel.snapshots[lhs.id]?.remaining ?? -.greatestFiniteMagnitude
+                    let rRemaining = viewModel.snapshots[rhs.id]?.remaining ?? -.greatestFiniteMagnitude
+                    if lRemaining != rRemaining { return lRemaining > rRemaining }
+                }
                 return lhs.id < rhs.id
             }
     }
@@ -261,6 +346,24 @@ struct MenuContentView: View {
         case .kimi: return 12
         case .relay, .open, .dragon: return 13
         case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf: return 14
+        }
+    }
+
+    private func relayHealthRank(_ provider: ProviderDescriptor) -> Int {
+        let snapshot = viewModel.snapshots[provider.id]
+        switch (snapshot?.valueFreshness, snapshot?.fetchHealth) {
+        case (.live?, _):
+            return 0
+        case (.cachedFallback?, .authExpired?):
+            return 2
+        case (.cachedFallback?, _):
+            return 1
+        case (.empty?, .authExpired?):
+            return 3
+        case (.empty?, .endpointMisconfigured?), (.empty?, .unreachable?), (.empty?, .rateLimited?):
+            return 4
+        default:
+            return 2
         }
     }
 
@@ -493,6 +596,11 @@ private struct PercentageModelCard: View {
     let errorText: String?
     let backgroundColor: Color
     let isDisconnected: Bool
+    var actionLabel: String? = nil
+    var actionDisabled: Bool = false
+    var action: (() -> Void)? = nil
+    var infoText: String? = nil
+    var infoTextColor: Color = Color.white.opacity(0.5)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -515,9 +623,15 @@ private struct PercentageModelCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(status.text)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(status.color)
+                HStack(spacing: 8) {
+                    if let actionLabel, let action {
+                        HoverActionButton(title: actionLabel, disabled: actionDisabled, action: action)
+                    }
+
+                    Text(status.text)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(status.color)
+                }
             }
 
             HStack(spacing: 24) {
@@ -532,6 +646,12 @@ private struct PercentageModelCard: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color(hex: 0xD83E3E))
             }
+
+            if let infoText, !infoText.isEmpty {
+                Text(infoText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(infoTextColor)
+            }
         }
         .padding(12)
         .background(
@@ -542,6 +662,52 @@ private struct PercentageModelCard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color(hex: 0xD83E3E), lineWidth: isDisconnected ? 1 : 0)
         )
+    }
+}
+
+private struct HoverActionButton: View {
+    let title: String
+    let disabled: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(disabled ? Color.white.opacity(0.35) : .white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(backgroundColor)
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(borderColor, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
+    }
+
+    private var backgroundColor: Color {
+        if disabled {
+            return Color.white.opacity(0.04)
+        }
+        return isHovered ? Color(hex: 0x2F6BFF).opacity(0.22) : Color.white.opacity(0.08)
+    }
+
+    private var borderColor: Color {
+        if disabled {
+            return Color.white.opacity(0.08)
+        }
+        return isHovered ? Color(hex: 0x2F6BFF) : Color.white.opacity(0.14)
     }
 }
 

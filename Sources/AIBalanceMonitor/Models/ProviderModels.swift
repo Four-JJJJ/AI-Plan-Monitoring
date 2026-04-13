@@ -189,6 +189,26 @@ enum SnapshotStatus: String, Codable {
     case disabled
 }
 
+enum RelayDisplayMode: String, Codable, Equatable {
+    case balance
+    case quotaPercent
+    case hybrid
+}
+
+enum FetchHealth: String, Codable, Equatable {
+    case ok
+    case authExpired
+    case rateLimited
+    case endpointMisconfigured
+    case unreachable
+}
+
+enum ValueFreshness: String, Codable, Equatable {
+    case live
+    case cachedFallback
+    case empty
+}
+
 enum UsageQuotaKind: String, Codable, Equatable {
     case session
     case weekly
@@ -228,6 +248,8 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
     var id: String { source }
     var source: String
     var status: SnapshotStatus
+    var fetchHealth: FetchHealth
+    var valueFreshness: ValueFreshness
     var remaining: Double?
     var used: Double?
     var limit: Double?
@@ -237,12 +259,16 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
     var quotaWindows: [UsageQuotaWindow]
     var sourceLabel: String
     var accountLabel: String?
+    var authSourceLabel: String?
+    var diagnosticCode: String?
     var extras: [String: String]
     var rawMeta: [String: String]
 
     init(
         source: String,
         status: SnapshotStatus,
+        fetchHealth: FetchHealth = .ok,
+        valueFreshness: ValueFreshness = .live,
         remaining: Double?,
         used: Double?,
         limit: Double?,
@@ -252,11 +278,15 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
         quotaWindows: [UsageQuotaWindow] = [],
         sourceLabel: String = "",
         accountLabel: String? = nil,
+        authSourceLabel: String? = nil,
+        diagnosticCode: String? = nil,
         extras: [String: String] = [:],
         rawMeta: [String: String] = [:]
     ) {
         self.source = source
         self.status = status
+        self.fetchHealth = fetchHealth
+        self.valueFreshness = valueFreshness
         self.remaining = remaining
         self.used = used
         self.limit = limit
@@ -266,9 +296,68 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
         self.quotaWindows = quotaWindows
         self.sourceLabel = sourceLabel
         self.accountLabel = accountLabel
+        self.authSourceLabel = authSourceLabel
+        self.diagnosticCode = diagnosticCode
         self.extras = extras
         self.rawMeta = rawMeta
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case status
+        case fetchHealth
+        case valueFreshness
+        case remaining
+        case used
+        case limit
+        case unit
+        case updatedAt
+        case note
+        case quotaWindows
+        case sourceLabel
+        case accountLabel
+        case authSourceLabel
+        case diagnosticCode
+        case extras
+        case rawMeta
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(String.self, forKey: .source)
+        status = try container.decode(SnapshotStatus.self, forKey: .status)
+        fetchHealth = try container.decodeIfPresent(FetchHealth.self, forKey: .fetchHealth) ?? .ok
+        valueFreshness = try container.decodeIfPresent(ValueFreshness.self, forKey: .valueFreshness) ?? .live
+        remaining = try container.decodeIfPresent(Double.self, forKey: .remaining)
+        used = try container.decodeIfPresent(Double.self, forKey: .used)
+        limit = try container.decodeIfPresent(Double.self, forKey: .limit)
+        unit = try container.decode(String.self, forKey: .unit)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        note = try container.decode(String.self, forKey: .note)
+        quotaWindows = try container.decodeIfPresent([UsageQuotaWindow].self, forKey: .quotaWindows) ?? []
+        sourceLabel = try container.decodeIfPresent(String.self, forKey: .sourceLabel) ?? ""
+        accountLabel = try container.decodeIfPresent(String.self, forKey: .accountLabel)
+        authSourceLabel = try container.decodeIfPresent(String.self, forKey: .authSourceLabel)
+        diagnosticCode = try container.decodeIfPresent(String.self, forKey: .diagnosticCode)
+        extras = try container.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
+        rawMeta = try container.decodeIfPresent([String: String].self, forKey: .rawMeta) ?? [:]
+    }
+}
+
+struct RelayDiagnosticSnapshotPreview: Equatable {
+    var remaining: Double?
+    var used: Double?
+    var limit: Double?
+    var unit: String
+}
+
+struct RelayDiagnosticResult: Equatable {
+    var success: Bool
+    var fetchHealth: FetchHealth
+    var resolvedAdapterID: String
+    var resolvedAuthSource: String?
+    var message: String
+    var snapshotPreview: RelayDiagnosticSnapshotPreview?
 }
 
 struct CodexSlotViewModel: Identifiable, Equatable {
@@ -279,21 +368,47 @@ struct CodexSlotViewModel: Identifiable, Equatable {
     var isActive: Bool
     var lastSeenAt: Date
     var displayName: String
+    var isSwitching: Bool = false
+    var canSwitch: Bool = false
+    var isCurrentSystemAccount: Bool = false
+    var profileDisplayName: String?
+    var switchMessage: String?
+    var switchMessageIsError: Bool = false
+}
+
+struct CodexAccountProfile: Codable, Equatable, Identifiable {
+    var id: String { slotID.rawValue }
+    var slotID: CodexSlotID
+    var displayName: String
+    var authJSON: String
+    var accountId: String?
+    var accountEmail: String?
+    var credentialFingerprint: String?
+    var lastImportedAt: Date
+    var isCurrentSystemAccount: Bool
+}
+
+struct CodexSwitchFeedback: Equatable {
+    var message: String
+    var isError: Bool
 }
 
 struct AppConfig: Codable, Equatable {
     var language: AppLanguage
+    var launchAtLoginEnabled: Bool
     var simplifiedRelayConfig: Bool
     var statusBarProviderID: String?
     var providers: [ProviderDescriptor]
 
     init(
         language: AppLanguage = .zhHans,
+        launchAtLoginEnabled: Bool = false,
         simplifiedRelayConfig: Bool = true,
         statusBarProviderID: String? = nil,
         providers: [ProviderDescriptor]
     ) {
         self.language = language
+        self.launchAtLoginEnabled = launchAtLoginEnabled
         self.simplifiedRelayConfig = simplifiedRelayConfig
         self.statusBarProviderID = statusBarProviderID ?? Self.defaultStatusBarProviderID(from: providers)
         self.providers = providers
@@ -321,6 +436,7 @@ struct AppConfig: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case language
+        case launchAtLoginEnabled
         case simplifiedRelayConfig
         case statusBarProviderID
         case providers
@@ -329,6 +445,7 @@ struct AppConfig: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
+        self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
         self.simplifiedRelayConfig = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig) ?? true
         let decodedProviders = try container.decodeIfPresent([ProviderDescriptor].self, forKey: .providers) ?? AppConfig.default.providers
         self.providers = decodedProviders.map { $0.normalized() }
@@ -356,6 +473,7 @@ extension ProviderDescriptor {
 
     func normalized() -> ProviderDescriptor {
         var copy = self
+        copy.auth = copy.auth.normalizedCredentialServiceName()
         if copy.type == .open || copy.type == .dragon {
             copy.type = .relay
         }
@@ -388,6 +506,7 @@ extension ProviderDescriptor {
                 )
             } else {
                 var relay = copy.relayConfig!
+                relay.balanceAuth = relay.balanceAuth.normalizedCredentialServiceName()
                 let originalAdapterID = relay.adapterID?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let allowAutoMatch = originalAdapterID == nil || originalAdapterID == "generic-newapi"
                 let manifest = RelayAdapterRegistry.shared.manifest(
@@ -405,7 +524,7 @@ extension ProviderDescriptor {
                     relay.adapterID = originalAdapterID ?? manifest.id
                 }
                 relay.balanceAuth = relay.balanceAuth.withFallback(
-                    service: auth.keychainService ?? "AIBalanceMonitor",
+                    service: copy.auth.keychainService ?? KeychainService.defaultServiceName,
                     account: Self.defaultRelayBalanceAccount(
                         id: id,
                         baseURL: normalizedBaseURL,
@@ -584,7 +703,7 @@ extension ProviderDescriptor {
         name: String,
         baseURL: String,
         preferredAdapterID: String? = nil,
-        keychainService: String = "AIBalanceMonitor"
+        keychainService: String = KeychainService.defaultServiceName
     ) -> ProviderDescriptor {
         let normalizedBaseURL = Self.normalizeRelayBaseURL(baseURL)
         let host = URL(string: normalizedBaseURL)?.host ?? "relay"
@@ -615,7 +734,7 @@ extension ProviderDescriptor {
         preferredAdapterID: String? = nil,
         auth: AuthConfig = AuthConfig.none,
         legacyOpenConfig: OpenProviderConfig? = nil,
-        keychainService: String = "AIBalanceMonitor"
+        keychainService: String = KeychainService.defaultServiceName
     ) -> RelayProviderConfig {
         let normalizedBaseURL = normalizeRelayBaseURL(baseURL ?? "")
         let adapterID = defaultRelayAdapterID(
@@ -804,6 +923,10 @@ extension ProviderDescriptor {
             for: resolvedBaseURL,
             preferredID: relayConfig?.adapterID
         )
+    }
+
+    var relayDisplayMode: RelayDisplayMode {
+        relayManifest?.displayMode ?? .balance
     }
 
     var relayViewConfig: OpenProviderConfig? {
@@ -1007,7 +1130,7 @@ extension ProviderDescriptor {
             enabled: true,
             pollIntervalSec: 120,
             threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
-            auth: AuthConfig(kind: .bearer, keychainService: "AIBalanceMonitor", keychainAccount: "open.ailinyu.de/sk-token"),
+            auth: AuthConfig(kind: .bearer, keychainService: KeychainService.defaultServiceName, keychainAccount: "open.ailinyu.de/sk-token"),
             baseURL: "https://open.ailinyu.de",
             relayConfig: RelayProviderConfig(
                 adapterID: "ailinyu",
@@ -1016,13 +1139,13 @@ extension ProviderDescriptor {
                 balanceChannelEnabled: true,
                 balanceAuth: AuthConfig(
                     kind: .bearer,
-                    keychainService: "AIBalanceMonitor",
+                    keychainService: KeychainService.defaultServiceName,
                     keychainAccount: "open.ailinyu.de/session-cookie"
                 ),
                 manualOverrides: RelayManualOverride(
                     authHeader: "Cookie",
                     authScheme: "",
-                    userID: "136",
+                    userID: nil,
                     userIDHeader: "New-Api-User",
                     requestMethod: "GET",
                     requestBodyJSON: nil,
@@ -1048,7 +1171,7 @@ extension ProviderDescriptor {
             enabled: false,
             pollIntervalSec: 60,
             threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
-            auth: AuthConfig(kind: .bearer, keychainService: "AIBalanceMonitor", keychainAccount: "dragoncode.codes/auth_token"),
+            auth: AuthConfig(kind: .bearer, keychainService: KeychainService.defaultServiceName, keychainAccount: "dragoncode.codes/auth_token"),
             baseURL: "https://dragoncode.codes",
             relayConfig: RelayProviderConfig(
                 adapterID: "dragoncode",
@@ -1057,7 +1180,7 @@ extension ProviderDescriptor {
                 balanceChannelEnabled: true,
                 balanceAuth: AuthConfig(
                     kind: .bearer,
-                    keychainService: "AIBalanceMonitor",
+                    keychainService: KeychainService.defaultServiceName,
                     keychainAccount: "dragoncode.codes/auth_token"
                 ),
                 manualOverrides: RelayManualOverride(
@@ -1089,7 +1212,7 @@ extension ProviderDescriptor {
             enabled: false,
             pollIntervalSec: 60,
             threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
-            auth: AuthConfig(kind: .bearer, keychainService: "AIBalanceMonitor", keychainAccount: "hongmacc.com/auth_token"),
+            auth: AuthConfig(kind: .bearer, keychainService: KeychainService.defaultServiceName, keychainAccount: "hongmacc.com/auth_token"),
             baseURL: "https://hongmacc.com",
             relayConfig: RelayProviderConfig(
                 adapterID: "hongmacc",
@@ -1098,7 +1221,7 @@ extension ProviderDescriptor {
                 balanceChannelEnabled: true,
                 balanceAuth: AuthConfig(
                     kind: .bearer,
-                    keychainService: "AIBalanceMonitor",
+                    keychainService: KeychainService.defaultServiceName,
                     keychainAccount: "hongmacc.com/auth_token"
                 ),
                 manualOverrides: RelayManualOverride(
@@ -1160,6 +1283,26 @@ private extension AuthConfig {
             kind: kind,
             keychainService: keychainService ?? service,
             keychainAccount: keychainAccount ?? account
+        )
+    }
+
+    func normalizedCredentialServiceName() -> AuthConfig {
+        let normalizedService: String?
+        if let keychainService {
+            let trimmed = keychainService.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == KeychainService.legacyServiceName {
+                normalizedService = KeychainService.defaultServiceName
+            } else {
+                normalizedService = trimmed
+            }
+        } else {
+            normalizedService = nil
+        }
+
+        return AuthConfig(
+            kind: kind,
+            keychainService: normalizedService,
+            keychainAccount: keychainAccount
         )
     }
 }
@@ -1253,7 +1396,7 @@ private extension ProviderDescriptor {
             relay.baseURL.isEmpty ? (copy.baseURL ?? defaults.baseURL ?? defaultRelay.baseURL) : relay.baseURL
         )
         relay.balanceAuth = relay.balanceAuth.withFallback(
-            service: defaultRelay.balanceAuth.keychainService ?? "AIBalanceMonitor",
+            service: defaultRelay.balanceAuth.keychainService ?? KeychainService.defaultServiceName,
             account: defaultRelay.balanceAuth.keychainAccount
         )
         if relay.manualOverrides == nil {

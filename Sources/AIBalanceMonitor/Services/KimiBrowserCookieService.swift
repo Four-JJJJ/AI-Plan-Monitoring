@@ -1,5 +1,6 @@
 import Foundation
 import CommonCrypto
+import LocalAuthentication
 import Security
 
 struct KimiDetectedToken: Equatable {
@@ -501,29 +502,6 @@ final class KimiBrowserCookieService {
                 safeStorageCache[browser] = password
                 return password
             }
-
-            if let output = runProcess(
-                executable: "/usr/bin/security",
-                arguments: ["find-generic-password", "-w", "-s", label.service, "-a", label.account]
-            ) {
-                let password = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !password.isEmpty {
-                    safeStorageCache[browser] = password
-                    return password
-                }
-            }
-        }
-
-        if let fallbackService = labels.first?.service,
-           let output = runProcess(
-               executable: "/usr/bin/security",
-               arguments: ["find-generic-password", "-w", "-s", fallbackService]
-           ) {
-            let password = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !password.isEmpty {
-                safeStorageCache[browser] = password
-                return password
-            }
         }
 
         return nil
@@ -558,6 +536,7 @@ final class KimiBrowserCookieService {
             kSecAttrAccount as String: account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
+            kSecUseAuthenticationContext as String: nonInteractiveContext(),
         ]
 
         var result: AnyObject?
@@ -566,6 +545,12 @@ final class KimiBrowserCookieService {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    private func nonInteractiveContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 
     private func pbkdf2SHA1(password: String, salt: String, rounds: Int, keyByteCount: Int) -> Data? {

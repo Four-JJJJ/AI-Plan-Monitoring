@@ -1,8 +1,84 @@
 import Foundation
 
-enum CodexSlotID: String, Codable, CaseIterable {
-    case a = "A"
-    case b = "B"
+struct CodexSlotID: RawRepresentable, Codable, Hashable, Comparable, Identifiable {
+    var rawValue: String
+
+    var id: String { rawValue }
+
+    init(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.rawValue = trimmed.isEmpty ? "A" : trimmed.uppercased()
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    static let a = CodexSlotID(rawValue: "A")
+    static let b = CodexSlotID(rawValue: "B")
+
+    static func generated(index: Int) -> CodexSlotID {
+        CodexSlotID(rawValue: excelColumnName(for: index))
+    }
+
+    static func nextAvailable(excluding existing: Set<CodexSlotID>) -> CodexSlotID {
+        var index = 0
+        while true {
+            let candidate = CodexSlotID.generated(index: index)
+            if !existing.contains(candidate) {
+                return candidate
+            }
+            index += 1
+        }
+    }
+
+    static func < (lhs: CodexSlotID, rhs: CodexSlotID) -> Bool {
+        let left = sortComponents(for: lhs.rawValue)
+        let right = sortComponents(for: rhs.rawValue)
+        if left.numeric != right.numeric {
+            return left.numeric < right.numeric
+        }
+        return left.raw < right.raw
+    }
+
+    private static func sortComponents(for rawValue: String) -> (numeric: Int, raw: String) {
+        let normalized = rawValue.uppercased()
+        if let excelIndex = excelColumnIndex(for: normalized) {
+            return (excelIndex, normalized)
+        }
+        if let numeric = Int(normalized) {
+            return (numeric, normalized)
+        }
+        return (Int.max, normalized)
+    }
+
+    private static func excelColumnName(for index: Int) -> String {
+        var value = max(0, index)
+        var result = ""
+        repeat {
+            let remainder = value % 26
+            let scalar = UnicodeScalar(65 + remainder)!
+            result = String(Character(scalar)) + result
+            value = (value / 26) - 1
+        } while value >= 0
+        return result
+    }
+
+    private static func excelColumnIndex(for rawValue: String) -> Int? {
+        guard rawValue.allSatisfy({ $0 >= "A" && $0 <= "Z" }) else { return nil }
+        var result = 0
+        for character in rawValue {
+            guard let scalar = character.unicodeScalars.first else { return nil }
+            result = result * 26 + Int(scalar.value) - 64
+        }
+        return result - 1
+    }
 }
 
 struct CodexAccountSlot: Codable, Equatable, Identifiable {
@@ -49,6 +125,7 @@ final class CodexAccountSlotStore {
     func upsertActive(snapshot: UsageSnapshot, now: Date = Date()) -> [CodexAccountSlot] {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
+        let preferredSlotID = Self.explicitSlotID(from: snapshot)
 
         removeStaleSlots(now: now)
 
@@ -56,7 +133,15 @@ final class CodexAccountSlotStore {
             slots[index].isActive = false
         }
 
+        if let preferredSlotID,
+           let conflicting = slots.firstIndex(where: { $0.slotID == preferredSlotID && $0.accountKey != accountKey }) {
+            slots.remove(at: conflicting)
+        }
+
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
+            if let preferredSlotID {
+                slots[existing].slotID = preferredSlotID
+            }
             slots[existing].displayName = displayName
             slots[existing].lastSnapshot = snapshot
             slots[existing].lastSeenAt = now
@@ -75,17 +160,8 @@ final class CodexAccountSlotStore {
             return slots.sorted(by: sortRule)
         }
 
-        let slotID: CodexSlotID
-        if slots.count < 2 {
-            let occupied = Set(slots.map(\.slotID))
-            slotID = occupied.contains(.a) ? .b : .a
-        } else {
-            let replaceIndex = slots.indices.min { lhs, rhs in
-                slots[lhs].lastSeenAt < slots[rhs].lastSeenAt
-            } ?? 0
-            slotID = slots[replaceIndex].slotID
-            slots.remove(at: replaceIndex)
-        }
+        let occupied = Set(slots.map(\.slotID))
+        let slotID = preferredSlotID ?? CodexSlotID.nextAvailable(excluding: occupied)
 
         let slot = CodexAccountSlot(
             slotID: slotID,
@@ -101,14 +177,19 @@ final class CodexAccountSlotStore {
     }
 
     static func accountKey(from snapshot: UsageSnapshot) -> String {
+        if let explicitKey = snapshot.rawMeta["codex.accountKey"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicitKey.isEmpty {
+            return explicitKey.lowercased()
+        }
+
         if let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !accountID.isEmpty {
             return "account:\(accountID.lowercased())"
         }
 
-        let label = accountLabel(from: snapshot)
-        if !label.isEmpty, label != "Unknown" {
-            return "email:\(label.lowercased())"
+        if let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fingerprint.isEmpty {
+            return "fingerprint:\(fingerprint.lowercased())"
         }
 
         if let subject = snapshot.rawMeta["codex.subject"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -116,7 +197,20 @@ final class CodexAccountSlotStore {
             return "subject:\(subject.lowercased())"
         }
 
+        let label = accountLabel(from: snapshot)
+        if !label.isEmpty, label != "Unknown" {
+            return "email:\(label.lowercased())"
+        }
+
         return "unknown"
+    }
+
+    static func explicitSlotID(from snapshot: UsageSnapshot) -> CodexSlotID? {
+        guard let rawValue = snapshot.rawMeta["codex.slotID"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        return CodexSlotID(rawValue: rawValue)
     }
 
     static func accountLabel(from snapshot: UsageSnapshot) -> String {
@@ -138,7 +232,7 @@ final class CodexAccountSlotStore {
         if lhs.lastSeenAt != rhs.lastSeenAt {
             return lhs.lastSeenAt > rhs.lastSeenAt
         }
-        return lhs.slotID.rawValue < rhs.slotID.rawValue
+        return lhs.slotID < rhs.slotID
     }
 
     private func removeStaleSlots(now: Date) {

@@ -6,7 +6,7 @@ final class SingleInstanceLock {
     static let shared = SingleInstanceLock()
 
     private var fd: Int32 = -1
-    private let lockPath = "/tmp/com.fourj.aibalancemonitor.lock"
+    private let lockPath = "/tmp/com.aibalancemonitor.app.lock"
 
     private init() {}
 
@@ -42,6 +42,7 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app stays menu-bar only even if started from terminal context.
+        applyBundledAppIcon()
         NSApp.setActivationPolicy(.accessory)
 
         if !SingleInstanceLock.shared.acquire() {
@@ -50,5 +51,23 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusBarController = StatusBarController(viewModel: AppViewModel())
+    }
+
+    @MainActor
+    private func applyBundledAppIcon() {
+        let bundlePath = Bundle.main.bundleURL.path
+        let workspaceIcon = NSWorkspace.shared.icon(forFile: bundlePath)
+        if workspaceIcon.isValid {
+            workspaceIcon.size = NSSize(width: 256, height: 256)
+            NSApp.applicationIconImage = workspaceIcon
+            return
+        }
+
+        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else {
+            return
+        }
+        icon.size = NSSize(width: 256, height: 256)
+        NSApp.applicationIconImage = icon
     }
 }

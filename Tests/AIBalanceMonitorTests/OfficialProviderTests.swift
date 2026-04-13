@@ -75,6 +75,95 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.extras["creditsBalance"], "42.50")
     }
 
+    func testCodexForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
+        let homeDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("codex-provider-tests-\(UUID().uuidString)", isDirectory: true)
+        let authDirectory = homeDirectory.appendingPathComponent(".config/codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+
+        let idTokenPayload = Data(#"{"email":"codex@example.com"}"#.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let authJSON = #"""
+        {
+          "last_refresh": "\#(ISO8601DateFormatter().string(from: Date()))",
+          "tokens": {
+            "access_token": "codex-access-token",
+            "refresh_token": "codex-refresh-token",
+            "account_id": "codex-account",
+            "id_token": "header.\#(idTokenPayload).signature"
+          }
+        }
+        """#
+        try authJSON.write(to: authDirectory.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let originalHome = ProcessInfo.processInfo.environment["HOME"]
+        setenv("HOME", homeDirectory.path, 1)
+        defer {
+            if let originalHome {
+                setenv("HOME", originalHome, 1)
+            } else {
+                unsetenv("HOME")
+            }
+        }
+
+        var requestCount = 0
+        OfficialMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.absoluteString, "https://chatgpt.com/backend-api/wham/usage")
+            if requestCount == 1 {
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let body = """
+                {
+                  "plan_type": "plus",
+                  "rate_limit": {
+                    "primary_window": { "used_percent": 25, "reset_at": 1760000000 },
+                    "secondary_window": { "used_percent": 60, "reset_at": 1760500000 }
+                  }
+                }
+                """
+                return (response, Data(body.utf8))
+            }
+            let response = HTTPURLResponse(url: url, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        var descriptor = ProviderDescriptor.defaultOfficialCodex()
+        descriptor.officialConfig?.sourceMode = .api
+        descriptor.officialConfig?.webMode = .disabled
+
+        let provider = CodexProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: KeychainService(),
+            browserCookieService: BrowserCookieService()
+        )
+
+        let initial = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(initial.remaining ?? -1, 40, accuracy: 0.001)
+
+        do {
+            _ = try await provider.fetch(forceRefresh: true)
+            XCTFail("forceRefresh should not fall back to a stale cached snapshot")
+        } catch let error as ProviderError {
+            if case .unauthorized = error {
+                XCTAssertEqual(requestCount, 2)
+            } else {
+                XCTFail("unexpected provider error: \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testClaudeOAuthResponseParsesWindowsAndExtraUsage() throws {
         let root: [String: Any] = [
             "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00Z"],
@@ -357,4 +446,34 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .session })?.remainingPercent ?? -1, 72, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "Pro")
     }
+}
+
+private final class OfficialMockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = OfficialMockURLProtocol.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

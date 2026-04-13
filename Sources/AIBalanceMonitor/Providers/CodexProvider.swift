@@ -1,5 +1,6 @@
 import Foundation
 import Dispatch
+import CryptoKit
 
 final class CodexProvider: UsageProvider, @unchecked Sendable {
     private static let cache = OfficialSnapshotCache()
@@ -40,9 +41,11 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
-                if let stale = await Self.cache.snapshotAny(for: descriptor.id) {
+                if !forceRefresh,
+                   let stale = await Self.cache.snapshotAny(for: descriptor.id) {
                     var fallback = stale
                     fallback.status = .warning
+                    fallback.valueFreshness = .cachedFallback
                     fallback.note = stale.note.isEmpty ? "cached fallback" : "\(stale.note) | cached"
                     fallback.updatedAt = Date()
                     return fallback
@@ -109,6 +112,9 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         if let subject = credentials.idToken.flatMap(JWTInspector.subject), !subject.isEmpty {
             snapshot.rawMeta["codex.subject"] = subject
         }
+        if let fingerprint = Self.credentialFingerprint(credentials.accessToken) {
+            snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
+        }
 
         if includeWebOverlay, let webSnapshot = try? await loadWebSnapshot() {
             snapshot = merge(primary: snapshot, overlay: webSnapshot, sourceLabel: "API+Web")
@@ -148,6 +154,9 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             accountLabel: nil
         )
         snapshot.extras["webCookieSource"] = cookie.source
+        if let fingerprint = Self.credentialFingerprint(cookie.header) {
+            snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
+        }
         return snapshot
     }
 
@@ -403,7 +412,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
 
     private func resolveCodexCookieHeader() throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
-        let service = "AIBalanceMonitor"
+        let service = KeychainService.defaultServiceName
 
         if official.webMode == .manual || official.webMode == .autoImport,
            let account = official.manualCookieAccount,
@@ -429,7 +438,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     private func shouldIncludeWebOverlay(for official: OfficialProviderConfig) -> Bool {
         guard official.webMode != .disabled else { return false }
         guard let account = official.manualCookieAccount,
-              let header = keychain.readToken(service: "AIBalanceMonitor", account: account),
+              let header = keychain.readToken(service: KeychainService.defaultServiceName, account: account),
               !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             // Avoid triggering browser keychain prompts in background polling.
             // Auto import still works when user explicitly uses web source mode.
@@ -662,6 +671,13 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
 
     private func isGuiLauncher(_ path: String) -> Bool {
         path.contains("/Applications/Codex.app/Contents/MacOS/codex")
+    }
+
+    private static func credentialFingerprint(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let digest = SHA256.hash(data: Data(trimmed.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }
 
