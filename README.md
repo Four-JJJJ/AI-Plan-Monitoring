@@ -1,5 +1,7 @@
 # AI Plan Monitor
 
+<img width="2044" height="1472" alt="image" src="https://github.com/user-attachments/assets/9cd87cc2-b914-4669-896c-24aabbc2eb55" />
+
 一个面向 macOS 的菜单栏应用，用来统一监控 AI 官方订阅额度、模型使用窗口、第三方中转余额和本地桌面端账号状态。
 
 [下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
