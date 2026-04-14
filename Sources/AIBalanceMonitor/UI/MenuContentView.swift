@@ -55,6 +55,10 @@ struct MenuContentView: View {
                 permissionGuideCard
             }
 
+            if let update = viewModel.availableUpdate {
+                appUpdateCard(update)
+            }
+
             if let codexProvider = codexProvider {
                 let slots = viewModel.codexSlotViewModels()
                 if slots.isEmpty {
@@ -158,6 +162,36 @@ struct MenuContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func appUpdateCard(_ update: AppUpdateInfo) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(viewModel.text(.updateAvailableTitle))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x51DB42))
+                Spacer(minLength: 8)
+                Button(viewModel.text(.updateDownloadAction)) {
+                    viewModel.openLatestReleaseDownload()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            Text(String(format: viewModel.text(.updateAvailableBody), update.latestVersion, viewModel.currentAppVersion))
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(hex: 0x51DB42).opacity(0.14))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(hex: 0x51DB42).opacity(0.5), lineWidth: 1)
         )
     }
 

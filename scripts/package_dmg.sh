@@ -22,6 +22,15 @@ ICON_SOURCE_PATH="$ROOT_DIR/Sources/AIBalanceMonitor/Resources/app_icon_source.p
 ICONSET_DIR="$TMP_ROOT/AppIcon.iconset"
 ICNS_PATH="$TMP_ROOT/AppIcon.icns"
 INSTALL_GUIDE_PATH="$DMG_STAGING/$INSTALL_GUIDE_NAME"
+VERSION_FILE="$ROOT_DIR/VERSION"
+APP_VERSION="${APP_VERSION:-}"
+
+if [[ -z "$APP_VERSION" && -f "$VERSION_FILE" ]]; then
+  APP_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+fi
+if [[ -z "$APP_VERSION" ]]; then
+  APP_VERSION="0.0.0"
+fi
 
 log() {
   echo "[$APP_NAME] $*"
@@ -338,9 +347,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$APP_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>

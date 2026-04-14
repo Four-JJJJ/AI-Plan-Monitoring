@@ -7,6 +7,7 @@ enum L10nKey {
     case settingsTitle
     case settingsGeneralTab
     case settingsModelsTab
+    case settingsAboutTab
     case done
     case general
     case launchAtLogin
@@ -182,6 +183,17 @@ enum L10nKey {
     case localDiscoveryConfirm
     case localDiscoveryScanning
     case localDiscoveryNothingFound
+    case aboutTitle
+    case aboutVersion
+    case aboutGitHub
+    case aboutOpenGitHub
+    case aboutCheckUpdates
+    case aboutUpdateChecking
+    case aboutUpdateUpToDate
+    case aboutUpdateFailed
+    case updateAvailableTitle
+    case updateAvailableBody
+    case updateDownloadAction
 }
 
 enum Localizer {
@@ -195,6 +207,7 @@ enum Localizer {
             case .settingsTitle: return "设置"
             case .settingsGeneralTab: return "通用设置"
             case .settingsModelsTab: return "模型设置"
+            case .settingsAboutTab: return "关于"
             case .done: return "完成"
             case .general: return "通用"
             case .launchAtLogin: return "开机时自动启动"
@@ -370,6 +383,17 @@ enum Localizer {
             case .localDiscoveryConfirm: return "确认后会尝试读取本机已有的 CLI/浏览器登录态，并直接请求对应官方/API 站点来抓取余额或额度。"
             case .localDiscoveryScanning: return "正在扫描本机已登录模型..."
             case .localDiscoveryNothingFound: return "暂时没有发现可直接读取的本机模型登录态。"
+            case .aboutTitle: return "关于 AI Plan Monitor"
+            case .aboutVersion: return "版本"
+            case .aboutGitHub: return "项目主页"
+            case .aboutOpenGitHub: return "打开 GitHub"
+            case .aboutCheckUpdates: return "检查更新"
+            case .aboutUpdateChecking: return "正在检查更新..."
+            case .aboutUpdateUpToDate: return "已是最新版本（当前 %@，最新 %@）"
+            case .aboutUpdateFailed: return "检查更新失败，请稍后重试。"
+            case .updateAvailableTitle: return "发现新版本"
+            case .updateAvailableBody: return "最新 %@（当前 %@）"
+            case .updateDownloadAction: return "下载最新安装包"
             }
         case .en:
             switch key {
@@ -379,6 +403,7 @@ enum Localizer {
             case .settingsTitle: return "Settings"
             case .settingsGeneralTab: return "General"
             case .settingsModelsTab: return "Models"
+            case .settingsAboutTab: return "About"
             case .done: return "Done"
             case .general: return "General"
             case .launchAtLogin: return "Launch at login"
@@ -554,6 +579,17 @@ enum Localizer {
             case .localDiscoveryConfirm: return "Continue to inspect available local CLI/browser sessions and call the matching official/API endpoints to fetch balances or quota windows."
             case .localDiscoveryScanning: return "Scanning local signed-in models..."
             case .localDiscoveryNothingFound: return "No local signed-in model session could be used yet."
+            case .aboutTitle: return "About AI Plan Monitor"
+            case .aboutVersion: return "Version"
+            case .aboutGitHub: return "Repository"
+            case .aboutOpenGitHub: return "Open GitHub"
+            case .aboutCheckUpdates: return "Check for updates"
+            case .aboutUpdateChecking: return "Checking for updates..."
+            case .aboutUpdateUpToDate: return "You're up to date (current %@, latest %@)"
+            case .aboutUpdateFailed: return "Failed to check updates. Please try again."
+            case .updateAvailableTitle: return "Update Available"
+            case .updateAvailableBody: return "Latest %@ (current %@)"
+            case .updateDownloadAction: return "Download latest installer"
             }
         }
     }

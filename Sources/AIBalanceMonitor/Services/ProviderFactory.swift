@@ -49,7 +49,11 @@ final class ProviderFactory {
                 browserCredentialService: browserCredentialService
             )
         case .kimi:
-            return KimiOfficialProvider(descriptor: descriptor)
+            return KimiSmartProvider(
+                descriptor: descriptor,
+                keychain: keychain,
+                browserCookieService: kimiCookieService
+            )
         }
     }
 }

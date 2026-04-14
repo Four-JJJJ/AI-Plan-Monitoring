@@ -6,6 +6,13 @@
 
 ## 更新说明
 
+### V0.3.0
+
+1. 修复版本号与更新检查展示，安装后版本与 Release 版本保持一致。
+2. Kimi 用量解析链路增强，兼容更多返回结构，降低 `usage decode failed` 概率。
+3. 设置页“关于”补充更新状态说明：检查中、已是最新、检查失败、有新版本可下载。
+4. 一批 UI 与交互稳定性修复，提升首次使用和日常配置体验。
+
 ### V0.2.0
 
 1. 增加了 onboard 流程，首次安装初始化流程更顺畅、易用。
@@ -154,12 +161,13 @@ swift run
 - 对于未公证或 ad-hoc 签名的构建，第一次启动可能需要右键打开
 - 打包脚本已经支持 Developer ID 签名和 notarization，只要提供 Apple 分发凭证即可接入正式公证流程
 
-## 后续方向
+## 参考项目与致谢
 
-- 更多已验证的第三方站点模板
-- 更完善的 release 自动化
-- 更丰富的 provider 诊断能力
-- 更适合普通用户的首次安装体验
+感谢以下开源项目带来的启发：
+
+- [openusage](https://github.com/robinebers/openusage)
+- [cc-switch](https://github.com/farion1231/cc-switch)
+- [codexbar](https://github.com/rajasimon/codexbar)
 
 ## 许可证
 

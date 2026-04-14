@@ -94,6 +94,7 @@ struct SettingsView: View {
     private enum SettingsTab: String, CaseIterable, Identifiable {
         case general
         case models
+        case about
 
         var id: String { rawValue }
     }
@@ -122,7 +123,7 @@ struct SettingsView: View {
                     ScrollView {
                         topGeneralSection
                     }
-                } else {
+                } else if selectedSettingsTab == .models {
                     HStack(spacing: 12) {
                         sidebar
                             .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
@@ -138,6 +139,10 @@ struct SettingsView: View {
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .stroke(outlineColor, lineWidth: 1)
                             )
+                    }
+                } else {
+                    ScrollView {
+                        aboutSection
                     }
                 }
             }
@@ -220,6 +225,7 @@ struct SettingsView: View {
         HStack(spacing: 10) {
             settingsTabButton(.general)
             settingsTabButton(.models)
+            settingsTabButton(.about)
             Spacer()
         }
     }
@@ -230,7 +236,7 @@ struct SettingsView: View {
         return Button {
             selectedSettingsTab = tab
         } label: {
-            Text(viewModel.text(tab == .general ? .settingsGeneralTab : .settingsModelsTab))
+            Text(settingsTabTitle(tab))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(isSelected ? .white : .secondary)
                 .padding(.horizontal, 14)
@@ -245,6 +251,17 @@ struct SettingsView: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    private func settingsTabTitle(_ tab: SettingsTab) -> String {
+        switch tab {
+        case .general:
+            return viewModel.text(.settingsGeneralTab)
+        case .models:
+            return viewModel.text(.settingsModelsTab)
+        case .about:
+            return viewModel.text(.settingsAboutTab)
+        }
     }
 
     @ViewBuilder
@@ -313,27 +330,7 @@ struct SettingsView: View {
             if selectedGroup == .thirdParty {
                 thirdPartySidebarContent
             } else {
-                List {
-                    if !enabledSidebarProviders.isEmpty {
-                        Section {
-                            ForEach(enabledSidebarProviders) { provider in
-                                sidebarProviderRow(provider)
-                            }
-                            .onMove(perform: moveEnabledProviders)
-                        }
-                    }
-                    if !disabledSidebarProviders.isEmpty {
-                        Section {
-                            ForEach(disabledSidebarProviders) { provider in
-                                sidebarProviderRow(provider)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
-                .background(cardBackground)
-                .frame(minHeight: 220, maxHeight: .infinity)
+                officialSidebarContent
             }
         }
         .padding(10)
@@ -379,6 +376,26 @@ struct SettingsView: View {
                     }
                 )
                 .tint(.white)
+            }
+        }
+        .frame(minHeight: 220, maxHeight: .infinity)
+    }
+
+    private var officialSidebarContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(enabledSidebarProviders) { provider in
+                    sidebarProviderRow(provider)
+                }
+
+                if !enabledSidebarProviders.isEmpty && !disabledSidebarProviders.isEmpty {
+                    Divider()
+                        .overlay(Color.white.opacity(0.08))
+                }
+
+                ForEach(disabledSidebarProviders) { provider in
+                    sidebarProviderRow(provider)
+                }
             }
         }
         .frame(minHeight: 220, maxHeight: .infinity)
@@ -489,6 +506,89 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(outlineColor, lineWidth: 1)
         )
+    }
+
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(viewModel.text(.aboutTitle))
+                .font(settingsTitleFont)
+                .foregroundStyle(settingsTitleColor)
+
+            aboutRow(label: viewModel.text(.aboutVersion), value: viewModel.currentAppVersion)
+            aboutRow(label: viewModel.text(.aboutGitHub), value: AppUpdateService.repositoryURL.absoluteString)
+
+            HStack(spacing: 10) {
+                settingsActionButton(viewModel.text(.aboutOpenGitHub)) {
+                    viewModel.openRepositoryPage()
+                }
+
+                settingsActionButton(viewModel.text(.aboutCheckUpdates)) {
+                    viewModel.checkForAppUpdate(force: true)
+                }
+            }
+
+            if viewModel.updateCheckInFlight {
+                Text(viewModel.text(.aboutUpdateChecking))
+                    .font(settingsBodyFont)
+                    .foregroundStyle(settingsHintColor)
+            } else if let error = viewModel.updateCheckErrorMessage,
+                      !error.isEmpty {
+                Text(viewModel.text(.aboutUpdateFailed))
+                    .font(settingsBodyFont)
+                    .foregroundStyle(Color(hex: 0xFF5A5A))
+            } else if let latest = viewModel.lastCheckedLatestVersion,
+                      viewModel.availableUpdate == nil {
+                Text(String(format: viewModel.text(.aboutUpdateUpToDate), viewModel.currentAppVersion, latest))
+                    .font(settingsBodyFont)
+                    .foregroundStyle(Color(hex: 0x51DB42))
+            }
+
+            if let update = viewModel.availableUpdate {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(viewModel.text(.updateAvailableTitle))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(Color(hex: 0x51DB42))
+                    Text(String(format: viewModel.text(.updateAvailableBody), update.latestVersion, viewModel.currentAppVersion))
+                        .font(settingsBodyFont)
+                        .foregroundStyle(settingsBodyColor)
+
+                    settingsActionButton(viewModel.text(.updateDownloadAction), prominent: true) {
+                        viewModel.openLatestReleaseDownload()
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(hex: 0x51DB42).opacity(0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color(hex: 0x51DB42).opacity(0.45), lineWidth: 1)
+                )
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private func aboutRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(settingsLabelFont)
+                .foregroundStyle(settingsBodyColor)
+            Text(value)
+                .font(settingsBodyFont)
+                .foregroundStyle(settingsHintColor)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
     }
 
     private var permissionsSection: some View {
