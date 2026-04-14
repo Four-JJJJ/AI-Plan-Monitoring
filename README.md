@@ -2,7 +2,20 @@
 
 <img width="2044" height="1472" alt="image" src="https://github.com/user-attachments/assets/9cd87cc2-b914-4669-896c-24aabbc2eb55" />
 
-一个面向 macOS 的菜单栏应用，用来统一监控 AI 官方订阅额度、模型使用窗口、第三方中转余额和本地桌面端账号状态。
+如果你跟我一样，手握好几个 Codex 账号，每天在登录登出之间反复横跳——恭喜你，苦日子到头了。
+
+我搓了一个 Chrome 扩展：AI Plan Monitoring
+
+🔹 多账号自动记录 & 一键丝滑切换，告别「我刚才登的是哪个号」的灵魂拷问
+🔹 每个账号独立的额度重置倒计时，再也不用掰手指算「这个号啥时候回血」
+🔹 实验性支持第三方网站的用量监控（没错，野心已经开始膨胀了）
+
+👉 https://github.com/Four-JJJJ/AI-Plan-Monitoring
+
+⚠️ 友情提示：第一次做开发，代码可能还带着新手的青涩气息。
+不过别担心——等额度一重置，我就光速修 bug，更新速度比你用额度还快 🚀
+
+欢迎体验、提 issue、顺手点个 ⭐，都是对萌新开发者最大的鼓励！
 
 [下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
 
