@@ -384,16 +384,7 @@ struct SettingsView: View {
     private var officialSidebarContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(enabledSidebarProviders) { provider in
-                    sidebarProviderRow(provider)
-                }
-
-                if !enabledSidebarProviders.isEmpty && !disabledSidebarProviders.isEmpty {
-                    Divider()
-                        .overlay(Color.white.opacity(0.08))
-                }
-
-                ForEach(disabledSidebarProviders) { provider in
+                ForEach(sidebarProviders) { provider in
                     sidebarProviderRow(provider)
                 }
             }
@@ -417,15 +408,17 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(sidebarDisplayName(for: provider))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(settingsTitleColor)
                     .lineLimit(1)
                 Text(provider.enabled ? viewModel.text(.toggleOn) : viewModel.text(.toggleOff))
                     .font(.caption2)
-                    .foregroundStyle(isSelected ? settingsBodyColor : .secondary)
+                    .foregroundStyle(isSelected ? settingsBodyColor : settingsHintColor)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.04))
@@ -2005,14 +1998,6 @@ struct SettingsView: View {
             }
         }
         return providers.filter(\.enabled) + providers.filter { !$0.enabled }
-    }
-
-    private var enabledSidebarProviders: [ProviderDescriptor] {
-        sidebarProviders.filter(\.enabled)
-    }
-
-    private var disabledSidebarProviders: [ProviderDescriptor] {
-        sidebarProviders.filter { !$0.enabled }
     }
 
     private var customRelayProviders: [ProviderDescriptor] {
