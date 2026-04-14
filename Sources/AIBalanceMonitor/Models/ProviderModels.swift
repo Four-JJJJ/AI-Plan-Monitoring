@@ -66,22 +66,58 @@ enum OfficialWebMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum OfficialQuotaDisplayMode: String, Codable, CaseIterable, Identifiable {
+    case remaining
+    case used
+
+    var id: String { rawValue }
+}
+
 struct OfficialProviderConfig: Codable, Equatable {
     var sourceMode: OfficialSourceMode
     var webMode: OfficialWebMode
     var manualCookieAccount: String?
     var autoDiscoveryEnabled: Bool
+    var quotaDisplayMode: OfficialQuotaDisplayMode
 
     init(
         sourceMode: OfficialSourceMode = .auto,
         webMode: OfficialWebMode = .disabled,
         manualCookieAccount: String? = nil,
-        autoDiscoveryEnabled: Bool = true
+        autoDiscoveryEnabled: Bool = true,
+        quotaDisplayMode: OfficialQuotaDisplayMode = .remaining
     ) {
         self.sourceMode = sourceMode
         self.webMode = webMode
         self.manualCookieAccount = manualCookieAccount
         self.autoDiscoveryEnabled = autoDiscoveryEnabled
+        self.quotaDisplayMode = quotaDisplayMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceMode
+        case webMode
+        case manualCookieAccount
+        case autoDiscoveryEnabled
+        case quotaDisplayMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sourceMode = try container.decodeIfPresent(OfficialSourceMode.self, forKey: .sourceMode) ?? .auto
+        self.webMode = try container.decodeIfPresent(OfficialWebMode.self, forKey: .webMode) ?? .disabled
+        self.manualCookieAccount = try container.decodeIfPresent(String.self, forKey: .manualCookieAccount)
+        self.autoDiscoveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoDiscoveryEnabled) ?? true
+        self.quotaDisplayMode = try container.decodeIfPresent(OfficialQuotaDisplayMode.self, forKey: .quotaDisplayMode) ?? .remaining
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourceMode, forKey: .sourceMode)
+        try container.encode(webMode, forKey: .webMode)
+        try container.encodeIfPresent(manualCookieAccount, forKey: .manualCookieAccount)
+        try container.encode(autoDiscoveryEnabled, forKey: .autoDiscoveryEnabled)
+        try container.encode(quotaDisplayMode, forKey: .quotaDisplayMode)
     }
 }
 
@@ -427,10 +463,7 @@ struct AppConfig: Codable, Equatable {
             .defaultOfficialJetBrains(),
             .defaultOfficialKiro(),
             .defaultOfficialWindsurf(),
-            .defaultOfficialKimi(),
-            .defaultOpenAilinyu(),
-            .defaultDragon(),
-            .defaultHongmacc()
+            .defaultOfficialKimi()
         ]
     )
 
@@ -454,10 +487,10 @@ struct AppConfig: Codable, Equatable {
     }
 
     static func defaultStatusBarProviderID(from providers: [ProviderDescriptor]) -> String? {
-        if let codex = providers.first(where: { $0.type == .codex && $0.family == .official }) {
+        if let codex = providers.first(where: { $0.enabled && $0.type == .codex && $0.family == .official }) {
             return codex.id
         }
-        return providers.first?.id
+        return providers.first(where: \.enabled)?.id
     }
 }
 
@@ -620,7 +653,8 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .autoImport,
                 manualCookieAccount: "official/claude/cookie-header",
-                autoDiscoveryEnabled: true
+                autoDiscoveryEnabled: true,
+                quotaDisplayMode: .used
             )
         case .gemini:
             return OfficialProviderConfig(
@@ -929,6 +963,10 @@ extension ProviderDescriptor {
         relayManifest?.displayMode ?? .balance
     }
 
+    var displaysUsedQuota: Bool {
+        family == .official && type == .claude && officialConfig?.quotaDisplayMode == .used
+    }
+
     var relayViewConfig: OpenProviderConfig? {
         guard let relayConfig else { return nil }
         let manifest = relayManifest ?? RelayAdapterRegistry.shared.manifest(for: relayConfig.baseURL, preferredID: relayConfig.adapterID)
@@ -962,7 +1000,7 @@ extension ProviderDescriptor {
             name: "Official Codex",
             family: .official,
             type: .codex,
-            enabled: true,
+            enabled: false,
             pollIntervalSec: 60,
             threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
             auth: AuthConfig(kind: .localCodex),
@@ -977,7 +1015,7 @@ extension ProviderDescriptor {
             name: "Official Claude",
             family: .official,
             type: .claude,
-            enabled: true,
+            enabled: false,
             pollIntervalSec: 60,
             threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
             auth: .none,
@@ -1127,7 +1165,7 @@ extension ProviderDescriptor {
             name: "open.ailinyu.de",
             family: .thirdParty,
             type: .relay,
-            enabled: true,
+            enabled: false,
             pollIntervalSec: 120,
             threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
             auth: AuthConfig(kind: .bearer, keychainService: KeychainService.defaultServiceName, keychainAccount: "open.ailinyu.de/sk-token"),

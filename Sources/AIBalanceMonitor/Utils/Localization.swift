@@ -5,6 +5,8 @@ enum L10nKey {
     case overview
     case settings
     case settingsTitle
+    case settingsGeneralTab
+    case settingsModelsTab
     case done
     case general
     case launchAtLogin
@@ -15,6 +17,7 @@ enum L10nKey {
     case enabled
     case toggleOn
     case toggleOff
+    case editingNow
     case noEnabledProviders
     case language
     case chinese
@@ -140,6 +143,45 @@ enum L10nKey {
     case codexDeleteProfileMessage
     case codexDeleteConfirm
     case codexImportNextProfile
+    case quotaDisplayMode
+    case quotaDisplayRemaining
+    case quotaDisplayUsed
+    case claudeQuotaDisplayHint
+    case permissionsTitle
+    case permissionsHint
+    case permissionsPrivacyPromise
+    case permissionNotificationsTitle
+    case permissionNotificationsHint
+    case permissionNotificationsAction
+    case permissionNotificationsConfirm
+    case permissionNotificationsRequested
+    case permissionKeychainTitle
+    case permissionKeychainHint
+    case permissionKeychainAction
+    case permissionKeychainConfirm
+    case permissionKeychainReady
+    case permissionKeychainFailed
+    case permissionFullDiskTitle
+    case permissionFullDiskHint
+    case permissionFullDiskAction
+    case permissionFullDiskConfirm
+    case permissionFullDiskRequested
+    case permissionContinue
+    case permissionCancel
+    case permissionStatusAuthorized
+    case permissionStatusPending
+    case permissionStatusNeedsAction
+    case resetLocalDataTitle
+    case resetLocalDataHint
+    case resetLocalDataAction
+    case resetLocalDataConfirm
+    case resetLocalDataDone
+    case localDiscoveryTitle
+    case localDiscoveryHint
+    case localDiscoveryAction
+    case localDiscoveryConfirm
+    case localDiscoveryScanning
+    case localDiscoveryNothingFound
 }
 
 enum Localizer {
@@ -151,16 +193,19 @@ enum Localizer {
             case .overview: return "总览"
             case .settings: return "设置..."
             case .settingsTitle: return "设置"
+            case .settingsGeneralTab: return "通用设置"
+            case .settingsModelsTab: return "模型设置"
             case .done: return "完成"
             case .general: return "通用"
             case .launchAtLogin: return "开机时自动启动"
             case .launchAtLoginHint: return "勾选后会把 AI Plan Monitor 注册为登录项。建议安装到“应用程序”后再启用。"
             case .providers: return "数据源"
-            case .relaySimpleMode: return "第三方极简配置（推荐）"
+            case .relaySimpleMode: return "API用量极简配置（推荐）"
             case .relaySimpleModeHint: return "开启后仅保留核心项，接口路径与字段解析自动使用站点模板。"
             case .enabled: return "启用"
             case .toggleOn: return "开启"
             case .toggleOff: return "关闭"
+            case .editingNow: return "编辑中"
             case .noEnabledProviders: return "暂无启用的数据源，请在设置中开启"
             case .language: return "语言"
             case .chinese: return "中文"
@@ -186,7 +231,7 @@ enum Localizer {
             case .providerUnreachable: return "服务不可用"
             case .authError: return "认证错误"
             case .tokenInvalidOrExpired: return "Token 无效或已过期"
-            case .addRelayProvider: return "新增第三方中转"
+            case .addRelayProvider: return "新增 API用量"
             case .providerName: return "名称"
             case .baseURL: return "Base URL"
             case .addProvider: return "添加"
@@ -235,11 +280,11 @@ enum Localizer {
             case .codexReadyToSwitch: return "已重置，可切换"
             case .updatedAgo: return "更新于"
             case .balanceLabel: return "余额"
-            case .thirdPartyRelay: return "第三方中转"
+            case .thirdPartyRelay: return "API用量"
             case .officialProviders: return "官方订阅来源"
-            case .thirdPartyProviders: return "第三方来源"
+            case .thirdPartyProviders: return "API用量预置项"
             case .officialTab: return "官方订阅"
-            case .thirdPartyTab: return "第三方中转"
+            case .thirdPartyTab: return "API用量"
             case .selectProviderHint: return "请先在左侧选择模型"
             case .sourceMode: return "来源模式"
             case .webMode: return "网页来源"
@@ -250,7 +295,7 @@ enum Localizer {
             case .officialAutoDiscoveryHint: return "默认会自动发现本地 CLI 登录态；手动 Cookie 仅作为网页来源修复入口。"
             case .matchedAdapter: return "匹配模板"
             case .relayTemplate: return "站点模板"
-            case .relayTemplatePresetHint: return "优先选择已验证过的站点模板；只在站点接口不一致时再改 Base URL 或展开高级设置。"
+            case .relayTemplatePresetHint: return "优先使用预置项；只有通用 NewAPI 场景或站点接口不一致时，再改 Base URL 或展开高级设置。"
             case .authSourceLabel: return "认证来源"
             case .credentialMode: return "凭证模式"
             case .credentialModeManualPreferred: return "手动优先"
@@ -286,6 +331,45 @@ enum Localizer {
             case .codexDeleteProfileMessage: return "删除后将移除该账号保存的 auth.json，本机当前已登录状态不会立刻受影响。"
             case .codexDeleteConfirm: return "确认删除"
             case .codexImportNextProfile: return "导入下一个账号"
+            case .quotaDisplayMode: return "Claude 显示"
+            case .quotaDisplayRemaining: return "看剩余"
+            case .quotaDisplayUsed: return "看已用"
+            case .claudeQuotaDisplayHint: return "默认按“剩余”展示和提醒；如果你更习惯看 Claude 官方的已用百分比，也可以切到“看已用”。"
+            case .permissionsTitle: return "权限与自动发现"
+            case .permissionsHint: return "先说明用途，再由你确认是否发起系统授权。"
+            case .permissionsPrivacyPromise: return "本地 Cookie、Token 和 CLI 登录态只会保存在你的 Mac 上，不会上传到开发者服务器；只有在你启用对应模型刷新时，应用才会直接请求该模型官方/API 站点。"
+            case .permissionNotificationsTitle: return "系统通知"
+            case .permissionNotificationsHint: return "用于低额度、鉴权失效和连接失败提醒。"
+            case .permissionNotificationsAction: return "授权通知"
+            case .permissionNotificationsConfirm: return "确认后会弹出 macOS 通知授权窗口，用于发送低额度、鉴权失效和连接失败提醒。"
+            case .permissionNotificationsRequested: return "已发起系统通知授权请求。"
+            case .permissionKeychainTitle: return "钥匙串机密信息"
+            case .permissionKeychainHint: return "用于把你手动保存的 Cookie、Token 和 API Key 安全地保存在 macOS 钥匙串里。"
+            case .permissionKeychainAction: return "启用钥匙串"
+            case .permissionKeychainConfirm: return "确认后会初始化 AI Plan Monitor 的钥匙串存储，用来安全保存你手动录入的 Cookie、Token 和 API Key。"
+            case .permissionKeychainReady: return "钥匙串存储已就绪。"
+            case .permissionKeychainFailed: return "钥匙串存储初始化失败，请稍后重试。"
+            case .permissionFullDiskTitle: return "全盘访问"
+            case .permissionFullDiskHint: return "用于读取浏览器 Cookie 数据库和本地 CLI/auth 文件，提升自动识别成功率。"
+            case .permissionFullDiskAction: return "打开全盘访问设置"
+            case .permissionFullDiskConfirm: return "确认后会跳转到“隐私与安全性 -> 全盘访问”，方便你授权 AI Plan Monitor 读取浏览器 Cookie 和本地 CLI 登录文件。"
+            case .permissionFullDiskRequested: return "已打开系统的全盘访问设置页。"
+            case .permissionContinue: return "继续"
+            case .permissionCancel: return "取消"
+            case .permissionStatusAuthorized: return "已授权"
+            case .permissionStatusPending: return "待授权"
+            case .permissionStatusNeedsAction: return "待设置"
+            case .resetLocalDataTitle: return "重置本地应用数据"
+            case .resetLocalDataHint: return "清理本地配置、账号槽位、首次安装引导和 AI Plan Monitor 钥匙串内容，用于恢复到接近初装状态。系统通知、全盘访问等 macOS 授权仍需你在系统设置里手动关闭。"
+            case .resetLocalDataAction: return "重置并清理"
+            case .resetLocalDataConfirm: return "确认后会清理本地配置、Codex 账号槽位、启动项和 AI Plan Monitor 的钥匙串内容。应用会恢复成接近首次安装状态；系统通知、全盘访问等 macOS 授权不会被自动撤销。"
+            case .resetLocalDataDone: return "本地应用数据已清理，首次安装引导已重置。若要连系统通知或全盘访问一起关闭，请到 macOS 系统设置里手动撤销。"
+            case .localDiscoveryTitle: return "扫描本机已登录模型"
+            case .localDiscoveryHint: return "在授权完成后，自动尝试读取本机已有登录态并抓取可用模型的余额/额度。"
+            case .localDiscoveryAction: return "开始扫描"
+            case .localDiscoveryConfirm: return "确认后会尝试读取本机已有的 CLI/浏览器登录态，并直接请求对应官方/API 站点来抓取余额或额度。"
+            case .localDiscoveryScanning: return "正在扫描本机已登录模型..."
+            case .localDiscoveryNothingFound: return "暂时没有发现可直接读取的本机模型登录态。"
             }
         case .en:
             switch key {
@@ -293,16 +377,19 @@ enum Localizer {
             case .overview: return "Overview"
             case .settings: return "Settings..."
             case .settingsTitle: return "Settings"
+            case .settingsGeneralTab: return "General"
+            case .settingsModelsTab: return "Models"
             case .done: return "Done"
             case .general: return "General"
             case .launchAtLogin: return "Launch at login"
             case .launchAtLoginHint: return "When enabled, AI Plan Monitor is registered as a login item. It's best to enable this after moving the app to Applications."
             case .providers: return "Providers"
-            case .relaySimpleMode: return "Minimal third-party setup (Recommended)"
+            case .relaySimpleMode: return "Minimal API usage setup (Recommended)"
             case .relaySimpleModeHint: return "When enabled, only core fields are shown and endpoint/JSON paths follow site templates."
             case .enabled: return "Enabled"
             case .toggleOn: return "On"
             case .toggleOff: return "Off"
+            case .editingNow: return "Editing"
             case .noEnabledProviders: return "No enabled providers. Enable them in Settings."
             case .language: return "Language"
             case .chinese: return "中文"
@@ -328,7 +415,7 @@ enum Localizer {
             case .providerUnreachable: return "Provider Unreachable"
             case .authError: return "Auth Error"
             case .tokenInvalidOrExpired: return "Token invalid or expired"
-            case .addRelayProvider: return "Add Relay Provider"
+            case .addRelayProvider: return "Add API Usage"
             case .providerName: return "Name"
             case .baseURL: return "Base URL"
             case .addProvider: return "Add"
@@ -377,11 +464,11 @@ enum Localizer {
             case .codexReadyToSwitch: return "Reset, ready to switch"
             case .updatedAgo: return "Updated"
             case .balanceLabel: return "Balance"
-            case .thirdPartyRelay: return "Relay Provider"
+            case .thirdPartyRelay: return "API Usage"
             case .officialProviders: return "Official Providers"
-            case .thirdPartyProviders: return "Third-Party Providers"
+            case .thirdPartyProviders: return "API Usage Presets"
             case .officialTab: return "Official"
-            case .thirdPartyTab: return "Relay"
+            case .thirdPartyTab: return "API Usage"
             case .selectProviderHint: return "Select a provider from the left"
             case .sourceMode: return "Source mode"
             case .webMode: return "Web mode"
@@ -392,7 +479,7 @@ enum Localizer {
             case .officialAutoDiscoveryHint: return "Local CLI credentials are auto-discovered by default; manual cookie input is only for web-source repair."
             case .matchedAdapter: return "Matched adapter"
             case .relayTemplate: return "Site template"
-            case .relayTemplatePresetHint: return "Prefer a verified site template first. Only change Base URL or open Advanced settings when the site behaves differently."
+            case .relayTemplatePresetHint: return "Prefer a built-in preset first. Use the generic NewAPI template only when needed, and open Advanced settings only if the site behaves differently."
             case .authSourceLabel: return "Auth source"
             case .credentialMode: return "Credential mode"
             case .credentialModeManualPreferred: return "Manual First"
@@ -428,25 +515,84 @@ enum Localizer {
             case .codexDeleteProfileMessage: return "This removes the saved auth.json for the account. It does not immediately sign the current local Codex session out."
             case .codexDeleteConfirm: return "Delete"
             case .codexImportNextProfile: return "Import another account"
+            case .quotaDisplayMode: return "Claude display"
+            case .quotaDisplayRemaining: return "Remaining"
+            case .quotaDisplayUsed: return "Used"
+            case .claudeQuotaDisplayHint: return "Claude defaults to remaining-based display and alerts. Switch to Used if you prefer the official utilization view."
+            case .permissionsTitle: return "Permissions & auto-discovery"
+            case .permissionsHint: return "AI Plan Monitor explains each permission before triggering the macOS request."
+            case .permissionsPrivacyPromise: return "Local cookies, tokens, and CLI sessions stay on your Mac and are never uploaded to a developer server. The app only calls the matching official/API endpoint when you enable that provider."
+            case .permissionNotificationsTitle: return "Notifications"
+            case .permissionNotificationsHint: return "Used for low quota, auth expired, and connection failure alerts."
+            case .permissionNotificationsAction: return "Allow notifications"
+            case .permissionNotificationsConfirm: return "Continue to request macOS notification permission for low quota, auth expired, and connection failure alerts."
+            case .permissionNotificationsRequested: return "Notification permission request was sent."
+            case .permissionKeychainTitle: return "Keychain secrets"
+            case .permissionKeychainHint: return "Used to securely store the cookies, tokens, and API keys you save manually."
+            case .permissionKeychainAction: return "Enable Keychain"
+            case .permissionKeychainConfirm: return "Continue to initialize the AI Plan Monitor Keychain vault for securely storing manually entered cookies, tokens, and API keys."
+            case .permissionKeychainReady: return "Keychain storage is ready."
+            case .permissionKeychainFailed: return "Keychain storage setup failed. Please try again."
+            case .permissionFullDiskTitle: return "Full Disk Access"
+            case .permissionFullDiskHint: return "Used to read browser cookie databases and local CLI/auth files for better auto-discovery."
+            case .permissionFullDiskAction: return "Open Full Disk Access"
+            case .permissionFullDiskConfirm: return "Continue to open Privacy & Security > Full Disk Access so you can allow AI Plan Monitor to read browser cookies and local CLI auth files."
+            case .permissionFullDiskRequested: return "Opened the system Full Disk Access settings."
+            case .permissionContinue: return "Continue"
+            case .permissionCancel: return "Cancel"
+            case .permissionStatusAuthorized: return "Allowed"
+            case .permissionStatusPending: return "Pending"
+            case .permissionStatusNeedsAction: return "Needs action"
+            case .resetLocalDataTitle: return "Reset local app data"
+            case .resetLocalDataHint: return "Clear local config, account slots, first-run onboarding state, and AI Plan Monitor Keychain entries so the app returns close to a fresh install. macOS permissions like Notifications and Full Disk Access still have to be turned off in System Settings."
+            case .resetLocalDataAction: return "Reset and clear"
+            case .resetLocalDataConfirm: return "Continue to clear local config, Codex account slots, launch-at-login state, and AI Plan Monitor Keychain data. The app will return close to first-run state, but macOS permissions are not automatically revoked."
+            case .resetLocalDataDone: return "Local app data was cleared and first-run onboarding was reset. Revoke Notifications or Full Disk Access manually in System Settings if needed."
+            case .localDiscoveryTitle: return "Scan local signed-in models"
+            case .localDiscoveryHint: return "After permissions are granted, try local CLI/browser sessions and fetch balances or quota windows automatically."
+            case .localDiscoveryAction: return "Scan now"
+            case .localDiscoveryConfirm: return "Continue to inspect available local CLI/browser sessions and call the matching official/API endpoints to fetch balances or quota windows."
+            case .localDiscoveryScanning: return "Scanning local signed-in models..."
+            case .localDiscoveryNothingFound: return "No local signed-in model session could be used yet."
             }
         }
     }
 
-    static func lowBalanceBody(providerName: String, remaining: String, unit: String, language: AppLanguage) -> String {
+    static func lowBalanceBody(
+        providerName: String,
+        remaining: String,
+        unit: String,
+        language: AppLanguage,
+        displaysUsedQuota: Bool = false
+    ) -> String {
         switch language {
         case .zhHans:
-            return "\(providerName) 剩余 \(remaining) \(unit)"
+            return displaysUsedQuota
+                ? "\(providerName) 已用 \(remaining) \(unit)"
+                : "\(providerName) 剩余 \(remaining) \(unit)"
         case .en:
-            return "\(providerName) remaining \(remaining) \(unit)"
+            return displaysUsedQuota
+                ? "\(providerName) used \(remaining) \(unit)"
+                : "\(providerName) remaining \(remaining) \(unit)"
         }
     }
 
-    static func lowQuotaWindowBody(providerName: String, windowTitle: String, remaining: String, language: AppLanguage) -> String {
+    static func lowQuotaWindowBody(
+        providerName: String,
+        windowTitle: String,
+        remaining: String,
+        language: AppLanguage,
+        displaysUsedQuota: Bool = false
+    ) -> String {
         switch language {
         case .zhHans:
-            return "\(providerName) \(windowTitle) 剩余 \(remaining)%"
+            return displaysUsedQuota
+                ? "\(providerName) \(windowTitle) 已用 \(remaining)%"
+                : "\(providerName) \(windowTitle) 剩余 \(remaining)%"
         case .en:
-            return "\(providerName) \(windowTitle) remaining \(remaining)%"
+            return displaysUsedQuota
+                ? "\(providerName) \(windowTitle) used \(remaining)%"
+                : "\(providerName) \(windowTitle) remaining \(remaining)%"
         }
     }
 
@@ -465,6 +611,16 @@ enum Localizer {
             return "\(providerName) Token 无效或已过期"
         case .en:
             return "\(providerName) token invalid or expired"
+        }
+    }
+
+    static func localDiscoveryFoundBody(providerNames: [String], language: AppLanguage) -> String {
+        let joined = providerNames.joined(separator: language == .zhHans ? "、" : ", ")
+        switch language {
+        case .zhHans:
+            return "已自动识别：\(joined)"
+        case .en:
+            return "Automatically discovered: \(joined)"
         }
     }
 }

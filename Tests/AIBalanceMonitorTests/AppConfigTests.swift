@@ -14,9 +14,29 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(normalized, "https://platform.deepseek.com")
     }
 
-    func testDefaultStatusBarProviderUsesOfficialCodex() {
+    func testDefaultStatusBarProviderIsNilWhenNothingIsEnabled() {
         let config = AppConfig.default
-        XCTAssertEqual(config.statusBarProviderID, "codex-official")
+        XCTAssertNil(config.statusBarProviderID)
+    }
+
+    func testDefaultStatusBarProviderUsesEnabledOfficialCodex() {
+        let providers = [
+            ProviderDescriptor.defaultOfficialCodex(),
+            ProviderDescriptor.defaultOfficialClaude()
+        ].map {
+            var copy = $0
+            copy.enabled = copy.type == .codex
+            return copy
+        }
+
+        XCTAssertEqual(AppConfig.defaultStatusBarProviderID(from: providers), "codex-official")
+    }
+
+    func testDefaultOfficialClaudeUsesUsedQuotaDisplayMode() {
+        XCTAssertEqual(
+            ProviderDescriptor.defaultOfficialClaude().officialConfig?.quotaDisplayMode,
+            .used
+        )
     }
 
     func testDecodeMissingStatusBarProviderFallsBackToDefault() throws {

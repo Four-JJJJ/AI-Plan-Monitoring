@@ -27,6 +27,7 @@ struct CodexParsedAuthPayload {
 final class CodexAccountProfileStore {
     private struct ProfileFile: Codable {
         var profiles: [CodexAccountProfile]
+        var ignoredFingerprints: [String]?
     }
 
     private let fileURL: URL
@@ -59,15 +60,23 @@ final class CodexAccountProfileStore {
         currentFingerprint: String?
     ) throws -> CodexAccountProfile {
         var items = load()
+        let payload = try Self.parseAuthJSON(authJSON)
         var profile = try Self.makeProfile(slotID: slotID, displayName: displayName, authJSON: authJSON)
         profile.isCurrentSystemAccount = profile.credentialFingerprint == currentFingerprint
+        var ignoredFingerprints = loadIgnoredFingerprints()
+
+        if let matchedIndex = matchingIndex(for: payload, in: items),
+           items[matchedIndex].slotID != slotID {
+            items.remove(at: matchedIndex)
+        }
+        ignoredFingerprints.remove(payload.credentialFingerprint.lowercased())
 
         if let existing = items.firstIndex(where: { $0.slotID == slotID }) {
             items[existing] = profile
         } else {
             items.append(profile)
         }
-        try save(items)
+        try save(items, ignoredFingerprints: ignoredFingerprints)
         return profile
     }
 
@@ -96,12 +105,18 @@ final class CodexAccountProfileStore {
     @discardableResult
     func removeProfile(slotID: CodexSlotID) -> [CodexAccountProfile] {
         var items = load()
-        guard items.first(where: { $0.slotID == slotID })?.isCurrentSystemAccount != true else {
-            return items.sorted { $0.slotID < $1.slotID }
+        var ignoredFingerprints = loadIgnoredFingerprints()
+        if let removed = items.first(where: { $0.slotID == slotID })?.credentialFingerprint?.lowercased(),
+           !removed.isEmpty {
+            ignoredFingerprints.insert(removed)
         }
         items.removeAll { $0.slotID == slotID }
-        try? save(items)
+        try? save(items, ignoredFingerprints: ignoredFingerprints)
         return items.sorted { $0.slotID < $1.slotID }
+    }
+
+    func reset() {
+        try? fileManager.removeItem(at: fileURL)
     }
 
     @discardableResult
@@ -121,6 +136,11 @@ final class CodexAccountProfileStore {
 
         var items = load()
         let currentFingerprint = payload.credentialFingerprint.lowercased()
+        let ignoredFingerprints = loadIgnoredFingerprints()
+
+        if ignoredFingerprints.contains(currentFingerprint) {
+            return updateCurrentProfiles(items, currentFingerprint: currentFingerprint)
+        }
 
         if let existing = matchingIndex(for: payload, in: items) {
             let previous = items[existing]
@@ -233,24 +253,39 @@ final class CodexAccountProfileStore {
     }
 
     private func load() -> [CodexAccountProfile] {
+        loadFile().profiles
+    }
+
+    private func loadIgnoredFingerprints() -> Set<String> {
+        Set(loadFile().ignoredFingerprints?.map { $0.lowercased() } ?? [])
+    }
+
+    private func loadFile() -> ProfileFile {
         let directory = fileURL.deletingLastPathComponent()
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return ProfileFile(profiles: [], ignoredFingerprints: [])
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let decoded = try? decoder.decode(ProfileFile.self, from: data) {
-            return decoded.profiles
+            return decoded
         }
-        return []
+        return ProfileFile(profiles: [], ignoredFingerprints: [])
     }
 
-    private func save(_ profiles: [CodexAccountProfile]) throws {
+    private func save(_ profiles: [CodexAccountProfile], ignoredFingerprints: Set<String> = []) throws {
         let directory = fileURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(ProfileFile(profiles: profiles))
+        let data = try encoder.encode(
+            ProfileFile(
+                profiles: profiles,
+                ignoredFingerprints: ignoredFingerprints.isEmpty ? nil : ignoredFingerprints.sorted()
+            )
+        )
         try data.write(to: fileURL, options: .atomic)
     }
 
@@ -281,6 +316,7 @@ final class CodexAccountProfileStore {
         currentFingerprint: String?
     ) -> [CodexAccountProfile] {
         var items = profiles
+        let ignoredFingerprints = loadIgnoredFingerprints()
         var changed = false
         for index in items.indices {
             let isCurrent = items[index].credentialFingerprint?.lowercased() == currentFingerprint && currentFingerprint != nil
@@ -290,7 +326,7 @@ final class CodexAccountProfileStore {
             }
         }
         if changed || profiles != load() {
-            try? save(items)
+            try? save(items, ignoredFingerprints: ignoredFingerprints)
         }
         return items.sorted { $0.slotID < $1.slotID }
     }

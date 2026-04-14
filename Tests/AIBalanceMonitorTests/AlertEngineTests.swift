@@ -61,4 +61,35 @@ final class AlertEngineTests: XCTestCase {
         let windows = AlertEngine.lowQuotaWindows(snapshot: snapshot, rule: rule)
         XCTAssertEqual(windows.map(\.id), ["session"])
     }
+
+    func testClaudeUsedQuotaAlertUsesUsedPercentThreshold() {
+        let snapshot = UsageSnapshot(
+            source: "claude-official",
+            status: .warning,
+            remaining: 15,
+            used: 85,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(),
+            note: "",
+            quotaWindows: [
+                UsageQuotaWindow(
+                    id: "session",
+                    title: "5h",
+                    remainingPercent: 15,
+                    usedPercent: 85,
+                    resetAt: nil,
+                    kind: .session
+                )
+            ],
+            rawMeta: [:]
+        )
+        let rule = AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true)
+
+        XCTAssertTrue(AlertEngine.shouldAlertLowRemaining(snapshot: snapshot, rule: rule, displaysUsedQuota: true))
+        XCTAssertEqual(
+            AlertEngine.lowQuotaWindows(snapshot: snapshot, rule: rule, displaysUsedQuota: true).map(\.id),
+            ["session"]
+        )
+    }
 }

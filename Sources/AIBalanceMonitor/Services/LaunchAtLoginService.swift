@@ -48,6 +48,11 @@ final class LaunchAtLoginService {
         }
     }
 
+    func reset() {
+        unloadLaunchAgent()
+        removeLaunchAgent()
+    }
+
     private var plistURL: URL {
         URL(fileURLWithPath: homeDirectory(), isDirectory: true)
             .appendingPathComponent("Library", isDirectory: true)

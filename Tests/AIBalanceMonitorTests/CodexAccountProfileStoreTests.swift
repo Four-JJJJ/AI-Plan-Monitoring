@@ -130,7 +130,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profiles.first?.slotID, .b)
     }
 
-    func testRemoveProfileKeepsCurrentSystemAccount() throws {
+    func testRemoveProfileCanDeleteCurrentSystemAccount() throws {
         let store = makeStore()
         let authJSON = sampleAuthJSON(accountID: "acc-current", email: "current@example.com")
         let fingerprint = try CodexAccountProfileStore.parseAuthJSON(authJSON).credentialFingerprint
@@ -143,9 +143,52 @@ final class CodexAccountProfileStoreTests: XCTestCase {
 
         let profiles = store.removeProfile(slotID: .a)
 
-        XCTAssertEqual(profiles.count, 1)
-        XCTAssertEqual(profiles.first?.slotID, .a)
-        XCTAssertTrue(profiles.first?.isCurrentSystemAccount == true)
+        XCTAssertTrue(profiles.isEmpty)
+    }
+
+    func testExplicitSaveMovesMatchingAccountIntoChosenSlotWithoutOverwritingOthers() throws {
+        let store = makeStore()
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Codex A",
+            authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com"),
+            currentFingerprint: nil
+        )
+        _ = try store.saveProfile(
+            slotID: .b,
+            displayName: "Codex B",
+            authJSON: sampleAuthJSON(accountID: "acc-b", email: "b@example.com"),
+            currentFingerprint: nil
+        )
+
+        _ = try store.saveProfile(
+            slotID: CodexSlotID(rawValue: "C"),
+            displayName: "Codex C",
+            authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com", accessToken: "rotated-a"),
+            currentFingerprint: nil
+        )
+
+        let profiles = store.profiles()
+        XCTAssertEqual(profiles.map(\.slotID.rawValue), ["B", "C"])
+        XCTAssertEqual(profiles.first(where: { $0.slotID.rawValue == "C" })?.accountId, "acc-a")
+        XCTAssertEqual(profiles.first(where: { $0.slotID == .b })?.accountId, "acc-b")
+    }
+
+    func testRemovedCurrentFingerprintIsNotAutoCapturedAgainImmediately() throws {
+        let store = makeStore()
+        let authJSON = sampleAuthJSON(accountID: "acc-current", email: "current@example.com")
+        let fingerprint = try CodexAccountProfileStore.parseAuthJSON(authJSON).credentialFingerprint
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Current",
+            authJSON: authJSON,
+            currentFingerprint: fingerprint
+        )
+
+        _ = store.removeProfile(slotID: .a)
+        let profiles = store.captureCurrentAuthIfNeeded(authJSON: authJSON)
+
+        XCTAssertTrue(profiles.isEmpty)
     }
 
     private func makeStore() -> CodexAccountProfileStore {

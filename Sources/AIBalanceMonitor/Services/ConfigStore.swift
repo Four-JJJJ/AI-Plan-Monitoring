@@ -2,8 +2,10 @@ import Foundation
 
 final class ConfigStore {
     private let fileURL: URL
+    private let fileManager: FileManager
 
     init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let directory = appSupport.appendingPathComponent("AIBalanceMonitor", isDirectory: true)
         self.fileURL = directory.appendingPathComponent("config.json")
@@ -36,5 +38,11 @@ final class ConfigStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(config)
         try data.write(to: fileURL, options: .atomic)
+    }
+
+    func reset() throws {
+        if fileManager.fileExists(atPath: fileURL.path) {
+            try fileManager.removeItem(at: fileURL)
+        }
     }
 }

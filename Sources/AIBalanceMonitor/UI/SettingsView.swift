@@ -25,11 +25,15 @@ struct SettingsView: View {
     @State private var unitInputs: [String: String] = [:]
     @State private var officialSourceModeInputs: [String: OfficialSourceMode] = [:]
     @State private var officialWebModeInputs: [String: OfficialWebMode] = [:]
+    @State private var officialQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
     @State private var officialCookieInputs: [String: String] = [:]
     @State private var codexProfileJSONInputs: [String: String] = [:]
     @State private var codexProfileResult: [String: String] = [:]
     @State private var codexProfileExpanded: Set<String> = []
     @State private var codexProfilePendingDelete: CodexSlotID?
+    @State private var permissionPrompt: PermissionPrompt?
+    @State private var permissionResultMessage: [String: String] = [:]
+    @State private var permissionResultIsError: [String: Bool] = [:]
     @State private var relayTestResult: [String: RelayDiagnosticResult] = [:]
     @State private var relayAdvancedExpanded: [String: Bool] = [:]
     @State private var selectedRelayTemplateInputs: [String: String] = [:]
@@ -38,11 +42,21 @@ struct SettingsView: View {
     @State private var newProviderName = ""
     @State private var newProviderBaseURL = "https://"
     @State private var newProviderTemplateID = "generic-newapi"
+    @State private var selectedRelayPresetID: String?
+    @State private var customNewAPIRelayExpanded = false
+    @State private var selectedSettingsTab: SettingsTab = .general
     @State private var selectedGroup: ProviderGroup = .official
     @State private var selectedProviderID: String?
     private let panelBackground = Color(hex: 0x232325)
     private let cardBackground = Color.black
     private let outlineColor = Color.white.opacity(0.12)
+    private let settingsTitleFont = Font.system(size: 16, weight: .semibold)
+    private let settingsBodyFont = Font.system(size: 13, weight: .regular)
+    private let settingsLabelFont = Font.system(size: 13, weight: .semibold)
+    private let settingsHintFont = Font.system(size: 12, weight: .regular)
+    private let settingsTitleColor = Color.white
+    private let settingsBodyColor = Color.white.opacity(0.92)
+    private let settingsHintColor = Color.white.opacity(0.62)
 
     private enum ProviderGroup: String, CaseIterable, Identifiable {
         case official
@@ -57,6 +71,31 @@ struct SettingsView: View {
 
         var id: String { manifest.id }
         var displayName: String { manifest.displayName }
+    }
+
+    private enum PermissionPrompt: Identifiable {
+        case notifications
+        case keychain
+        case fullDisk
+        case autoDiscovery
+        case resetLocalData
+
+        var id: String {
+            switch self {
+            case .notifications: return "notifications"
+            case .keychain: return "keychain"
+            case .fullDisk: return "fullDisk"
+            case .autoDiscovery: return "autoDiscovery"
+            case .resetLocalData: return "resetLocalData"
+            }
+        }
+    }
+
+    private enum SettingsTab: String, CaseIterable, Identifiable {
+        case general
+        case models
+
+        var id: String { rawValue }
     }
 
     var body: some View {
@@ -76,23 +115,31 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            topGeneralSection
+            settingsTabBar
 
-            HStack(spacing: 12) {
-                sidebar
-                    .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
+            Group {
+                if selectedSettingsTab == .general {
+                    ScrollView {
+                        topGeneralSection
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        sidebar
+                            .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
 
-                detailPane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(cardBackground)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(outlineColor, lineWidth: 1)
-                    )
+                        detailPane
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(cardBackground)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(outlineColor, lineWidth: 1)
+                            )
+                    }
+                }
             }
         }
         .padding(12)
@@ -108,6 +155,10 @@ struct SettingsView: View {
         .onAppear {
             seedInputsFromConfig()
             syncSelection()
+            viewModel.refreshPermissionStatusesNow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            viewModel.refreshPermissionStatusesNow()
         }
         .onChange(of: viewModel.config.providers.map(\.id)) { _, _ in
             seedInputsFromConfig()
@@ -142,6 +193,112 @@ struct SettingsView: View {
         } message: { _ in
             Text(viewModel.text(.codexDeleteProfileMessage))
         }
+        .confirmationDialog(
+            permissionAlertTitle,
+            isPresented: Binding(
+                get: { permissionPrompt != nil },
+                set: { newValue in
+                    if !newValue {
+                        permissionPrompt = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(viewModel.text(.permissionContinue)) {
+                handlePermissionPrompt()
+            }
+            Button(viewModel.text(.permissionCancel), role: .cancel) {
+                permissionPrompt = nil
+            }
+        } message: {
+            Text(permissionAlertMessage)
+        }
+    }
+
+    private var settingsTabBar: some View {
+        HStack(spacing: 10) {
+            settingsTabButton(.general)
+            settingsTabButton(.models)
+            Spacer()
+        }
+    }
+
+    private func settingsTabButton(_ tab: SettingsTab) -> some View {
+        let isSelected = selectedSettingsTab == tab
+
+        return Button {
+            selectedSettingsTab = tab
+        } label: {
+            Text(viewModel.text(tab == .general ? .settingsGeneralTab : .settingsModelsTab))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? .white : .secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isSelected ? Color.accentColor : Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.7) : outlineColor, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func settingsActionButton(
+        _ title: String,
+        prominent: Bool = false,
+        destructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        if prominent {
+            Button(action: action) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(destructive ? Color(hex: 0xD83E3E) : nil)
+        } else {
+            Button(action: action) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(destructive ? Color(hex: 0xD83E3E) : nil)
+        }
+    }
+
+    private func relayPresetProvider(for presetID: String) -> ProviderDescriptor? {
+        viewModel.config.providers.first { provider in
+            provider.family == .thirdParty && provider.relayConfig?.adapterID == presetID
+        }
+    }
+
+    private func setRelayPresetEnabled(_ enabled: Bool, preset: RelayTemplatePreset) {
+        if let provider = relayPresetProvider(for: preset.id) {
+            viewModel.setEnabled(enabled, providerID: provider.id)
+            selectedGroup = .thirdParty
+            selectedProviderID = provider.id
+            return
+        }
+
+        guard enabled else { return }
+
+        let beforeIDs = Set(viewModel.config.providers.map(\.id))
+        viewModel.addOpenRelay(
+            name: preset.displayName,
+            baseURL: preset.suggestedBaseURL ?? "https://",
+            preferredAdapterID: preset.id
+        )
+        if let added = viewModel.config.providers.first(where: { !beforeIDs.contains($0.id) }) {
+            selectedGroup = .thirdParty
+            selectedProviderID = added.id
+        }
     }
 
     private var sidebar: some View {
@@ -153,31 +310,30 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
 
-            List(selection: $selectedProviderID) {
-                if !enabledSidebarProviders.isEmpty {
-                    Section {
-                        ForEach(enabledSidebarProviders) { provider in
-                            sidebarProviderRow(provider)
-                                .tag(provider.id)
-                        }
-                        .onMove(perform: moveEnabledProviders)
-                    }
-                }
-                if !disabledSidebarProviders.isEmpty {
-                    Section {
-                        ForEach(disabledSidebarProviders) { provider in
-                            sidebarProviderRow(provider)
-                                .tag(provider.id)
-                        }
-                    }
-                }
-            }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .background(cardBackground)
-
             if selectedGroup == .thirdParty {
-                addRelaySection
+                thirdPartySidebarContent
+            } else {
+                List {
+                    if !enabledSidebarProviders.isEmpty {
+                        Section {
+                            ForEach(enabledSidebarProviders) { provider in
+                                sidebarProviderRow(provider)
+                            }
+                            .onMove(perform: moveEnabledProviders)
+                        }
+                    }
+                    if !disabledSidebarProviders.isEmpty {
+                        Section {
+                            ForEach(disabledSidebarProviders) { provider in
+                                sidebarProviderRow(provider)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(cardBackground)
+                .frame(minHeight: 220, maxHeight: .infinity)
             }
         }
         .padding(10)
@@ -191,8 +347,47 @@ struct SettingsView: View {
         )
     }
 
+    private var thirdPartySidebarContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(relayBuiltInPresets) { preset in
+                    relayPresetSidebarRow(preset)
+                }
+
+                if !customRelayProviders.isEmpty {
+                    Divider()
+                        .overlay(Color.white.opacity(0.08))
+
+                    ForEach(customRelayProviders) { provider in
+                        sidebarProviderRow(provider)
+                    }
+                }
+
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+
+                DisclosureGroup(
+                    isExpanded: $customNewAPIRelayExpanded,
+                    content: {
+                        newAPICustomSection
+                            .padding(.top, 6)
+                    },
+                    label: {
+                        Text("NewAPI 自定义")
+                            .font(settingsLabelFont)
+                            .foregroundStyle(settingsTitleColor)
+                    }
+                )
+                .tint(.white)
+            }
+        }
+        .frame(minHeight: 220, maxHeight: .infinity)
+    }
+
     private func sidebarProviderRow(_ provider: ProviderDescriptor) -> some View {
-        HStack(spacing: 8) {
+        let isSelected = selectedProviderID == provider.id
+
+        return HStack(spacing: 8) {
             Toggle("", isOn: Binding(
                 get: { provider.enabled },
                 set: { viewModel.setEnabled($0, providerID: provider.id) }
@@ -208,12 +403,20 @@ struct SettingsView: View {
                     .lineLimit(1)
                 Text(provider.enabled ? viewModel.text(.toggleOn) : viewModel.text(.toggleOff))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? settingsBodyColor : .secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? Color.accentColor.opacity(0.95) : outlineColor, lineWidth: 1)
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             selectedProviderID = provider.id
@@ -243,7 +446,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(viewModel.text(.language))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
                 Picker("", selection: Binding(
                     get: { viewModel.language },
                     set: { viewModel.setLanguage($0) }
@@ -267,27 +471,14 @@ struct SettingsView: View {
                 )
                 .toggleStyle(.switch)
                 .tint(.green)
+                .font(settingsLabelFont)
             }
 
             Text(viewModel.text(.launchAtLoginHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
 
-            HStack(spacing: 8) {
-                Toggle(
-                    viewModel.text(.relaySimpleMode),
-                    isOn: Binding(
-                        get: { viewModel.simplifiedRelayConfig },
-                        set: { viewModel.setSimplifiedRelayConfig($0) }
-                    )
-                )
-                .toggleStyle(.switch)
-                .tint(.green)
-            }
-
-            Text(viewModel.text(.relaySimpleModeHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            permissionsSection
         }
         .padding(12)
         .background(
@@ -300,10 +491,202 @@ struct SettingsView: View {
         )
     }
 
-    private var addRelaySection: some View {
-        let simpleMode = viewModel.simplifiedRelayConfig
-        let selectedPreset = relayTemplatePresets.first(where: { $0.id == newProviderTemplateID })
-        let selectedManifest = selectedPreset?.manifest
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+
+            Text(viewModel.text(.permissionsTitle))
+                .font(settingsTitleFont)
+                .foregroundStyle(settingsTitleColor)
+
+            Text(viewModel.text(.permissionsHint))
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
+
+            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow(alignment: .top) {
+                    permissionStatusTile(
+                        title: viewModel.text(.permissionNotificationsTitle),
+                        hint: viewModel.text(.permissionNotificationsHint),
+                        statusText: notificationPermissionStatusText,
+                        statusColor: notificationPermissionStatusColor,
+                        buttonTitle: viewModel.text(.permissionNotificationsAction),
+                        resultMessage: permissionResultMessage[PermissionPrompt.notifications.id],
+                        resultIsError: permissionResultIsError[PermissionPrompt.notifications.id] ?? false
+                    ) {
+                        permissionPrompt = .notifications
+                    }
+
+                    permissionStatusTile(
+                        title: viewModel.text(.permissionKeychainTitle),
+                        hint: viewModel.text(.permissionKeychainHint),
+                        statusText: keychainPermissionStatusText,
+                        statusColor: keychainPermissionStatusColor,
+                        buttonTitle: viewModel.text(.permissionKeychainAction),
+                        resultMessage: permissionResultMessage[PermissionPrompt.keychain.id],
+                        resultIsError: permissionResultIsError[PermissionPrompt.keychain.id] ?? false
+                    ) {
+                        permissionPrompt = .keychain
+                    }
+
+                    permissionStatusTile(
+                        title: viewModel.text(.permissionFullDiskTitle),
+                        hint: viewModel.text(.permissionFullDiskHint),
+                        statusText: fullDiskPermissionStatusText,
+                        statusColor: fullDiskPermissionStatusColor,
+                        buttonTitle: viewModel.text(.permissionFullDiskAction),
+                        resultMessage: permissionResultMessage[PermissionPrompt.fullDisk.id],
+                        resultIsError: permissionResultIsError[PermissionPrompt.fullDisk.id] ?? false
+                    ) {
+                        permissionPrompt = .fullDisk
+                    }
+                }
+            }
+
+            permissionActionRow(
+                title: viewModel.text(.localDiscoveryTitle),
+                hint: viewModel.text(.localDiscoveryHint),
+                buttonTitle: viewModel.text(.localDiscoveryAction)
+            ) {
+                permissionPrompt = .autoDiscovery
+            }
+
+            permissionActionRow(
+                title: viewModel.text(.resetLocalDataTitle),
+                hint: viewModel.text(.resetLocalDataHint),
+                buttonTitle: viewModel.text(.resetLocalDataAction),
+                destructive: true
+            ) {
+                permissionPrompt = .resetLocalData
+            }
+
+            Text(viewModel.text(.permissionsPrivacyPromise))
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
+
+        }
+    }
+
+    private func permissionStatusTile(
+        title: String,
+        hint: String,
+        statusText: String,
+        statusColor: Color,
+        buttonTitle: String,
+        resultMessage: String?,
+        resultIsError: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsTitleColor)
+                Text(hint)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 8) {
+                Text(statusText)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(statusColor)
+                Spacer(minLength: 8)
+                settingsActionButton(buttonTitle, action: action)
+            }
+            if let resultMessage, !resultMessage.isEmpty {
+                Text(resultMessage)
+                    .font(settingsHintFont)
+                    .foregroundStyle(resultIsError ? Color(hex: 0xD83E3E) : Color(hex: 0x51DB42))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private func permissionActionRow(
+        title: String,
+        hint: String,
+        buttonTitle: String,
+        destructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsTitleColor)
+                Text(hint)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if destructive {
+                settingsActionButton(buttonTitle, prominent: true, destructive: true, action: action)
+            } else {
+                settingsActionButton(buttonTitle, action: action)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+    }
+
+    private var notificationPermissionStatusText: String {
+        viewModel.hasNotificationPermission
+            ? viewModel.text(.permissionStatusAuthorized)
+            : viewModel.text(.permissionStatusPending)
+    }
+
+    private var notificationPermissionStatusColor: Color {
+        viewModel.hasNotificationPermission ? Color(hex: 0x51DB42) : Color(hex: 0xD87E3E)
+    }
+
+    private var keychainPermissionStatusText: String {
+        viewModel.secureStorageReady
+            ? viewModel.text(.permissionStatusAuthorized)
+            : viewModel.text(.permissionStatusPending)
+    }
+
+    private var keychainPermissionStatusColor: Color {
+        viewModel.secureStorageReady ? Color(hex: 0x51DB42) : Color(hex: 0xD87E3E)
+    }
+
+    private var fullDiskPermissionStatusText: String {
+        if viewModel.fullDiskAccessGranted {
+            return viewModel.text(.permissionStatusAuthorized)
+        }
+        if viewModel.fullDiskAccessRelevant || viewModel.fullDiskAccessRequested {
+            return viewModel.text(.permissionStatusNeedsAction)
+        }
+        return viewModel.text(.permissionStatusPending)
+    }
+
+    private var fullDiskPermissionStatusColor: Color {
+        viewModel.fullDiskAccessGranted ? Color(hex: 0x51DB42) : Color(hex: 0xD87E3E)
+    }
+
+    private var newAPICustomSection: some View {
+        let selectedPreset = relayBuiltInPresets.first(where: { $0.id == selectedRelayPresetID })
+        let selectedManifest = selectedPreset?.manifest ?? relaySiteTemplates.first?.manifest
         let selectedRequiredInputs = selectedManifest.map {
             relayRequiredInputs(
                 for: $0,
@@ -313,21 +696,16 @@ struct SettingsView: View {
             )
         } ?? [.displayName, .baseURL]
         let showNameField = true
-        let showBaseURLField = !simpleMode || selectedRequiredInputs.contains(.baseURL)
+        let showBaseURLField = selectedRequiredInputs.contains(.baseURL)
 
         return VStack(alignment: .leading, spacing: 10) {
-            Text(viewModel.text(.addRelayProvider))
-                .font(.subheadline.weight(.semibold))
+            Text(viewModel.text(.relayTemplate))
+                .font(settingsLabelFont)
+                .foregroundStyle(settingsHintColor)
 
-            Picker(viewModel.text(.relayTemplate), selection: Binding(
-                get: { newProviderTemplateID },
-                set: { applyNewRelayTemplate($0) }
-            )) {
-                ForEach(relayTemplatePresets) { preset in
-                    Text(preset.displayName).tag(preset.id)
-                }
-            }
-            .pickerStyle(.menu)
+            Text(relaySiteTemplates.first?.displayName ?? "NewAPI")
+                .font(settingsBodyFont)
+                .foregroundStyle(settingsBodyColor)
 
             HStack(spacing: 8) {
                 if showNameField {
@@ -338,7 +716,7 @@ struct SettingsView: View {
                     TextField(viewModel.text(.baseURL), text: $newProviderBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
-                Button(viewModel.text(.addProvider)) {
+                settingsActionButton(viewModel.text(.addProvider), prominent: true) {
                     let beforeIDs = Set(viewModel.config.providers.map(\.id))
                     viewModel.addOpenRelay(
                         name: resolvedRelayNameInput(
@@ -349,44 +727,102 @@ struct SettingsView: View {
                             typedBaseURL: newProviderBaseURL,
                             manifest: selectedManifest
                         ),
-                        preferredAdapterID: newProviderTemplateID
+                        preferredAdapterID: selectedRelayPresetID ?? newProviderTemplateID
                     )
                     if let added = viewModel.config.providers.first(where: { !beforeIDs.contains($0.id) }) {
                         selectedGroup = .thirdParty
                         selectedProviderID = added.id
                     }
                     newProviderName = ""
+                    selectedRelayPresetID = nil
                     applyNewRelayTemplate(newProviderTemplateID)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            if simpleMode {
-                if !showBaseURLField, let selectedManifest, let suggestedBaseURL = suggestedBaseURL(for: selectedManifest) {
-                    Text("Base URL: \(suggestedBaseURL)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    customNewAPIRelayExpanded = false
                 }
             }
 
-            if let preset = selectedPreset {
+            if !showBaseURLField, let selectedManifest, let suggestedBaseURL = suggestedBaseURL(for: selectedManifest) {
+                Text("Base URL: \(suggestedBaseURL)")
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+            }
+
+            if let preset = selectedPreset ?? relaySiteTemplates.first(where: { $0.id == newProviderTemplateID }) {
                 Text(relayRequiredInputSummary(
                     manifest: preset.manifest,
                     tokenChannelEnabled: preset.manifest.tokenRequest != nil && preset.manifest.match.defaultTokenChannelEnabled,
                     accountChannelEnabled: preset.manifest.match.defaultBalanceChannelEnabled,
                     showsManualUserID: relayTemplateNeedsManualUserID(preset.manifest)
                 ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
 
                 Text(relayFixedTemplateSummary(for: preset.manifest))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
             }
 
             Text(viewModel.text(.relayTemplatePresetHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
+        }
+    }
+
+    private func relayPresetSidebarRow(_ preset: RelayTemplatePreset) -> some View {
+        let provider = relayPresetProvider(for: preset.id)
+        let isEnabled = provider?.enabled ?? false
+        let isSelected = provider.map { selectedProviderID == $0.id } ?? false
+
+        return HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { isEnabled },
+                set: { setRelayPresetEnabled($0, preset: preset) }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+
+            if let provider {
+                providerIcon(for: provider, size: 12)
+            } else if let image = bundledImage(named: "relay_icon") {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
+            } else {
+                Image(systemName: "globe")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
+                    .foregroundStyle(.primary)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preset.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(settingsTitleColor)
+                    .lineLimit(1)
+                Text(isEnabled ? viewModel.text(.toggleOn) : viewModel.text(.toggleOff))
+                    .font(.caption2)
+                    .foregroundStyle(isSelected ? settingsBodyColor : settingsHintColor)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? Color.accentColor.opacity(0.95) : outlineColor, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let provider {
+                selectedProviderID = provider.id
+            }
         }
     }
 
@@ -421,8 +857,16 @@ struct SettingsView: View {
                 HStack(spacing: 8) {
                     providerIcon(for: provider, size: 14)
                     Text(sidebarDisplayName(for: provider))
+                    Toggle("", isOn: Binding(
+                        get: { provider.enabled },
+                        set: { viewModel.setEnabled($0, providerID: provider.id) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .tint(.green)
                 }
-                    .font(.headline)
+                    .font(settingsTitleFont)
+                    .foregroundStyle(settingsTitleColor)
                 Spacer()
                 toggleStateBadge(isOn: provider.enabled)
             }
@@ -433,8 +877,8 @@ struct SettingsView: View {
 
             HStack(spacing: 8) {
                 Text(viewModel.text(.lowThreshold))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
                 Slider(
                     value: Binding(
                         get: { provider.threshold.lowRemaining },
@@ -443,14 +887,15 @@ struct SettingsView: View {
                     in: 0...100
                 )
                 Text(String(format: "%.0f", provider.threshold.lowRemaining))
-                    .font(.caption.monospacedDigit())
+                    .font(settingsHintFont.monospacedDigit())
                     .frame(width: 40, alignment: .trailing)
+                    .foregroundStyle(settingsBodyColor)
             }
 
             HStack(spacing: 8) {
                 Text(viewModel.text(.statusBarDisplayProvider))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
                 Spacer(minLength: 8)
                 Toggle("", isOn: Binding(
                     get: { viewModel.isStatusBarProvider(providerID: provider.id) },
@@ -548,11 +993,11 @@ struct SettingsView: View {
     private func providerUsageMetric(title: String, value: String, unit: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
             Text(unit.isEmpty ? value : "\(value) \(unit)")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(settingsTitleColor)
                 .monospacedDigit()
         }
     }
@@ -561,6 +1006,14 @@ struct SettingsView: View {
     private func officialConfigSection(_ provider: ProviderDescriptor) -> some View {
         let supportedSourceModes = provider.supportedOfficialSourceModes
         let supportedWebModes = provider.supportedOfficialWebModes
+        let quotaDisplayBinding = Binding(
+            get: {
+                officialQuotaDisplayModeInputs[provider.id]
+                    ?? (provider.officialConfig?.quotaDisplayMode
+                        ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).quotaDisplayMode)
+            },
+            set: { officialQuotaDisplayModeInputs[provider.id] = $0 }
+        )
         let sourceBinding = Binding(
             get: {
                 let current = officialSourceModeInputs[provider.id] ?? (provider.officialConfig?.sourceMode ?? .auto)
@@ -579,7 +1032,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(viewModel.text(.sourceMode))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsHintColor)
                 Picker("", selection: sourceBinding) {
                     ForEach(supportedSourceModes) { mode in
                         Text(sourceModeLabel(mode))
@@ -594,7 +1048,8 @@ struct SettingsView: View {
             if supportedWebModes.count > 1 {
                 HStack(spacing: 8) {
                     Text(viewModel.text(.webMode))
-                        .foregroundStyle(.secondary)
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsHintColor)
                     Picker("", selection: webBinding) {
                         ForEach(supportedWebModes) { mode in
                             Text(webModeLabel(mode))
@@ -607,6 +1062,25 @@ struct SettingsView: View {
                 }
             }
 
+            if provider.type == .claude {
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.quotaDisplayMode))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsHintColor)
+                    Picker("", selection: quotaDisplayBinding) {
+                        Text(viewModel.text(.quotaDisplayRemaining)).tag(OfficialQuotaDisplayMode.remaining)
+                        Text(viewModel.text(.quotaDisplayUsed)).tag(OfficialQuotaDisplayMode.used)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+
+                Text(viewModel.text(.claudeQuotaDisplayHint))
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+            }
+
             if provider.supportsOfficialManualCookieInput {
                 HStack {
                     SecureField(viewModel.text(.manualCookieHeader), text: Binding(
@@ -615,37 +1089,36 @@ struct SettingsView: View {
                     ))
                     .textFieldStyle(.roundedBorder)
 
-                    Button(viewModel.text(.saveToken)) {
+                    settingsActionButton(viewModel.text(.saveToken)) {
                         let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !raw.isEmpty else { return }
                         _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
                         officialCookieInputs[provider.id] = ""
                         viewModel.restartPolling()
                     }
-                    .buttonStyle(.bordered)
 
                     Text(viewModel.hasOfficialManualCookie(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
-                        .font(.caption)
+                        .font(settingsHintFont)
                         .foregroundStyle(viewModel.hasOfficialManualCookie(for: provider) ? .green : .secondary)
                 }
             }
 
             Text(viewModel.text(.officialAutoDiscoveryHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
 
             if provider.type == .codex {
                 codexProfileManagementSection()
             }
 
-            Button(viewModel.text(.saveConfig)) {
+            settingsActionButton(viewModel.text(.saveConfig), prominent: true) {
                 viewModel.updateOfficialProviderSettings(
                     providerID: provider.id,
                     sourceMode: sourceBinding.wrappedValue ?? supportedSourceModes.first ?? .auto,
-                    webMode: webBinding.wrappedValue ?? supportedWebModes.first ?? .disabled
+                    webMode: webBinding.wrappedValue ?? supportedWebModes.first ?? .disabled,
+                    quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
                 )
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -692,7 +1165,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        if profile != nil, profile?.isCurrentSystemAccount != true {
+                        if profile != nil {
                             Button(viewModel.text(.codexDeleteProfile), role: .destructive) {
                                 codexProfilePendingDelete = slotID
                             }
@@ -720,10 +1193,6 @@ struct SettingsView: View {
                                 .font(.caption.weight(.semibold))
                             Text(viewModel.text(.codexProfileDetails))
                                 .font(.caption.weight(.semibold))
-                            Text(viewModel.text(.codexAuthJSONHowTo))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
                             Spacer()
                         }
                         .foregroundStyle(.secondary)
@@ -883,18 +1352,95 @@ struct SettingsView: View {
         }
     }
 
+    private var permissionAlertTitle: String {
+        switch permissionPrompt {
+        case .notifications:
+            return viewModel.text(.permissionNotificationsTitle)
+        case .keychain:
+            return viewModel.text(.permissionKeychainTitle)
+        case .fullDisk:
+            return viewModel.text(.permissionFullDiskTitle)
+        case .autoDiscovery:
+            return viewModel.text(.localDiscoveryTitle)
+        case .resetLocalData:
+            return viewModel.text(.resetLocalDataTitle)
+        case .none:
+            return ""
+        }
+    }
+
+    private var permissionAlertMessage: String {
+        switch permissionPrompt {
+        case .notifications:
+            return viewModel.text(.permissionNotificationsConfirm)
+        case .keychain:
+            return viewModel.text(.permissionKeychainConfirm)
+        case .fullDisk:
+            return viewModel.text(.permissionFullDiskConfirm)
+        case .autoDiscovery:
+            return viewModel.text(.localDiscoveryConfirm)
+        case .resetLocalData:
+            return viewModel.text(.resetLocalDataConfirm)
+        case .none:
+            return ""
+        }
+    }
+
+    private func handlePermissionPrompt() {
+        let prompt = permissionPrompt
+        permissionPrompt = nil
+
+        switch prompt {
+        case .notifications:
+            viewModel.requestNotificationPermission()
+            permissionResultMessage[PermissionPrompt.notifications.id] = viewModel.text(.permissionNotificationsRequested)
+            permissionResultIsError[PermissionPrompt.notifications.id] = false
+        case .keychain:
+            let ok = viewModel.prepareSecureStorageAccess()
+            permissionResultMessage[PermissionPrompt.keychain.id] = ok
+                ? viewModel.text(.permissionKeychainReady)
+                : viewModel.text(.permissionKeychainFailed)
+            permissionResultIsError[PermissionPrompt.keychain.id] = !ok
+        case .fullDisk:
+            viewModel.openFullDiskAccessSettings()
+            permissionResultMessage[PermissionPrompt.fullDisk.id] = viewModel.text(.permissionFullDiskRequested)
+            permissionResultIsError[PermissionPrompt.fullDisk.id] = false
+        case .autoDiscovery:
+            permissionResultMessage[PermissionPrompt.autoDiscovery.id] = viewModel.text(.localDiscoveryScanning)
+            permissionResultIsError[PermissionPrompt.autoDiscovery.id] = false
+            Task { @MainActor in
+                let result = await viewModel.discoverLocalProviders()
+                permissionResultMessage[PermissionPrompt.autoDiscovery.id] = result
+                permissionResultIsError[PermissionPrompt.autoDiscovery.id] = result == viewModel.text(.localDiscoveryNothingFound)
+            }
+        case .resetLocalData:
+            viewModel.resetLocalAppData()
+            seedInputsFromConfig()
+            syncSelection()
+            selectedSettingsTab = .general
+            permissionResultMessage[PermissionPrompt.resetLocalData.id] = viewModel.text(.resetLocalDataDone)
+            permissionResultIsError[PermissionPrompt.resetLocalData.id] = false
+        case .none:
+            break
+        }
+        viewModel.refreshPermissionStatusesNow()
+    }
+
     @ViewBuilder
     private func openRelayConfigSection(_ provider: ProviderDescriptor) -> some View {
         let relayViewConfig = provider.relayViewConfig
         let accountAuth = relayViewConfig?.accountBalance?.auth
-        let simpleMode = viewModel.simplifiedRelayConfig
-        let selectedTemplateID = selectedRelayTemplateInputs[provider.id]
-            ?? provider.relayConfig?.adapterID
+        let simpleMode = true
+        let providerAdapterID = provider.relayConfig?.adapterID
             ?? provider.relayManifest?.id
             ?? "generic-newapi"
-        let selectedTemplate = relayTemplatePresets.first(where: { $0.id == selectedTemplateID })?.manifest
+        let selectedTemplateID = selectedRelayTemplateInputs[provider.id] ?? providerAdapterID
+        let selectedTemplate = relaySiteTemplates.first(where: { $0.id == selectedTemplateID })?.manifest
             ?? provider.relayManifest
             ?? RelayAdapterRegistry.shared.manifest(for: provider.baseURL ?? "", preferredID: selectedTemplateID)
+        let currentPreset = providerAdapterID == "generic-newapi"
+            ? nil
+            : relayBuiltInPresets.first(where: { $0.id == providerAdapterID })?.manifest
         let tokenChannelEnabled = tokenUsageEnabledInputs[provider.id]
             ?? relayViewConfig?.tokenUsageEnabled
             ?? selectedTemplate.match.defaultTokenChannelEnabled
@@ -920,19 +1466,35 @@ struct SettingsView: View {
             ?? .manualPreferred
 
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(viewModel.text(.relayTemplate))
-                    .foregroundStyle(.secondary)
-                Picker("", selection: Binding(
-                    get: { selectedTemplateID },
-                    set: { selectedRelayTemplateInputs[provider.id] = $0 }
-                )) {
-                    ForEach(relayTemplatePresets) { preset in
-                        Text(preset.displayName).tag(preset.id)
+            if let currentPreset, selectedRelayTemplateInputs[provider.id] == nil {
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.matchedAdapter))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsHintColor)
+                    Text(currentPreset.displayName)
+                        .font(settingsBodyFont)
+                        .foregroundStyle(settingsBodyColor)
+                    Spacer()
+                    settingsActionButton(viewModel.text(.relayTemplate)) {
+                        selectedRelayTemplateInputs[provider.id] = "generic-newapi"
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
+            } else {
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.relayTemplate))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsHintColor)
+                    Picker("", selection: Binding(
+                        get: { selectedRelayTemplateInputs[provider.id] ?? "generic-newapi" },
+                        set: { selectedRelayTemplateInputs[provider.id] = $0 }
+                    )) {
+                        ForEach(relaySiteTemplates) { preset in
+                            Text(preset.displayName).tag(preset.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
             }
 
             if showNameField || showBaseURLField {
@@ -965,8 +1527,8 @@ struct SettingsView: View {
 
             if showUserIDField {
                 Text(viewModel.text(.userID))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsHintColor)
 
                 TextField(viewModel.text(.userID), text: Binding(
                     get: { userIDInputs[provider.id] ?? defaultUserID },
@@ -977,15 +1539,15 @@ struct SettingsView: View {
 
                 if let userIDHint = relaySetupHint(for: selectedTemplate, field: .userID) {
                     Text(userIDHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(settingsHintFont)
+                        .foregroundStyle(settingsHintColor)
                 }
             }
 
             if showBalanceCredential {
                 Text(relayCredentialSectionTitle(isAccount: true, templateKind: balanceTemplate.kind))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsHintColor)
 
                 HStack {
                     SecureField(balanceTemplate.placeholder, text: Binding(
@@ -995,7 +1557,7 @@ struct SettingsView: View {
                     .textFieldStyle(.plain)
                     .relayProminentInput()
 
-                    Button(relayCredentialSaveLabel(templateKind: balanceTemplate.kind)) {
+                    settingsActionButton(relayCredentialSaveLabel(templateKind: balanceTemplate.kind)) {
                         guard let accountAuth else { return }
                         let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !token.isEmpty else { return }
@@ -1003,34 +1565,33 @@ struct SettingsView: View {
                         systemTokenInputs[provider.id] = ""
                         viewModel.restartPolling()
                     }
-                    .buttonStyle(.bordered)
 
                     if let accountAuth {
                         Text(viewModel.hasToken(auth: accountAuth) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
-                            .font(.caption)
+                            .font(settingsHintFont)
                             .foregroundStyle(viewModel.hasToken(auth: accountAuth) ? .green : .secondary)
                     }
                 }
 
                 Text(balanceTemplate.hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
 
                 if let balanceSetupHint = relaySetupHint(for: selectedTemplate, field: .balanceAuth) {
                     Text(balanceSetupHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(settingsHintFont)
+                        .foregroundStyle(settingsHintColor)
                 }
 
                 Text(relayCredentialLookupHint(templateKind: balanceTemplate.kind))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
             }
 
             if showTokenCredential {
                 Text(relayCredentialSectionTitle(isAccount: false, templateKind: tokenTemplate.kind))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsHintColor)
 
                 HStack {
                     SecureField(tokenTemplate.placeholder, text: Binding(
@@ -1040,38 +1601,38 @@ struct SettingsView: View {
                     .textFieldStyle(.plain)
                     .relayProminentInput()
 
-                    Button(relayCredentialSaveLabel(templateKind: tokenTemplate.kind)) {
+                    settingsActionButton(relayCredentialSaveLabel(templateKind: tokenTemplate.kind)) {
                         let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !token.isEmpty else { return }
                         _ = viewModel.saveToken(token, for: provider)
                         tokenInputs[provider.id] = ""
                         viewModel.restartPolling()
                     }
-                    .buttonStyle(.bordered)
 
                     Text(viewModel.hasToken(for: provider) ? viewModel.text(.tokenSaved) : viewModel.text(.noToken))
-                        .font(.caption)
+                        .font(settingsHintFont)
                         .foregroundStyle(viewModel.hasToken(for: provider) ? .green : .secondary)
                 }
 
                 Text(tokenTemplate.hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
 
                 if let quotaSetupHint = relaySetupHint(for: selectedTemplate, field: .quotaAuth) {
                     Text(quotaSetupHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(settingsHintFont)
+                        .foregroundStyle(settingsHintColor)
                 }
 
                 Text(relayCredentialLookupHint(templateKind: tokenTemplate.kind))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
             }
 
             HStack(spacing: 8) {
                 Text(viewModel.text(.credentialMode))
-                    .foregroundStyle(.secondary)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsHintColor)
                 Picker("", selection: Binding(
                     get: { credentialMode },
                     set: { relayCredentialModeInputs[provider.id] = $0 }
@@ -1085,13 +1646,13 @@ struct SettingsView: View {
             }
 
             Text(viewModel.text(.credentialModeHint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
 
             HStack(spacing: 8) {
                 Text("\(viewModel.text(.matchedAdapter)): \(selectedTemplate.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
             }
 
             relayRuntimeStatusSection(provider, selectedTemplate: selectedTemplate)
@@ -1102,27 +1663,21 @@ struct SettingsView: View {
                 accountChannelEnabled: showBalanceCredential,
                 showsManualUserID: showUserIDField
             ))
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(settingsHintFont)
+            .foregroundStyle(settingsHintColor)
 
             Text(relayFixedTemplateSummary(for: selectedTemplate))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
 
             if let diagnosticHint = relayDiagnosticHint(for: selectedTemplate) {
                 Text(diagnosticHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if simpleMode {
-                Text(viewModel.text(.relaySimpleModeHint))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
             }
 
             HStack(spacing: 8) {
-                Button(viewModel.text(.saveConfig)) {
+                settingsActionButton(viewModel.text(.saveConfig), prominent: true) {
                     viewModel.updateOpenProviderSettings(
                         providerID: provider.id,
                         name: resolvedRelayNameInput(
@@ -1133,7 +1688,7 @@ struct SettingsView: View {
                             typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
                             manifest: selectedTemplate
                         ),
-                        preferredAdapterID: selectedTemplateID,
+                        preferredAdapterID: selectedRelayTemplateInputs[provider.id] ?? providerAdapterID,
                         balanceCredentialMode: relayCredentialModeInputs[provider.id]
                             ?? provider.relayConfig?.balanceCredentialMode
                             ?? .manualPreferred,
@@ -1151,9 +1706,8 @@ struct SettingsView: View {
                         unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
                     )
                 }
-                .buttonStyle(.borderedProminent)
 
-                Button(viewModel.text(.testConnection)) {
+                settingsActionButton(viewModel.text(.testConnection)) {
                     Task {
                         guard let previewDescriptor = viewModel.relayDescriptorForPreview(
                             providerID: provider.id,
@@ -1195,13 +1749,11 @@ struct SettingsView: View {
                         relayTestResult[provider.id] = await viewModel.testRelayConnection(descriptor: previewDescriptor)
                     }
                 }
-                .buttonStyle(.bordered)
 
                 if provider.id != "open-ailinyu" {
-                    Button(viewModel.text(.removeProvider), role: .destructive) {
+                    settingsActionButton(viewModel.text(.removeProvider), destructive: true) {
                         viewModel.removeProvider(providerID: provider.id)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
 
@@ -1228,117 +1780,116 @@ struct SettingsView: View {
                         )
                         labeledToggle(viewModel.text(.enableAccountChannel), isOn: accountChannelBinding)
 
-                        if !simpleMode {
-                            HStack(spacing: 8) {
-                                TextField(viewModel.text(.authHeader), text: Binding(
-                                    get: {
-                                        authHeaderInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.authHeader
-                                            ?? selectedTemplate.balanceRequest.authHeader
-                                            ?? "Authorization"
-                                    },
-                                    set: { authHeaderInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-
-                                TextField(viewModel.text(.authScheme), text: Binding(
-                                    get: {
-                                        authSchemeInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.authScheme
-                                            ?? selectedTemplate.balanceRequest.authScheme
-                                            ?? "Bearer"
-                                    },
-                                    set: { authSchemeInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-
-                            HStack(spacing: 8) {
-                                TextField(viewModel.text(.userIDHeader), text: Binding(
-                                    get: {
-                                        userHeaderInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.userIDHeader
-                                            ?? selectedTemplate.balanceRequest.userIDHeader
-                                            ?? "New-Api-User"
-                                    },
-                                    set: { userHeaderInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-
-                                TextField(viewModel.text(.endpointPath), text: Binding(
-                                    get: {
-                                        endpointPathInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.endpointPath
-                                            ?? selectedTemplate.balanceRequest.path
-                                    },
-                                    set: { endpointPathInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-
-                            HStack(spacing: 8) {
-                                TextField(viewModel.text(.unit), text: Binding(
-                                    get: {
-                                        unitInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.unit
-                                            ?? selectedTemplate.extract.unit
-                                            ?? "quota"
-                                    },
-                                    set: { unitInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-
-                                TextField(viewModel.text(.remainingPath), text: Binding(
-                                    get: {
-                                        remainingPathInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.remainingJSONPath
-                                            ?? selectedTemplate.extract.remaining
-                                    },
-                                    set: { remainingPathInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-
-                            HStack(spacing: 8) {
-                                TextField(viewModel.text(.usedPath), text: Binding(
-                                    get: {
-                                        usedPathInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.usedJSONPath
-                                            ?? selectedTemplate.extract.used
-                                            ?? ""
-                                    },
-                                    set: { usedPathInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-
-                                TextField(viewModel.text(.limitPath), text: Binding(
-                                    get: {
-                                        limitPathInputs[provider.id]
-                                            ?? relayViewConfig?.accountBalance?.limitJSONPath
-                                            ?? selectedTemplate.extract.limit
-                                            ?? ""
-                                    },
-                                    set: { limitPathInputs[provider.id] = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                            }
-
-                            TextField(viewModel.text(.successPath), text: Binding(
+                        HStack(spacing: 8) {
+                            TextField(viewModel.text(.authHeader), text: Binding(
                                 get: {
-                                    successPathInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.successJSONPath
-                                        ?? selectedTemplate.extract.success
-                                        ?? ""
+                                    authHeaderInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.authHeader
+                                        ?? selectedTemplate.balanceRequest.authHeader
+                                        ?? "Authorization"
                                 },
-                                set: { successPathInputs[provider.id] = $0 }
+                                set: { authHeaderInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+
+                            TextField(viewModel.text(.authScheme), text: Binding(
+                                get: {
+                                    authSchemeInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.authScheme
+                                        ?? selectedTemplate.balanceRequest.authScheme
+                                        ?? "Bearer"
+                                },
+                                set: { authSchemeInputs[provider.id] = $0 }
                             ))
                             .textFieldStyle(.roundedBorder)
                         }
+
+                        HStack(spacing: 8) {
+                            TextField(viewModel.text(.userIDHeader), text: Binding(
+                                get: {
+                                    userHeaderInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.userIDHeader
+                                        ?? selectedTemplate.balanceRequest.userIDHeader
+                                        ?? "New-Api-User"
+                                },
+                                set: { userHeaderInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+
+                            TextField(viewModel.text(.endpointPath), text: Binding(
+                                get: {
+                                    endpointPathInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.endpointPath
+                                        ?? selectedTemplate.balanceRequest.path
+                                },
+                                set: { endpointPathInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(viewModel.text(.unit), text: Binding(
+                                get: {
+                                    unitInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.unit
+                                        ?? selectedTemplate.extract.unit
+                                        ?? "quota"
+                                },
+                                set: { unitInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+
+                            TextField(viewModel.text(.remainingPath), text: Binding(
+                                get: {
+                                    remainingPathInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.remainingJSONPath
+                                        ?? selectedTemplate.extract.remaining
+                                },
+                                set: { remainingPathInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(viewModel.text(.usedPath), text: Binding(
+                                get: {
+                                    usedPathInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.usedJSONPath
+                                        ?? selectedTemplate.extract.used
+                                        ?? ""
+                                },
+                                set: { usedPathInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+
+                            TextField(viewModel.text(.limitPath), text: Binding(
+                                get: {
+                                    limitPathInputs[provider.id]
+                                        ?? relayViewConfig?.accountBalance?.limitJSONPath
+                                        ?? selectedTemplate.extract.limit
+                                        ?? ""
+                                },
+                                set: { limitPathInputs[provider.id] = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+
+                        TextField(viewModel.text(.successPath), text: Binding(
+                            get: {
+                                successPathInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.successJSONPath
+                                    ?? selectedTemplate.extract.success
+                                    ?? ""
+                            },
+                            set: { successPathInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
                     }
                 },
                 label: {
                     Text(viewModel.text(.advancedSettings))
-                        .font(.caption.weight(.semibold))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsHintColor)
                 }
             )
         }
@@ -1364,6 +1915,14 @@ struct SettingsView: View {
         sidebarProviders.filter { !$0.enabled }
     }
 
+    private var customRelayProviders: [ProviderDescriptor] {
+        let builtInPresetIDs = Set(relayBuiltInPresets.map(\.id))
+        return viewModel.config.providers.filter { provider in
+            provider.family == .thirdParty &&
+            !builtInPresetIDs.contains(provider.relayConfig?.adapterID ?? "")
+        }
+    }
+
     private var relayTemplatePresets: [RelayTemplatePreset] {
         RelayAdapterRegistry.shared
             .availableManifests()
@@ -1383,6 +1942,14 @@ struct SettingsView: View {
                     return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
                 }
             }
+    }
+
+    private var relaySiteTemplates: [RelayTemplatePreset] {
+        relayTemplatePresets.filter { $0.id == "generic-newapi" }
+    }
+
+    private var relayBuiltInPresets: [RelayTemplatePreset] {
+        relayTemplatePresets.filter { $0.id != "generic-newapi" }
     }
 
     private func relayTemplateNeedsManualUserID(_ manifest: RelayAdapterManifest) -> Bool {
@@ -1412,13 +1979,24 @@ struct SettingsView: View {
 
     private func applyNewRelayTemplate(_ templateID: String) {
         newProviderTemplateID = templateID
-        guard let preset = relayTemplatePresets.first(where: { $0.id == templateID }) else { return }
+        guard let preset = relaySiteTemplates.first(where: { $0.id == templateID }) else { return }
         if let suggestedBaseURL = preset.suggestedBaseURL {
             newProviderBaseURL = suggestedBaseURL
         } else {
             newProviderBaseURL = "https://"
         }
-        newProviderName = preset.id == "generic-newapi" ? "" : preset.displayName
+        if selectedRelayPresetID == nil {
+            newProviderName = ""
+        }
+    }
+
+    private func applyRelayPreset(_ preset: RelayTemplatePreset) {
+        if let suggestedBaseURL = preset.suggestedBaseURL {
+            newProviderBaseURL = suggestedBaseURL
+        } else {
+            newProviderBaseURL = "https://"
+        }
+        newProviderName = preset.displayName
     }
 
     private func resolvedRelayNameInput(
@@ -1750,10 +2328,12 @@ struct SettingsView: View {
                     preferredID: provider.relayConfig?.adapterID
                 )
             if selectedRelayTemplateInputs[provider.id] == nil {
-                selectedRelayTemplateInputs[provider.id] =
-                    provider.relayConfig?.adapterID
+                let providerAdapterID = provider.relayConfig?.adapterID
                     ?? provider.relayManifest?.id
                     ?? "generic-newapi"
+                selectedRelayTemplateInputs[provider.id] = providerAdapterID == "generic-newapi"
+                    ? "generic-newapi"
+                    : nil
             }
             if providerNameInputs[provider.id] == nil {
                 providerNameInputs[provider.id] = provider.name
@@ -1810,6 +2390,10 @@ struct SettingsView: View {
             }
             if officialWebModeInputs[provider.id] == nil {
                 officialWebModeInputs[provider.id] = provider.officialConfig?.webMode ?? .disabled
+            }
+            if officialQuotaDisplayModeInputs[provider.id] == nil {
+                officialQuotaDisplayModeInputs[provider.id] = provider.officialConfig?.quotaDisplayMode
+                    ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).quotaDisplayMode
             }
         }
 

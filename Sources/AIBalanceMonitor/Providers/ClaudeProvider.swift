@@ -394,6 +394,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         guard let result else {
             throw ProviderError.commandFailed("claude /usage failed to start")
         }
+        let combinedOutput = "\(result.stdout)\n\(result.stderr)"
+        if Self.looksLikeMissingClaudeSubscription(text: combinedOutput) {
+            throw ProviderError.unavailable("Claude subscription required")
+        }
         guard result.status == 0 || !result.stdout.isEmpty else {
             throw ProviderError.commandFailed(result.stderr.isEmpty ? "claude /usage failed" : result.stderr)
         }
@@ -422,6 +426,9 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         let clean = stripANSICodes(text)
         if clean.lowercased().contains("token_expired") {
             throw ProviderError.unauthorized
+        }
+        if looksLikeMissingClaudeSubscription(text: clean) {
+            throw ProviderError.unavailable("Claude subscription required")
         }
 
         guard let sessionRemaining = extractClaudePercent(label: "Current session", text: clean) else {
@@ -550,6 +557,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         let extraUsage = root["extra_usage"] as? [String: Any]
         let extraCost = OfficialValueParser.double(extraUsage?["used_credits"])
         let extraLimit = OfficialValueParser.double(extraUsage?["monthly_limit"])
+
+        if looksLikeMissingClaudeSubscription(root: root, windows: windows, planHint: planHint, extraCost: extraCost, extraLimit: extraLimit) {
+            throw ProviderError.unavailable("Claude subscription required")
+        }
 
         guard !windows.isEmpty || extraCost != nil else {
             throw ProviderError.invalidResponse("missing Claude usage windows")
@@ -706,6 +717,57 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             return Double(String(suffix[match]).replacingOccurrences(of: "$", with: ""))
         }
         return nil
+    }
+
+    private static func looksLikeMissingClaudeSubscription(text: String) -> Bool {
+        let lower = text.lowercased()
+        let markers = [
+            "subscription required",
+            "subscription plan",
+            "requires subscription",
+            "no active subscription",
+            "upgrade to claude",
+            "upgrade your plan",
+            "billing required"
+        ]
+        return markers.contains(where: { lower.contains($0) })
+    }
+
+    private static func looksLikeMissingClaudeSubscription(
+        root: [String: Any],
+        windows: [UsageQuotaWindow],
+        planHint: String?,
+        extraCost: Double?,
+        extraLimit: Double?
+    ) -> Bool {
+        if let planHint, !planHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
+        if extraCost != nil || extraLimit != nil {
+            return false
+        }
+
+        if containsSubscriptionMarker(in: root) {
+            return true
+        }
+
+        guard !windows.isEmpty else { return false }
+        let allUnused = windows.allSatisfy { $0.usedPercent <= 0.001 && $0.remainingPercent >= 99.999 }
+        let noResetDates = windows.allSatisfy { $0.resetAt == nil }
+        return allUnused && noResetDates
+    }
+
+    private static func containsSubscriptionMarker(in value: Any) -> Bool {
+        if let string = value as? String {
+            return looksLikeMissingClaudeSubscription(text: string)
+        }
+        if let dict = value as? [String: Any] {
+            return dict.contains { containsSubscriptionMarker(in: $0.key) || containsSubscriptionMarker(in: $0.value) }
+        }
+        if let array = value as? [Any] {
+            return array.contains(where: containsSubscriptionMarker)
+        }
+        return false
     }
 
     private func extractCookieValue(name: String, from header: String) -> String? {

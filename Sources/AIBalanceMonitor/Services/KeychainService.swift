@@ -7,6 +7,7 @@ final class KeychainService {
     static let legacyServiceName = "AIBalanceMonitor"
     private static let vaultAccount = "__credential_vault__"
     private static let legacyMigrationDefaultsKey = "AIPlanMonitor.Keychain.LegacyMigrationComplete"
+    private static let secureAccessPreparedDefaultsKey = "AIPlanMonitor.Keychain.SecureAccessPrepared"
 
     private let lock = NSLock()
     private let fileManager: FileManager
@@ -28,9 +29,6 @@ final class KeychainService {
         self.useFileStorage = storageURL != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         if useFileStorage {
             loadFromDisk()
-        } else {
-            loadSecureVaultIfNeeded()
-            migrateLegacyServiceOnceIfNeeded()
         }
     }
 
@@ -57,6 +55,12 @@ final class KeychainService {
         if useFileStorage {
             token = readFromDisk(service: normalizedService, account: account)
         } else {
+            guard hasPreparedSecureStoreAccess else {
+                lock.lock()
+                missingCache.insert(key)
+                lock.unlock()
+                return nil
+            }
             token = readFromVault(service: normalizedService, account: account)
                 ?? readCurrentServiceAndMigrateIfPossible(service: normalizedService, account: account)
         }
@@ -87,7 +91,15 @@ final class KeychainService {
             return persist(snapshot)
         }
 
-        return persistSecureSnapshot(snapshot)
+        let ok = persistSecureSnapshot(snapshot)
+        if ok {
+            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+        }
+        return ok
+    }
+
+    private var hasPreparedSecureStoreAccess: Bool {
+        useFileStorage || defaults.bool(forKey: Self.secureAccessPreparedDefaultsKey)
     }
 
     private func normalizedServiceName(_ service: String) -> String {
@@ -99,7 +111,7 @@ final class KeychainService {
     }
 
     private func readFromVault(service: String, account: String) -> String? {
-        loadSecureVaultIfNeeded()
+        loadSecureVaultIfNeeded(interactive: false)
 
         let key = cacheKey(service: service, account: account)
         lock.lock()
@@ -118,7 +130,7 @@ final class KeychainService {
         return token
     }
 
-    private func loadSecureVaultIfNeeded() {
+    private func loadSecureVaultIfNeeded(interactive: Bool) {
         lock.lock()
         if secureVaultLoaded {
             lock.unlock()
@@ -127,11 +139,11 @@ final class KeychainService {
         secureVaultLoaded = true
         lock.unlock()
 
-        if let snapshot = readVaultSnapshotFromSecureStore(), !snapshot.isEmpty {
+        if let snapshot = readVaultSnapshotFromSecureStore(interactive: interactive), !snapshot.isEmpty {
             mergeIntoCache(snapshot)
         }
 
-        if let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: false)?
+        if let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: interactive)?
             .filter({ $0.key != Self.vaultAccount && !$0.key.isEmpty && !$0.value.isEmpty }),
            !currentItems.isEmpty {
             let normalized = currentItems.reduce(into: [String: String]()) { partialResult, entry in
@@ -141,15 +153,67 @@ final class KeychainService {
         }
     }
 
-    private func migrateLegacyServiceOnceIfNeeded() {
+    func prepareSecureStoreAccess() -> Bool {
+        loadSecureVaultIfNeeded(interactive: true)
+        migrateLegacyServiceOnceIfNeeded(interactive: true)
+        if readVaultSnapshotFromSecureStore(interactive: true) != nil {
+            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+            return true
+        }
+        let ok = persistSecureSnapshot(tokenCache)
+        if ok {
+            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+        }
+        return ok
+    }
+
+    func isSecureStoreReady() -> Bool {
+        guard !useFileStorage else {
+            return true
+        }
+        guard hasPreparedSecureStoreAccess else {
+            return false
+        }
+        loadSecureVaultIfNeeded(interactive: false)
+        return readVaultSnapshotFromSecureStore(interactive: false) != nil
+    }
+
+    func resetAllStoredCredentials() {
+        guard !useFileStorage else {
+            lock.lock()
+            tokenCache.removeAll()
+            missingCache.removeAll()
+            secureVaultLoaded = false
+            lock.unlock()
+            if let storageURL {
+                try? fileManager.removeItem(at: storageURL)
+            }
+            return
+        }
+
+        deleteAllSecureStoreItems(service: Self.defaultServiceName)
+        deleteAllSecureStoreItems(service: Self.legacyServiceName)
+        defaults.removeObject(forKey: Self.legacyMigrationDefaultsKey)
+        defaults.removeObject(forKey: Self.secureAccessPreparedDefaultsKey)
+
+        lock.lock()
+        tokenCache.removeAll()
+        missingCache.removeAll()
+        secureVaultLoaded = false
+        lock.unlock()
+    }
+
+    private func migrateLegacyServiceOnceIfNeeded(interactive: Bool) {
         guard !defaults.bool(forKey: Self.legacyMigrationDefaultsKey) else {
             return
         }
 
-        guard let legacyItems = readAllFromSecureStore(service: Self.legacyServiceName, interactive: true)?
+        guard let legacyItems = readAllFromSecureStore(service: Self.legacyServiceName, interactive: interactive)?
             .filter({ !$0.key.isEmpty && !$0.value.isEmpty }),
            !legacyItems.isEmpty else {
-            defaults.set(true, forKey: Self.legacyMigrationDefaultsKey)
+            if interactive {
+                defaults.set(true, forKey: Self.legacyMigrationDefaultsKey)
+            }
             return
         }
 
@@ -196,11 +260,11 @@ final class KeychainService {
         }
     }
 
-    private func readVaultSnapshotFromSecureStore() -> [String: String]? {
+    private func readVaultSnapshotFromSecureStore(interactive: Bool) -> [String: String]? {
         guard let data = readDataFromSecureStore(
             service: Self.defaultServiceName,
             account: Self.vaultAccount,
-            interactive: true
+            interactive: interactive
         ) else {
             return nil
         }
@@ -320,6 +384,14 @@ final class KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    private func deleteAllSecureStoreItems(service: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
         ]
         SecItemDelete(query as CFDictionary)
     }

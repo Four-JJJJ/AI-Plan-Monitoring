@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Observation
+import UserNotifications
 
 @MainActor
 @Observable
@@ -21,6 +23,11 @@ final class AppViewModel {
     private(set) var codexSwitchFeedback: [CodexSlotID: CodexSwitchFeedback] = [:]
     private(set) var errors: [String: String] = [:]
     private(set) var lastUpdatedAt: Date?
+    private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
+    private(set) var secureStorageReady = false
+    private(set) var fullDiskAccessGranted = false
+    private(set) var fullDiskAccessRelevant = false
+    private(set) var fullDiskAccessRequested = false
 
     private var pollTasks: [String: Task<Void, Never>] = [:]
     private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
@@ -28,9 +35,16 @@ final class AppViewModel {
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
     private var hasStarted = false
+    private var lastPermissionStatusRefreshAt = Date.distantPast
+    private var notificationPermissionPollingTask: Task<Void, Never>?
 
     init() {
-        self.config = (try? configStore.load()) ?? .default
+        var loadedConfig = (try? configStore.load()) ?? .default
+        if loadedConfig.simplifiedRelayConfig == false {
+            loadedConfig.simplifiedRelayConfig = true
+            try? configStore.save(loadedConfig)
+        }
+        self.config = loadedConfig
         self.providerFactory = ProviderFactory(keychain: keychain)
         self.codexSlots = codexSlotStore.visibleSlots()
         self.codexProfiles = []
@@ -39,13 +53,14 @@ final class AppViewModel {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
             try? configStore.save(self.config)
         }
-        notifications.requestPermissionIfNeeded()
         syncCodexProfilesCurrentState()
+        refreshPermissionStatuses(force: true)
     }
 
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
+        refreshPermissionStatuses(force: true)
         restartPolling()
     }
 
@@ -86,6 +101,34 @@ final class AppViewModel {
 
     var statusBarProviderID: String? {
         config.statusBarProviderID
+    }
+
+    var hasNotificationPermission: Bool {
+        switch notificationAuthorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .notDetermined, .denied:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    var shouldShowPermissionGuide: Bool {
+        let hasEnabledProviders = config.providers.contains(where: \.enabled)
+        guard !hasEnabledProviders else { return false }
+        if !hasNotificationPermission { return true }
+        if !secureStorageReady { return true }
+        if (fullDiskAccessRelevant || fullDiskAccessRequested) && !fullDiskAccessGranted { return true }
+        return true
+    }
+
+    var canRunLocalDiscoveryFromOnboarding: Bool {
+        guard secureStorageReady else { return false }
+        if fullDiskAccessRelevant || fullDiskAccessRequested {
+            return fullDiskAccessGranted
+        }
+        return true
     }
 
     func setLanguage(_ language: AppLanguage) {
@@ -130,10 +173,13 @@ final class AppViewModel {
 
     func statusBarProvider() -> ProviderDescriptor? {
         if let id = config.statusBarProviderID,
-           let selected = config.providers.first(where: { $0.id == id }) {
+           let selected = config.providers.first(where: { $0.id == id && $0.enabled }) {
             return selected
         }
-        return config.providers.first(where: { $0.id == AppConfig.defaultStatusBarProviderID(from: config.providers) })
+        guard let fallbackID = AppConfig.defaultStatusBarProviderID(from: config.providers) else {
+            return nil
+        }
+        return config.providers.first(where: { $0.id == fallbackID })
     }
 
     func text(_ key: L10nKey) -> String {
@@ -216,10 +262,149 @@ final class AppViewModel {
 
     func removeCodexProfile(slotID: CodexSlotID) {
         syncCodexProfilesCurrentState()
-        guard codexProfiles.first(where: { $0.slotID == slotID })?.isCurrentSystemAccount != true else {
+        codexProfiles = codexProfileStore.removeProfile(slotID: slotID)
+    }
+
+    func requestNotificationPermission() {
+        notifications.requestPermissionIfNeeded()
+        notificationPermissionPollingTask?.cancel()
+        notificationPermissionPollingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<20 {
+                if Task.isCancelled { break }
+                let status = await self.fetchNotificationAuthorizationStatus()
+                self.notificationAuthorizationStatus = status
+                if status != .notDetermined {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            self.refreshPermissionStatuses(force: true)
+        }
+    }
+
+    @discardableResult
+    func prepareSecureStorageAccess() -> Bool {
+        let ok = keychain.prepareSecureStoreAccess()
+        refreshPermissionStatuses(force: true)
+        return ok
+    }
+
+    func openFullDiskAccessSettings() {
+        fullDiskAccessRequested = true
+        openSystemSettingsApplication()
+    }
+
+    private func openSystemSettingsApplication() {
+        let bundleIDs = [
+            "com.apple.systemsettings",
+            "com.apple.systempreferences"
+        ]
+
+        for bundleID in bundleIDs {
+            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+                continue
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, _ in }
             return
         }
-        codexProfiles = codexProfileStore.removeProfile(slotID: slotID)
+    }
+
+    func refreshPermissionStatusesIfNeeded(referenceDate: Date = Date()) {
+        guard referenceDate.timeIntervalSince(lastPermissionStatusRefreshAt) >= 5 else { return }
+        refreshPermissionStatuses(force: true)
+    }
+
+    func refreshPermissionStatusesNow() {
+        refreshPermissionStatuses(force: true)
+    }
+
+    func resetLocalAppData() {
+        notificationPermissionPollingTask?.cancel()
+        notificationPermissionPollingTask = nil
+        pollTasks.values.forEach { $0.cancel() }
+        pollTasks.removeAll()
+        codexFeedbackTasks.values.forEach { $0.cancel() }
+        codexFeedbackTasks.removeAll()
+        codexSwitchingSlots.removeAll()
+        codexSwitchFeedback.removeAll()
+        snapshots.removeAll()
+        errors.removeAll()
+        consecutiveFailures.removeAll()
+        activeAlerts.removeAll()
+        lastUpdatedAt = nil
+
+        launchAtLoginService.reset()
+        keychain.resetAllStoredCredentials()
+        codexProfileStore.reset()
+        codexSlotStore.reset()
+        try? configStore.reset()
+
+        config = .default
+        codexSlots = []
+        codexProfiles = []
+        notificationAuthorizationStatus = .notDetermined
+        secureStorageReady = false
+        fullDiskAccessGranted = false
+        fullDiskAccessRelevant = false
+        fullDiskAccessRequested = false
+        lastPermissionStatusRefreshAt = .distantPast
+        hasStarted = false
+        start()
+        refreshPermissionStatuses(force: true)
+    }
+
+    func discoverLocalProviders() async -> String {
+        let candidates = config.providers.filter { $0.family == .official }
+        guard !candidates.isEmpty else {
+            return text(.localDiscoveryNothingFound)
+        }
+
+        var discoveredIDs: [String] = []
+        var discoveredNames: [String] = []
+
+        for descriptor in candidates {
+            let provider = providerFactory.makeProvider(for: descriptor)
+            do {
+                let fetched = try await provider.fetch(forceRefresh: true)
+                if descriptor.type == .codex {
+                    let snapshot = markCodexSnapshotActive(fetched)
+                    codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+                    snapshots[descriptor.id] = snapshot
+                } else {
+                    snapshots[descriptor.id] = fetched
+                }
+
+                errors.removeValue(forKey: descriptor.id)
+                consecutiveFailures[descriptor.id] = 0
+                lastUpdatedAt = Date()
+
+                if let index = config.providers.firstIndex(where: { $0.id == descriptor.id }) {
+                    config.providers[index].enabled = true
+                }
+                discoveredIDs.append(descriptor.id)
+                discoveredNames.append(displayNameForDiscovery(descriptor))
+            } catch {
+                continue
+            }
+        }
+
+        let currentStatusProviderIsEnabled = config.statusBarProviderID.flatMap { selectedID in
+            config.providers.first(where: { $0.id == selectedID && $0.enabled })
+        } != nil
+        if !currentStatusProviderIsEnabled {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
+
+        if discoveredIDs.isEmpty {
+            return text(.localDiscoveryNothingFound)
+        }
+
+        try? configStore.save(config)
+        restartPolling()
+        return Localizer.localDiscoveryFoundBody(providerNames: discoveredNames, language: config.language)
     }
 
     func switchCodexProfile(slotID: CodexSlotID) async {
@@ -294,6 +479,82 @@ final class AppViewModel {
         }
     }
 
+    private func refreshPermissionStatuses(force: Bool) {
+        if !force, Date().timeIntervalSince(lastPermissionStatusRefreshAt) < 5 {
+            return
+        }
+        lastPermissionStatusRefreshAt = Date()
+        secureStorageReady = keychain.isSecureStoreReady()
+
+        let fullDiskProbe = probeFullDiskAccess()
+        fullDiskAccessGranted = fullDiskProbe.isGranted
+        fullDiskAccessRelevant = fullDiskProbe.isRelevant
+
+        notifications.refreshAuthorizationStatus { [weak self] status in
+            Task { @MainActor in
+                self?.notificationAuthorizationStatus = status
+            }
+        }
+    }
+
+    private func fetchNotificationAuthorizationStatus() async -> UNAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            notifications.refreshAuthorizationStatus { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    private func probeFullDiskAccess() -> (isGranted: Bool, isRelevant: Bool) {
+        let home = NSHomeDirectory()
+        let fileManager = FileManager.default
+        let fileCandidates = [
+            "\(home)/Library/Application Support/com.apple.TCC/TCC.db",
+            "\(home)/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.sqlite",
+            "\(home)/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/Cookies/Cookies.sqlite",
+            "\(home)/Library/Application Support/Google/Chrome/Default/Network/Cookies",
+            "\(home)/Library/Application Support/Arc/User Data/Default/Network/Cookies",
+            "\(home)/Library/Application Support/Microsoft Edge/Default/Network/Cookies",
+            "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/Default/Network/Cookies",
+            "\(home)/Library/Application Support/Chromium/Default/Network/Cookies"
+        ]
+        let directoryCandidates = [
+            "\(home)/Library/Application Support/Google/Chrome",
+            "\(home)/Library/Application Support/Arc/User Data",
+            "\(home)/Library/Application Support/Microsoft Edge",
+            "\(home)/Library/Application Support/BraveSoftware/Brave-Browser",
+            "\(home)/Library/Application Support/Chromium",
+            "\(home)/Library/Containers/com.apple.Safari/Data/Library/Cookies",
+            "\(home)/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData/Default/Cookies"
+        ]
+
+        let existingFiles = fileCandidates.filter { fileManager.fileExists(atPath: $0) }
+        let existingDirectories = directoryCandidates.filter { fileManager.fileExists(atPath: $0) }
+        guard !existingFiles.isEmpty || !existingDirectories.isEmpty else {
+            return (false, false)
+        }
+
+        for path in existingFiles {
+            if fileManager.isReadableFile(atPath: path),
+               let handle = FileHandle(forReadingAtPath: path) {
+                do {
+                    _ = try handle.read(upToCount: 1)
+                } catch {
+                    // Keep probing additional protected files.
+                }
+                try? handle.close()
+                return (true, true)
+            }
+        }
+
+        for path in existingDirectories {
+            if (try? fileManager.contentsOfDirectory(atPath: path)) != nil {
+                return (true, true)
+            }
+        }
+        return (false, true)
+    }
+
     func setEnabled(_ enabled: Bool, providerID: String) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }) else { return }
         if config.providers[idx].enabled == enabled { return }
@@ -320,6 +581,8 @@ final class AppViewModel {
 
         if !enabled, config.statusBarProviderID == providerID {
             config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        } else if enabled, config.statusBarProviderID == nil {
+            config.statusBarProviderID = providerID
         }
         persistAndRestart()
     }
@@ -666,7 +929,8 @@ final class AppViewModel {
     func updateOfficialProviderSettings(
         providerID: String,
         sourceMode: OfficialSourceMode,
-        webMode: OfficialWebMode
+        webMode: OfficialWebMode,
+        quotaDisplayMode: OfficialQuotaDisplayMode? = nil
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
               config.providers[idx].family == .official else {
@@ -677,6 +941,9 @@ final class AppViewModel {
         var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type)
         official.sourceMode = sourceMode
         official.webMode = webMode
+        if let quotaDisplayMode {
+            official.quotaDisplayMode = quotaDisplayMode
+        }
         provider.officialConfig = official
         config.providers[idx] = provider
         persistAndRestart()
@@ -703,6 +970,35 @@ final class AppViewModel {
     private func persistAndRestart() {
         try? configStore.save(config)
         restartPolling()
+    }
+
+    private func displayNameForDiscovery(_ descriptor: ProviderDescriptor) -> String {
+        switch descriptor.type {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude"
+        case .gemini:
+            return "Gemini"
+        case .copilot:
+            return "Copilot"
+        case .zai:
+            return "Z.ai"
+        case .amp:
+            return "Amp"
+        case .cursor:
+            return "Cursor"
+        case .jetbrains:
+            return "JetBrains"
+        case .kiro:
+            return "Kiro"
+        case .windsurf:
+            return "Windsurf"
+        case .kimi:
+            return "Kimi"
+        case .relay, .open, .dragon:
+            return descriptor.name
+        }
     }
 
     private func normalizedCredential(_ token: String, kind: AuthKind) -> String {
@@ -933,7 +1229,12 @@ final class AppViewModel {
 
     private func handleLowRemainingAlerts(for descriptor: ProviderDescriptor, snapshot: UsageSnapshot) {
         let genericKey = "low:\(descriptor.id)"
-        let lowWindows = AlertEngine.lowQuotaWindows(snapshot: snapshot, rule: descriptor.threshold)
+        let displaysUsedQuota = descriptor.displaysUsedQuota
+        let lowWindows = AlertEngine.lowQuotaWindows(
+            snapshot: snapshot,
+            rule: descriptor.threshold,
+            displaysUsedQuota: displaysUsedQuota
+        )
 
         if !lowWindows.isEmpty {
             activeAlerts.remove(genericKey)
@@ -951,8 +1252,14 @@ final class AppViewModel {
                         body: Localizer.lowQuotaWindowBody(
                             providerName: descriptor.name,
                             windowTitle: window.title,
-                            remaining: String(Int(window.remainingPercent.rounded())),
-                            language: config.language
+                            remaining: String(
+                                Int(
+                                    (displaysUsedQuota ? window.usedPercent : window.remainingPercent)
+                                        .rounded()
+                                )
+                            ),
+                            language: config.language,
+                            displaysUsedQuota: displaysUsedQuota
                         ),
                         identifier: key
                     )
@@ -966,15 +1273,20 @@ final class AppViewModel {
             activeAlerts.remove(existingKey)
         }
 
-        if AlertEngine.shouldAlertLowRemaining(snapshot: snapshot, rule: descriptor.threshold) {
+        if AlertEngine.shouldAlertLowRemaining(
+            snapshot: snapshot,
+            rule: descriptor.threshold,
+            displaysUsedQuota: displaysUsedQuota
+        ) {
             if !activeAlerts.contains(genericKey) {
                 notifications.notify(
                     title: text(.lowBalanceWarning),
                     body: Localizer.lowBalanceBody(
                         providerName: descriptor.name,
-                        remaining: format(snapshot.remaining),
+                        remaining: format(displaysUsedQuota ? snapshot.used : snapshot.remaining),
                         unit: snapshot.unit,
-                        language: config.language
+                        language: config.language,
+                        displaysUsedQuota: displaysUsedQuota
                     ),
                     identifier: genericKey
                 )

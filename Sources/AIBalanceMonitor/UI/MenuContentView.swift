@@ -4,6 +4,9 @@ import SwiftUI
 struct MenuContentView: View {
     @Bindable var viewModel: AppViewModel
     @State private var now = Date()
+    @State private var onboardingDiscoveryMessage: String?
+    @State private var onboardingDiscoveryIsError = false
+    @State private var onboardingDiscoveryInFlight = false
 
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let panelBackground = Color(hex: 0x232325)
@@ -24,6 +27,9 @@ struct MenuContentView: View {
         .environment(\.colorScheme, .dark)
         .onReceive(clock) { value in
             now = value
+            if viewModel.shouldShowPermissionGuide {
+                viewModel.refreshPermissionStatusesIfNeeded(referenceDate: value)
+            }
         }
     }
 
@@ -45,6 +51,10 @@ struct MenuContentView: View {
 
     private var cards: some View {
         VStack(spacing: 8) {
+            if viewModel.shouldShowPermissionGuide {
+                permissionGuideCard
+            }
+
             if let codexProvider = codexProvider {
                 let slots = viewModel.codexSlotViewModels()
                 if slots.isEmpty {
@@ -60,6 +70,161 @@ struct MenuContentView: View {
                 providerCard(provider)
             }
         }
+    }
+
+    private var permissionGuideCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(viewModel.text(.permissionsTitle))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+
+            Text(viewModel.text(.permissionsPrivacyPromise))
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.68))
+                .fixedSize(horizontal: false, vertical: true)
+
+            permissionGuideRow(
+                title: viewModel.text(.permissionNotificationsTitle),
+                hint: viewModel.text(.permissionNotificationsHint),
+                statusText: viewModel.hasNotificationPermission ? grantedStatusText : pendingStatusText,
+                statusColor: viewModel.hasNotificationPermission ? Color(hex: 0x51DB42) : Color(hex: 0xD87E3E),
+                actionTitle: viewModel.hasNotificationPermission ? nil : viewModel.text(.permissionNotificationsAction),
+                action: viewModel.hasNotificationPermission ? nil : { viewModel.requestNotificationPermission() }
+            )
+
+            permissionGuideRow(
+                title: viewModel.text(.permissionKeychainTitle),
+                hint: viewModel.text(.permissionKeychainHint),
+                statusText: viewModel.secureStorageReady ? grantedStatusText : pendingStatusText,
+                statusColor: viewModel.secureStorageReady ? Color(hex: 0x51DB42) : Color(hex: 0xD87E3E),
+                actionTitle: viewModel.secureStorageReady ? nil : viewModel.text(.permissionKeychainAction),
+                action: viewModel.secureStorageReady ? nil : { _ = viewModel.prepareSecureStorageAccess() }
+            )
+
+            if viewModel.fullDiskAccessRelevant || viewModel.fullDiskAccessRequested {
+                permissionGuideRow(
+                    title: viewModel.text(.permissionFullDiskTitle),
+                    hint: viewModel.text(.permissionFullDiskHint),
+                    statusText: viewModel.fullDiskAccessGranted
+                        ? grantedStatusText
+                        : (viewModel.fullDiskAccessRequested ? waitingStatusText : pendingStatusText),
+                    statusColor: viewModel.fullDiskAccessGranted
+                        ? Color(hex: 0x51DB42)
+                        : Color(hex: 0xD87E3E),
+                    actionTitle: viewModel.fullDiskAccessGranted ? nil : viewModel.text(.permissionFullDiskAction),
+                    action: viewModel.fullDiskAccessGranted ? nil : { viewModel.openFullDiskAccessSettings() }
+                )
+            }
+
+            if viewModel.canRunLocalDiscoveryFromOnboarding {
+                permissionGuideRow(
+                    title: viewModel.text(.localDiscoveryTitle),
+                    hint: viewModel.text(.localDiscoveryHint),
+                    statusText: onboardingDiscoveryInFlight
+                        ? waitingStatusText
+                        : (onboardingDiscoveryMessage == nil ? readyStatusText : completedStatusText),
+                    statusColor: onboardingDiscoveryInFlight
+                        ? Color(hex: 0xD87E3E)
+                        : Color(hex: 0x51DB42),
+                    actionTitle: onboardingDiscoveryInFlight ? nil : viewModel.text(.localDiscoveryAction),
+                    action: onboardingDiscoveryInFlight ? nil : {
+                        onboardingDiscoveryMessage = viewModel.text(.localDiscoveryScanning)
+                        onboardingDiscoveryIsError = false
+                        onboardingDiscoveryInFlight = true
+                        Task {
+                            let result = await viewModel.discoverLocalProviders()
+                            await MainActor.run {
+                                onboardingDiscoveryMessage = result
+                                onboardingDiscoveryIsError = result == viewModel.text(.localDiscoveryNothingFound)
+                                onboardingDiscoveryInFlight = false
+                            }
+                        }
+                    }
+                )
+            }
+
+            if let onboardingDiscoveryMessage, !onboardingDiscoveryMessage.isEmpty {
+                Text(onboardingDiscoveryMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(onboardingDiscoveryIsError ? Color(hex: 0xD83E3E) : Color(hex: 0x51DB42))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func permissionGuideRow(
+        title: String,
+        hint: String,
+        statusText: String,
+        statusColor: Color,
+        actionTitle: String?,
+        action: (() -> Void)?
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(statusText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(statusColor.opacity(0.95))
+                        )
+                }
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.60))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(Color(hex: 0x2F7CF6))
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
+
+    private var grantedStatusText: String {
+        viewModel.language == .zhHans ? "已授权" : "Allowed"
+    }
+
+    private var pendingStatusText: String {
+        viewModel.language == .zhHans ? "待授权" : "Pending"
+    }
+
+    private var waitingStatusText: String {
+        viewModel.language == .zhHans ? "待确认" : "Waiting"
+    }
+
+    private var readyStatusText: String {
+        viewModel.language == .zhHans ? "可开始" : "Ready"
+    }
+
+    private var completedStatusText: String {
+        viewModel.language == .zhHans ? "已完成" : "Done"
     }
 
     @ViewBuilder
@@ -129,7 +294,7 @@ struct MenuContentView: View {
 
     private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
         metrics.map { metric in
-            let percent = disconnected ? nil : metric.percent
+            let percent = disconnected ? nil : metric.displayPercent
             let displayPercent = percent.map { Int($0.rounded()) }
             let valueText = displayPercent.map { "\($0)%" } ?? "-"
             let resetLabel: String
@@ -146,7 +311,7 @@ struct MenuContentView: View {
                 valueText: valueText,
                 resetText: resetLabel,
                 percent: (displayPercent ?? 0) > 0 ? percent : 0,
-                barColor: percentageBarColor(percent, displayPercent: displayPercent)
+                barColor: percentageBarColor(metric.healthPercent, displayPercent: Int(metric.healthPercent.rounded()))
             )
         }
     }
@@ -156,7 +321,7 @@ struct MenuContentView: View {
             return CardStatus(text: viewModel.text(.statusDisconnected), color: Color(hex: 0xD83E3E))
         }
 
-        let displayedMinimum = metrics.map { Int($0.percent.rounded()) }.min() ?? 0
+        let displayedMinimum = metrics.map { Int($0.healthPercent.rounded()) }.min() ?? 0
         if displayedMinimum <= 0 {
             return CardStatus(text: viewModel.text(.statusExhausted), color: Color(hex: 0xD83E3E))
         }
@@ -445,10 +610,12 @@ struct MenuContentView: View {
             return snapshot.quotaWindows
                 .sorted { metricRank($0.kind) < metricRank($1.kind) }
                 .map {
-                    QuotaMetric(
+                    let displayPercent = provider.displaysUsedQuota ? clamp($0.usedPercent) : clamp($0.remainingPercent)
+                    return QuotaMetric(
                         id: $0.id,
                         title: metricTitle(for: $0, provider: provider),
-                        percent: clamp($0.remainingPercent),
+                        displayPercent: displayPercent,
+                        healthPercent: clamp($0.remainingPercent),
                         resetAt: $0.resetAt
                     )
                 }
@@ -460,47 +627,47 @@ struct MenuContentView: View {
         switch provider.type {
         case .codex, .claude, .kimi:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-5h", title: viewModel.text(.quotaFiveHour), percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: viewModel.text(.quotaWeekly), percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-5h", title: placeholderMetricTitle(viewModel.text(.quotaFiveHour), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .gemini:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-pro", title: "Pro", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-flash", title: "Flash", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-pro", title: "Pro", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-flash", title: "Flash", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .copilot:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-premium", title: "Premium", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-chat", title: "Chat", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-premium", title: "Premium", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-chat", title: "Chat", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .zai:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-session", title: viewModel.text(.quotaFiveHour), percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: viewModel.text(.quotaWeekly), percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-session", title: placeholderMetricTitle(viewModel.text(.quotaFiveHour), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .amp:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-free", title: "Free", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-credits", title: "Credits", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-free", title: "Free", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-credits", title: "Credits", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .cursor:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Monthly", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-ondemand", title: "On-Demand", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Monthly", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-ondemand", title: "On-Demand", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .jetbrains:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-quota", title: "Quota", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-quota", title: "Quota", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .kiro:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Credits", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-bonus", title: "Bonus", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-monthly", title: "Credits", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-bonus", title: "Bonus", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .windsurf:
             return [
-                QuotaMetric(id: "\(provider.id)-placeholder-prompt", title: "Prompt", percent: 0, resetAt: nil),
-                QuotaMetric(id: "\(provider.id)-placeholder-flex", title: "Flex", percent: 0, resetAt: nil)
+                QuotaMetric(id: "\(provider.id)-placeholder-prompt", title: "Prompt", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-flex", title: "Flex", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .relay, .open, .dragon:
             return []
@@ -520,18 +687,31 @@ struct MenuContentView: View {
     }
 
     private func metricTitle(for window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
+        let baseTitle: String
         switch window.kind {
         case .session:
-            return viewModel.text(.quotaFiveHour)
+            baseTitle = viewModel.text(.quotaFiveHour)
         case .weekly:
-            return viewModel.text(.quotaWeekly)
+            baseTitle = viewModel.text(.quotaWeekly)
         default:
             if provider.type == .kimi,
                window.kind == .custom,
                window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "overall" {
-                return viewModel.text(.quotaWeekly)
+                baseTitle = viewModel.text(.quotaWeekly)
+            } else {
+                baseTitle = window.title
             }
-            return window.title
+        }
+        return placeholderMetricTitle(baseTitle, provider: provider)
+    }
+
+    private func placeholderMetricTitle(_ baseTitle: String, provider: ProviderDescriptor) -> String {
+        guard provider.displaysUsedQuota else { return baseTitle }
+        switch viewModel.language {
+        case .zhHans:
+            return "\(baseTitle)已用"
+        case .en:
+            return "\(baseTitle) used"
         }
     }
 
@@ -869,7 +1049,8 @@ private struct PercentageMetricDisplay: Identifiable {
 private struct QuotaMetric: Identifiable {
     let id: String
     let title: String
-    let percent: Double
+    let displayPercent: Double
+    let healthPercent: Double
     let resetAt: Date?
 }
 

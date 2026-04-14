@@ -9,9 +9,15 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private var refreshTimer: Timer?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
-    private let statusIconSize: CGFloat = 16
+    private let statusIconSize: CGFloat = 18
     private let statusSpacing: CGFloat = 4
-    private lazy var statusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+    private let protectedOutsideClickBundleIDs: Set<String> = [
+        "com.apple.securityagent",
+        "com.apple.systemsettings",
+        "com.apple.systempreferences",
+        "com.apple.preference.security.remoteservice"
+    ]
+    private lazy var statusFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     private lazy var codexStatusImage: NSImage? = {
         if let image = bundledImage(named: "codex_icon", ext: "png") ?? bundledImage(named: "codex_icon", ext: "svg") {
             image.size = NSSize(width: statusIconSize, height: statusIconSize)
@@ -36,6 +42,40 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         }
         return nil
     }()
+    private lazy var appStatusImage: NSImage? = {
+        if let image = NSApp.applicationIconImage?.copy() as? NSImage, image.isValid {
+            image.size = NSSize(width: statusIconSize, height: statusIconSize)
+            image.isTemplate = false
+            return image
+        }
+        let workspaceIcon = NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path)
+        if workspaceIcon.isValid {
+            workspaceIcon.size = NSSize(width: statusIconSize, height: statusIconSize)
+            workspaceIcon.isTemplate = false
+            return workspaceIcon
+        }
+        if let image = bundledMainImage(named: "AppIcon", ext: "icns") {
+            image.size = NSSize(width: statusIconSize, height: statusIconSize)
+            image.isTemplate = false
+            return image
+        }
+        if let image = bundledImage(named: "AppIcon", ext: "icns") {
+            image.size = NSSize(width: statusIconSize, height: statusIconSize)
+            image.isTemplate = false
+            return image
+        }
+        if let image = NSApp.applicationIconImage?.copy() as? NSImage {
+            image.size = NSSize(width: statusIconSize, height: statusIconSize)
+            image.isTemplate = false
+            return image
+        }
+        if let image = bundledImage(named: "app_icon_source", ext: "png") {
+            image.size = NSSize(width: statusIconSize, height: statusIconSize)
+            image.isTemplate = false
+            return image
+        }
+        return nil
+    }()
 
     init(viewModel: AppViewModel) {
         self.viewModel = viewModel
@@ -47,6 +87,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         viewModel.start()
         refreshStatusDisplay()
         startRefreshTimer()
+        showInitialPopoverIfNeeded()
     }
 
     private func configureStatusItem() {
@@ -54,7 +95,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
         button.font = statusFont
-        button.imagePosition = .imageOnly
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+        button.imageHugsTitle = false
         button.target = self
         button.action = #selector(togglePopover(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -66,7 +109,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         controller.view.frame = NSRect(x: 0, y: 0, width: 384, height: 640)
         popover.contentViewController = controller
         popover.contentSize = NSSize(width: 384, height: 640)
-        popover.behavior = .transient
+        popover.behavior = .applicationDefined
         popover.animates = false
         popover.delegate = self
         popover.appearance = NSAppearance(named: .darkAqua)
@@ -75,13 +118,14 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private func refreshStatusDisplay() {
         guard let button = statusItem.button else { return }
         let statusProvider = viewModel.statusBarProvider()
-        button.image = composedStatusImage(
-            icon: image(for: statusProvider),
-            text: statusText(for: statusProvider),
+        let text = statusText(for: statusProvider)
+        button.image = image(for: statusProvider)
+        button.image?.size = NSSize(width: statusIconSize, height: statusIconSize)
+        button.title = ""
+        button.attributedTitle = statusAttributedTitle(
+            for: text,
             appearance: button.effectiveAppearance
         )
-        button.title = ""
-        button.attributedTitle = NSAttributedString(string: "")
     }
 
     @objc
@@ -107,6 +151,19 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             Task { @MainActor in
                 self?.refreshStatusDisplay()
             }
+        }
+    }
+
+    private func showInitialPopoverIfNeeded() {
+        guard viewModel.shouldShowPermissionGuide else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self,
+                  self.viewModel.shouldShowPermissionGuide,
+                  !self.popover.isShown,
+                  let button = self.statusItem.button else { return }
+            self.refreshStatusDisplay()
+            self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            self.startOutsideClickMonitoring()
         }
     }
 
@@ -173,55 +230,37 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         return String(format: "%.2f", value)
     }
 
-    private func composedStatusImage(icon: NSImage?, text: String, appearance: NSAppearance) -> NSImage? {
-        let hasText = !text.isEmpty
-        guard icon != nil || hasText else { return nil }
-
+    private func statusTextAttributes(for appearance: NSAppearance) -> [NSAttributedString.Key: Any] {
         let isDarkAppearance = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let textColor: NSColor = isDarkAppearance
             ? NSColor.white.withAlphaComponent(0.95)
             : NSColor.labelColor
-        let textAttributes: [NSAttributedString.Key: Any] = [
+        return [
             .font: statusFont,
             .foregroundColor: textColor
         ]
-        let textSize = hasText
-            ? (text as NSString).size(withAttributes: textAttributes)
-            : .zero
-        let iconSize = icon?.size ?? .zero
+    }
 
-        let width = iconSize.width
-            + ((icon != nil && hasText) ? statusSpacing : 0)
-            + textSize.width
-        let height = max(iconSize.height, textSize.height)
-
-        let canvasSize = NSSize(width: ceil(width), height: ceil(height))
-        let canvas = NSImage(size: canvasSize)
-        canvas.lockFocus()
-
-        var cursorX: CGFloat = 0
-        if let icon {
-            let iconY = floor((canvasSize.height - iconSize.height) / 2)
-            icon.draw(in: NSRect(x: cursorX, y: iconY, width: iconSize.width, height: iconSize.height))
-            cursorX += iconSize.width
-            if hasText {
-                cursorX += statusSpacing
-            }
+    private func statusAttributedTitle(for text: String, appearance: NSAppearance) -> NSAttributedString {
+        guard !text.isEmpty else {
+            return NSAttributedString(string: "")
         }
 
-        if hasText {
-            let textY = floor((canvasSize.height - textSize.height) / 2)
-            (text as NSString).draw(at: NSPoint(x: cursorX, y: textY), withAttributes: textAttributes)
-        }
-
-        canvas.unlockFocus()
-        canvas.isTemplate = false
-        return canvas
+        let result = NSMutableAttributedString()
+        let spacer = NSTextAttachment()
+        spacer.bounds = NSRect(x: 0, y: 0, width: statusSpacing, height: 1)
+        result.append(NSAttributedString(attachment: spacer))
+        result.append(NSAttributedString(
+            string: text,
+            attributes: statusTextAttributes(for: appearance)
+        ))
+        return result
     }
 
     private func image(for provider: ProviderDescriptor?) -> NSImage? {
         guard let provider else {
-            let fallback = NSImage(systemSymbolName: "terminal.fill", accessibilityDescription: "Provider")
+            if let appStatusImage { return appStatusImage }
+            let fallback = NSImage(systemSymbolName: "app.badge", accessibilityDescription: "AI Plan Monitor")
             fallback?.isTemplate = true
             return fallback
         }
@@ -246,6 +285,13 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     private func bundledImage(named name: String, ext: String) -> NSImage? {
         guard let url = Bundle.module.url(forResource: name, withExtension: ext) else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }
+
+    private func bundledMainImage(named name: String, ext: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: ext) else {
             return nil
         }
         return NSImage(contentsOf: url)
@@ -279,11 +325,24 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     private func closePopoverIfNeededForOutsideClick() {
         guard popover.isShown else { return }
+        guard !isPermissionPromptForegroundApp() else { return }
         let mouseLocation = NSEvent.mouseLocation
         if isInsidePopover(mouseLocation) || isInsideStatusItem(mouseLocation) {
             return
         }
         popover.performClose(nil)
+    }
+
+    private func isPermissionPromptForegroundApp() -> Bool {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased() else {
+            return false
+        }
+        if protectedOutsideClickBundleIDs.contains(bundleID) {
+            return true
+        }
+        return bundleID.contains("securityagent")
+            || bundleID.contains("systemsettings")
+            || bundleID.contains("systempreferences")
     }
 
     private func isInsidePopover(_ screenPoint: NSPoint) -> Bool {

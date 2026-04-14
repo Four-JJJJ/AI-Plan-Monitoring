@@ -97,6 +97,7 @@ final class CodexAccountSlotStore {
     }
 
     private let fileURL: URL
+    private let fileManager: FileManager
     private let staleInterval: TimeInterval
     private var slots: [CodexAccountSlot]
 
@@ -105,6 +106,7 @@ final class CodexAccountSlotStore {
         staleInterval: TimeInterval = 7 * 24 * 60 * 60,
         fileURL: URL? = nil
     ) {
+        self.fileManager = fileManager
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -115,6 +117,11 @@ final class CodexAccountSlotStore {
         self.staleInterval = staleInterval
         self.slots = []
         self.slots = load()
+    }
+
+    func reset() {
+        slots = []
+        try? fileManager.removeItem(at: fileURL)
     }
 
     func visibleSlots(now: Date = Date()) -> [CodexAccountSlot] {

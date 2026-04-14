@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="AI Plan Monitor"
 EXECUTABLE_NAME="AIBalanceMonitor"
+BUNDLE_ID="com.aiplanmonitor.app"
 DIST_DIR="$ROOT_DIR/dist"
 TMP_ROOT="$(mktemp -d /tmp/aibm_pkg.XXXXXX)"
 APP_DIR="$TMP_ROOT/$APP_NAME.app"
@@ -314,8 +315,22 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>AIBalanceMonitor</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
+  <key>NSApplicationIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFile</key>
+      <string>AppIcon</string>
+      <key>CFBundleIconName</key>
+      <string>AppIcon</string>
+    </dict>
+  </dict>
   <key>CFBundleIdentifier</key>
-  <string>com.aibalancemonitor.app</string>
+  <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

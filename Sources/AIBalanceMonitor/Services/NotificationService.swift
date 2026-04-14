@@ -13,6 +13,16 @@ final class NotificationService {
         }
     }
 
+    func refreshAuthorizationStatus(_ completion: @escaping (UNAuthorizationStatus) -> Void) {
+        guard canUseUserNotifications else {
+            completion(.denied)
+            return
+        }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            completion(settings.authorizationStatus)
+        }
+    }
+
     func notify(title: String, body: String, identifier: String) {
         guard canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()

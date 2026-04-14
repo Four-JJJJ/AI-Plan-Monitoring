@@ -189,6 +189,28 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.extras["extraUsageLimit"], "5000.00")
     }
 
+    func testClaudeOAuthResponseWithoutPlanAndWithAllZeroUsageIsRejected() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 0],
+            "seven_day": ["utilization": 0]
+        ]
+
+        XCTAssertThrowsError(
+            try ClaudeProvider.parseClaudeSnapshot(
+                root: root,
+                descriptor: ProviderDescriptor.defaultOfficialClaude(),
+                sourceLabel: "API",
+                accountLabel: nil,
+                planHint: nil
+            )
+        ) { error in
+            guard case let ProviderError.unavailable(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.localizedCaseInsensitiveContains("subscription"))
+        }
+    }
+
     func testGeminiQuotaResponseParsesProAndFlashWindows() throws {
         let quotaRoot: [String: Any] = [
             "quotaInfos": [
