@@ -180,18 +180,11 @@ swift run
 
 ## 参考项目与致谢
 
-感谢以下开源项目带来的启发：
-
-- [openusage](https://github.com/robinebers/openusage)
-- [cc-switch](https://github.com/farion1231/cc-switch)
-- [codexbar](https://github.com/rajasimon/codexbar)
-
-## 参考项目与致谢
-
 以下开源项目在我们设计与实现过程中提供了重要参考，感谢这些项目作者与贡献者：
 
 - [openusage](https://github.com/robinebers/openusage) - 使用量聚合与展示思路参考。
 - [cc-switch](https://github.com/farion1231/cc-switch) - 多模型切换代理与用量查询思路参考。
+- [codexbar](https://github.com/rajasimon/codexbar) - 菜单栏形态与交互体验设计参考。
 
 ## 许可证
 
