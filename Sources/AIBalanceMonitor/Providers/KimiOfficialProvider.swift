@@ -105,27 +105,57 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadCredentials() throws -> KimiOfficialCredentials {
-        let path = "\(NSHomeDirectory())/.kimi/credentials/kimi-code.json"
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw ProviderError.missingCredential(path)
-        }
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ProviderError.invalidResponse("Kimi credentials decode failed")
+        let candidates = resolveCredentialPaths()
+        for path in candidates {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            let auth = (json["auth"] as? [String: Any]) ?? json
+            guard let accessToken = OfficialValueParser.string(auth["access_token"] ?? auth["accessToken"]),
+                  !accessToken.isEmpty else {
+                continue
+            }
+            return KimiOfficialCredentials(
+                accessToken: accessToken,
+                refreshToken: OfficialValueParser.string(auth["refresh_token"] ?? auth["refreshToken"]),
+                expiresAt: parseExpiry(auth: auth),
+                filePath: path
+            )
         }
 
-        let auth = (json["auth"] as? [String: Any]) ?? json
-        guard let accessToken = OfficialValueParser.string(auth["access_token"] ?? auth["accessToken"]),
-              !accessToken.isEmpty else {
-            throw ProviderError.invalidResponse("missing Kimi access_token")
+        let primary = candidates.first ?? "\(NSHomeDirectory())/.kimi/credentials/kimi-code.json"
+        throw ProviderError.missingCredential(primary)
+    }
+
+    private func resolveCredentialPaths() -> [String] {
+        let home = NSHomeDirectory()
+        let explicit = [
+            "\(home)/.kimi/credentials/kimi-code.json",
+            "\(home)/.config/kimi/credentials/kimi-code.json",
+            "\(home)/Library/Application Support/kimi/credentials/kimi-code.json",
+            "\(home)/Library/Application Support/Kimi/credentials/kimi-code.json",
+            "\(home)/.kimi/oauth/kimi-code.json",
+            "\(home)/.kimi/credentials/oauth/kimi-code.json",
+        ]
+
+        var discovered: [String] = []
+        if let enumerator = FileManager.default.enumerator(
+            atPath: "\(home)/.kimi/credentials"
+        ) {
+            for case let item as String in enumerator {
+                let lower = item.lowercased()
+                guard lower.hasSuffix(".json"),
+                      lower.contains("kimi"),
+                      lower.contains("code") else {
+                    continue
+                }
+                discovered.append("\(home)/.kimi/credentials/\(item)")
+            }
         }
 
-        return KimiOfficialCredentials(
-            accessToken: accessToken,
-            refreshToken: OfficialValueParser.string(auth["refresh_token"] ?? auth["refreshToken"]),
-            expiresAt: parseExpiry(auth: auth),
-            filePath: path
-        )
+        return Array(NSOrderedSet(array: explicit + discovered)) as? [String] ?? (explicit + discovered)
     }
 
     private func parseExpiry(auth: [String: Any]) -> Date? {

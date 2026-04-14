@@ -8,8 +8,10 @@ import UserNotifications
 final class AppViewModel {
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
+    private let appUpdateService = AppUpdateService()
     private let codexSlotStore = CodexAccountSlotStore()
     private let codexProfileStore = CodexAccountProfileStore()
+    private let codexProfileSnapshotService = CodexProfileSnapshotService()
     private let codexDesktopAuthService = CodexDesktopAuthService()
     private let codexDesktopAppService = CodexDesktopAppService()
     private let launchAtLoginService = LaunchAtLoginService()
@@ -28,10 +30,18 @@ final class AppViewModel {
     private(set) var fullDiskAccessGranted = false
     private(set) var fullDiskAccessRelevant = false
     private(set) var fullDiskAccessRequested = false
+    private(set) var currentAppVersion: String
+    private(set) var availableUpdate: AppUpdateInfo?
+    private(set) var lastUpdateCheckAt: Date?
+    private(set) var updateCheckInFlight = false
+    private(set) var lastCheckedLatestVersion: String?
+    private(set) var updateCheckErrorMessage: String?
 
     private var pollTasks: [String: Task<Void, Never>] = [:]
     private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
     private var codexSwitchingSlots: Set<CodexSlotID> = []
+    private var codexPrefetchInFlightSlots: Set<CodexSlotID> = []
+    private var codexPrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
     private var hasStarted = false
@@ -45,6 +55,7 @@ final class AppViewModel {
             try? configStore.save(loadedConfig)
         }
         self.config = loadedConfig
+        self.currentAppVersion = Self.detectCurrentAppVersion()
         self.providerFactory = ProviderFactory(keychain: keychain)
         self.codexSlots = codexSlotStore.visibleSlots()
         self.codexProfiles = []
@@ -62,6 +73,7 @@ final class AppViewModel {
         hasStarted = true
         refreshPermissionStatuses(force: true)
         restartPolling()
+        checkForAppUpdate(force: true)
     }
 
     func restartPolling() {
@@ -85,6 +97,54 @@ final class AppViewModel {
                 await self.refreshProvider(descriptor, forceRefresh: true)
             }
         }
+    }
+
+    func checkForAppUpdate(force: Bool = false) {
+        if updateCheckInFlight { return }
+        if !force,
+           let last = lastUpdateCheckAt,
+           Date().timeIntervalSince(last) < 6 * 60 * 60 {
+            return
+        }
+
+        updateCheckInFlight = true
+        updateCheckErrorMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.updateCheckInFlight = false
+                self.lastUpdateCheckAt = Date()
+            }
+
+            do {
+                let latest = try await self.appUpdateService.fetchLatestRelease()
+                self.lastCheckedLatestVersion = latest.latestVersion
+                self.updateCheckErrorMessage = nil
+                if Self.isVersion(latest.latestVersion, newerThan: self.currentAppVersion) {
+                    self.availableUpdate = latest
+                } else {
+                    self.availableUpdate = nil
+                }
+            } catch {
+                self.updateCheckErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func openRepositoryPage() {
+        NSWorkspace.shared.open(AppUpdateService.repositoryURL)
+    }
+
+    func openLatestReleaseDownload() {
+        if let url = availableUpdate?.downloadURL {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        if let url = availableUpdate?.releaseURL {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        NSWorkspace.shared.open(AppUpdateService.releasesURL)
     }
 
     var language: AppLanguage {
@@ -200,8 +260,9 @@ final class AppViewModel {
     func codexSlotViewModels() -> [CodexSlotViewModel] {
         syncCodexProfilesCurrentState()
         codexSlots = codexSlotStore.visibleSlots()
+        triggerCodexProfileSnapshotPrefetchIfNeeded()
         let now = Date()
-        return codexSlots
+        return mergedCodexSlotsForMenu()
             .sorted { lhs, rhs in
                 if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
                 if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
@@ -263,6 +324,8 @@ final class AppViewModel {
     func removeCodexProfile(slotID: CodexSlotID) {
         syncCodexProfilesCurrentState()
         codexProfiles = codexProfileStore.removeProfile(slotID: slotID)
+        codexPrefetchAttemptedIdentity.removeValue(forKey: slotID)
+        codexPrefetchInFlightSlots.remove(slotID)
     }
 
     func requestNotificationPermission() {
@@ -329,6 +392,8 @@ final class AppViewModel {
         codexFeedbackTasks.values.forEach { $0.cancel() }
         codexFeedbackTasks.removeAll()
         codexSwitchingSlots.removeAll()
+        codexPrefetchInFlightSlots.removeAll()
+        codexPrefetchAttemptedIdentity.removeAll()
         codexSwitchFeedback.removeAll()
         snapshots.removeAll()
         errors.removeAll()
@@ -1326,7 +1391,11 @@ final class AppViewModel {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    private func markCodexSnapshotActive(_ snapshot: UsageSnapshot, preferredSlotID: CodexSlotID? = nil) -> UsageSnapshot {
+    private func markCodexSnapshotActive(
+        _ snapshot: UsageSnapshot,
+        preferredSlotID: CodexSlotID? = nil,
+        isActive: Bool = true
+    ) -> UsageSnapshot {
         var copy = snapshot
         let resolvedSlotID = preferredSlotID ?? matchedCodexProfile(for: copy)?.slotID
         let accountKey = CodexAccountSlotStore.accountKey(from: copy)
@@ -1337,7 +1406,7 @@ final class AppViewModel {
         copy.rawMeta["codex.accountKey"] = accountKey
         copy.rawMeta["codex.accountLabel"] = label
         copy.rawMeta["codex.lastSeenAt"] = ISO8601DateFormatter().string(from: Date())
-        copy.rawMeta["codex.isActive"] = "true"
+        copy.rawMeta["codex.isActive"] = isActive ? "true" : "false"
         if copy.accountLabel == nil || copy.accountLabel?.isEmpty == true {
             copy.accountLabel = label == "Unknown" ? nil : label
         }
@@ -1352,6 +1421,150 @@ final class AppViewModel {
 
     private func codexMenuTitle(for slotID: CodexSlotID) -> String {
         "Codex \(slotID.rawValue)"
+    }
+
+    private func triggerCodexProfileSnapshotPrefetchIfNeeded() {
+        guard let descriptor = config.providers.first(where: { $0.type == .codex && $0.family == .official }) else {
+            return
+        }
+
+        let existingSlotIDs = Set(codexSlots.map(\.slotID))
+        for profile in codexProfiles where !existingSlotIDs.contains(profile.slotID) {
+            if codexPrefetchInFlightSlots.contains(profile.slotID) {
+                continue
+            }
+            let identityKey = profile.credentialFingerprint?.lowercased()
+                ?? profile.accountId?.lowercased()
+                ?? profile.accountEmail?.lowercased()
+                ?? profile.slotID.rawValue.lowercased()
+            if codexPrefetchAttemptedIdentity[profile.slotID] == identityKey {
+                continue
+            }
+
+            codexPrefetchAttemptedIdentity[profile.slotID] = identityKey
+            codexPrefetchInFlightSlots.insert(profile.slotID)
+
+            Task { [weak self] in
+                guard let self else { return }
+                defer { self.codexPrefetchInFlightSlots.remove(profile.slotID) }
+
+                guard let fetched = try? await self.codexProfileSnapshotService.fetchSnapshot(
+                    profile: profile,
+                    descriptor: descriptor
+                ) else {
+                    return
+                }
+                let snapshot = self.markCodexSnapshotActive(
+                    fetched,
+                    preferredSlotID: profile.slotID,
+                    isActive: false
+                )
+                self.codexSlots = self.codexSlotStore.upsertInactive(
+                    snapshot: snapshot,
+                    preferredSlotID: profile.slotID
+                )
+            }
+        }
+    }
+
+    private static func detectCurrentAppVersion() -> String {
+        if let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+        if let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+        return "0.0.0"
+    }
+
+    private static func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {
+        let left = parseVersionComponents(lhs)
+        let right = parseVersionComponents(rhs)
+        let maxCount = max(left.count, right.count)
+
+        for index in 0..<maxCount {
+            let l = index < left.count ? left[index] : 0
+            let r = index < right.count ? right[index] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    private static func parseVersionComponents(_ raw: String) -> [Int] {
+        let normalized = AppUpdateService.normalizeVersion(raw)
+        return normalized
+            .split(separator: ".")
+            .map { part in
+                let digits = part.prefix { $0.isNumber }
+                return Int(digits) ?? 0
+            }
+    }
+
+    private func mergedCodexSlotsForMenu() -> [CodexAccountSlot] {
+        var mergedBySlotID = Dictionary(uniqueKeysWithValues: codexSlots.map { ($0.slotID, $0) })
+
+        for profile in codexProfiles where mergedBySlotID[profile.slotID] == nil {
+            mergedBySlotID[profile.slotID] = placeholderCodexSlot(for: profile)
+        }
+
+        return mergedBySlotID.values.map { slot in
+            var updated = slot
+            if let profile = codexProfiles.first(where: { $0.slotID == slot.slotID }),
+               profile.isCurrentSystemAccount {
+                updated.isActive = true
+            }
+            return updated
+        }
+    }
+
+    private func placeholderCodexSlot(for profile: CodexAccountProfile) -> CodexAccountSlot {
+        CodexAccountSlot(
+            slotID: profile.slotID,
+            accountKey: profile.accountId?.lowercased()
+                ?? profile.credentialFingerprint?.lowercased()
+                ?? "profile:\(profile.slotID.rawValue.lowercased())",
+            displayName: profile.displayName,
+            lastSnapshot: placeholderCodexSnapshot(for: profile),
+            lastSeenAt: profile.lastImportedAt,
+            isActive: profile.isCurrentSystemAccount
+        )
+    }
+
+    private func placeholderCodexSnapshot(for profile: CodexAccountProfile) -> UsageSnapshot {
+        var rawMeta: [String: String] = [
+            "codex.slotID": profile.slotID.rawValue,
+            "codex.menuPlaceholder": "true"
+        ]
+        if let accountId = profile.accountId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !accountId.isEmpty {
+            rawMeta["codex.accountId"] = accountId
+        }
+        if let fingerprint = profile.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fingerprint.isEmpty {
+            rawMeta["codex.credentialFingerprint"] = fingerprint
+        }
+
+        return UsageSnapshot(
+            source: "codex-placeholder-\(profile.slotID.rawValue.lowercased())",
+            status: .disabled,
+            fetchHealth: .ok,
+            valueFreshness: .empty,
+            remaining: nil,
+            used: nil,
+            limit: nil,
+            unit: "%",
+            updatedAt: profile.lastImportedAt,
+            note: "",
+            quotaWindows: [],
+            sourceLabel: "Codex",
+            accountLabel: profile.accountEmail,
+            authSourceLabel: nil,
+            diagnosticCode: nil,
+            extras: [:],
+            rawMeta: rawMeta
+        )
     }
 
     private func setCodexSwitchFeedback(_ feedback: CodexSwitchFeedback?, for slotID: CodexSlotID) {

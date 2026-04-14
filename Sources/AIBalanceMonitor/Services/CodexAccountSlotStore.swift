@@ -183,6 +183,59 @@ final class CodexAccountSlotStore {
         return slots.sorted(by: sortRule)
     }
 
+    func upsertInactive(
+        snapshot: UsageSnapshot,
+        preferredSlotID: CodexSlotID? = nil,
+        now: Date = Date()
+    ) -> [CodexAccountSlot] {
+        let accountKey = Self.accountKey(from: snapshot)
+        let displayName = Self.accountLabel(from: snapshot)
+        let resolvedSlotID = preferredSlotID ?? Self.explicitSlotID(from: snapshot)
+
+        removeStaleSlots(now: now)
+
+        if let resolvedSlotID,
+           let conflicting = slots.firstIndex(where: { $0.slotID == resolvedSlotID && $0.accountKey != accountKey }) {
+            slots.remove(at: conflicting)
+        }
+
+        if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
+            if let resolvedSlotID {
+                slots[existing].slotID = resolvedSlotID
+            }
+            slots[existing].displayName = displayName
+            slots[existing].lastSnapshot = snapshot
+            slots[existing].lastSeenAt = now
+            slots[existing].isActive = false
+            save()
+            return slots.sorted(by: sortRule)
+        }
+
+        if accountKey == "unknown", let unknownIndex = slots.firstIndex(where: { $0.accountKey == "unknown" }) {
+            slots[unknownIndex].displayName = displayName
+            slots[unknownIndex].lastSnapshot = snapshot
+            slots[unknownIndex].lastSeenAt = now
+            slots[unknownIndex].isActive = false
+            save()
+            return slots.sorted(by: sortRule)
+        }
+
+        let occupied = Set(slots.map(\.slotID))
+        let slotID = resolvedSlotID ?? CodexSlotID.nextAvailable(excluding: occupied)
+        slots.append(
+            CodexAccountSlot(
+                slotID: slotID,
+                accountKey: accountKey,
+                displayName: displayName,
+                lastSnapshot: snapshot,
+                lastSeenAt: now,
+                isActive: false
+            )
+        )
+        save()
+        return slots.sorted(by: sortRule)
+    }
+
     static func accountKey(from snapshot: UsageSnapshot) -> String {
         if let explicitKey = snapshot.rawMeta["codex.accountKey"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !explicitKey.isEmpty {

@@ -78,6 +78,16 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
     }
 
     static func parseSnapshot(data: Data, descriptor: ProviderDescriptor, authSource: String, now: Date = Date()) throws -> UsageSnapshot {
+        if let root = try? JSONSerialization.jsonObject(with: data),
+           let parsed = parseSnapshotFromJSONObject(
+               root,
+               descriptor: descriptor,
+               authSource: authSource,
+               now: now
+           ) {
+            return parsed
+        }
+
         let envelope: KimiUsageEnvelope
         do {
             envelope = try JSONDecoder().decode(KimiUsageEnvelope.self, from: data)
@@ -154,6 +164,242 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
             extras: [:],
             rawMeta: rawMeta
         )
+    }
+
+    private static func parseSnapshotFromJSONObject(
+        _ root: Any,
+        descriptor: ProviderDescriptor,
+        authSource: String,
+        now: Date
+    ) -> UsageSnapshot? {
+        guard let usageItems = usageArray(from: root), !usageItems.isEmpty else {
+            return nil
+        }
+        let codingUsage = usageItems.first {
+            let scope = stringValue($0["scope"])?.lowercased() ?? ""
+            return scope.contains("coding")
+        } ?? usageItems[0]
+
+        guard let weekly = usageDetail(from: codingUsage["detail"] ?? codingUsage["usage"] ?? codingUsage["summary"]) else {
+            return nil
+        }
+
+        let limitItems = dictionaryArray(from: codingUsage["limits"])
+            ?? dictionaryArray(from: codingUsage["windows"])
+            ?? dictionaryArray(from: codingUsage["window_limits"])
+            ?? dictionaryArray(from: codingUsage["windowLimits"])
+            ?? []
+        let parsedWindows = limitItems.compactMap(parseWindowUsage(from:))
+        guard let window = parsedWindows.first(where: isFiveHourWindow(_:)) ?? parsedWindows.first else {
+            return nil
+        }
+
+        let weeklyPercent = ratioPercent(remaining: weekly.remaining, limit: weekly.limit)
+        let windowPercent = ratioPercent(remaining: window.detail.remaining, limit: window.detail.limit)
+        let minPercent = min(weeklyPercent, windowPercent)
+        let status: SnapshotStatus = minPercent <= descriptor.threshold.lowRemaining ? .warning : .ok
+
+        var rawMeta: [String: String] = [
+            "kimi.authSource": authSource,
+            "kimi.weekly.limit": formatNumber(weekly.limit),
+            "kimi.weekly.used": formatNumber(weekly.used),
+            "kimi.weekly.remaining": formatNumber(weekly.remaining),
+            "kimi.weekly.remainingPercent": formatNumber(weeklyPercent),
+            "kimi.window5h.limit": formatNumber(window.detail.limit),
+            "kimi.window5h.used": formatNumber(window.detail.used),
+            "kimi.window5h.remaining": formatNumber(window.detail.remaining),
+            "kimi.window5h.remainingPercent": formatNumber(windowPercent),
+        ]
+        if let epoch = parseISO8601ToEpoch(weekly.resetTime) {
+            rawMeta["kimi.weekly.resetAt"] = String(epoch)
+        }
+        if let epoch = parseISO8601ToEpoch(window.detail.resetTime) {
+            rawMeta["kimi.window5h.resetAt"] = String(epoch)
+        }
+
+        let note = "Weekly \(Int(weekly.remaining))/\(Int(weekly.limit)) | 5h \(Int(window.detail.remaining))/\(Int(window.detail.limit))"
+        let quotaWindows = [
+            UsageQuotaWindow(
+                id: "\(descriptor.id)-weekly",
+                title: "Weekly",
+                remainingPercent: weeklyPercent,
+                usedPercent: max(0, 100 - weeklyPercent),
+                resetAt: Self.parseISO8601ToEpoch(weekly.resetTime).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                kind: .weekly
+            ),
+            UsageQuotaWindow(
+                id: "\(descriptor.id)-5h",
+                title: "5h",
+                remainingPercent: windowPercent,
+                usedPercent: max(0, 100 - windowPercent),
+                resetAt: Self.parseISO8601ToEpoch(window.detail.resetTime).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                kind: .session
+            )
+        ]
+
+        return UsageSnapshot(
+            source: descriptor.id,
+            status: status,
+            remaining: minPercent,
+            used: 100 - minPercent,
+            limit: 100,
+            unit: "%",
+            updatedAt: now,
+            note: note,
+            quotaWindows: quotaWindows,
+            sourceLabel: authSource,
+            accountLabel: nil,
+            extras: [:],
+            rawMeta: rawMeta
+        )
+    }
+
+    private static func usageArray(from root: Any) -> [[String: Any]]? {
+        if let map = root as? [String: Any] {
+            if let direct = dictionaryArray(from: map["usages"]), !direct.isEmpty {
+                return direct
+            }
+            let wrappedKeys = ["data", "result", "payload", "response", "json"]
+            for key in wrappedKeys {
+                if let nested = map[key], let found = usageArray(from: nested), !found.isEmpty {
+                    return found
+                }
+            }
+            if let firstArray = map.values.first(where: { $0 is [Any] }),
+               let array = dictionaryArray(from: firstArray),
+               array.contains(where: { $0["scope"] != nil }) {
+                return array
+            }
+            return nil
+        }
+        if let list = root as? [Any] {
+            let maps = list.compactMap { $0 as? [String: Any] }
+            return maps.isEmpty ? nil : maps
+        }
+        return nil
+    }
+
+    private static func dictionaryArray(from any: Any?) -> [[String: Any]]? {
+        guard let list = any as? [Any] else { return nil }
+        let output = list.compactMap { $0 as? [String: Any] }
+        return output.isEmpty ? nil : output
+    }
+
+    private static func usageDetail(from raw: Any?) -> ParsedUsageDetail? {
+        guard let map = raw as? [String: Any] else { return nil }
+        let limit = doubleValue(
+            map["limit"],
+            map["quota_amount"],
+            map["quotaAmount"],
+            map["total"],
+            map["total_amount"],
+            map["totalAmount"]
+        )
+        let remaining = doubleValue(
+            map["remaining"],
+            map["remaining_amount"],
+            map["remainingAmount"],
+            map["available"],
+            map["available_amount"],
+            map["availableAmount"]
+        )
+        let used = doubleValue(
+            map["used"],
+            map["used_amount"],
+            map["usedAmount"],
+            map["consumed"],
+            map["consumed_amount"],
+            map["consumedAmount"]
+        )
+        guard let resolvedLimit = limit else { return nil }
+        let resolvedRemaining = remaining ?? max(0, resolvedLimit - (used ?? 0))
+        let resolvedUsed = used ?? max(0, resolvedLimit - resolvedRemaining)
+        return ParsedUsageDetail(
+            limit: resolvedLimit,
+            used: resolvedUsed,
+            remaining: resolvedRemaining,
+            resetTime: stringValue(
+                map["resetTime"],
+                map["reset_time"],
+                map["resetAt"],
+                map["reset_at"],
+                map["next_reset_at"],
+                map["nextResetAt"]
+            )
+        )
+    }
+
+    private static func parseWindowUsage(from raw: [String: Any]) -> ParsedWindowUsage? {
+        guard let detail = usageDetail(from: raw["detail"] ?? raw["usage"] ?? raw) else {
+            return nil
+        }
+        let window = (raw["window"] as? [String: Any]) ?? raw
+        let duration = intValue(window["duration"] ?? window["window_duration"] ?? raw["duration"])
+        let timeUnit = stringValue(window["timeUnit"], window["time_unit"], raw["timeUnit"], raw["time_unit"])
+        let normalizedMinutes: Int?
+        if let duration {
+            let unit = (timeUnit ?? "TIME_UNIT_MINUTE").lowercased()
+            if unit.contains("minute") {
+                normalizedMinutes = duration
+            } else if unit.contains("hour") {
+                normalizedMinutes = duration * 60
+            } else if unit.contains("day") {
+                normalizedMinutes = duration * 24 * 60
+            } else {
+                normalizedMinutes = duration
+            }
+        } else {
+            normalizedMinutes = nil
+        }
+        let title = stringValue(raw["name"], raw["title"], window["name"], window["title"])
+        return ParsedWindowUsage(detail: detail, durationMinutes: normalizedMinutes, timeUnit: timeUnit, title: title)
+    }
+
+    private static func isFiveHourWindow(_ window: ParsedWindowUsage) -> Bool {
+        if let minutes = window.durationMinutes, minutes == 300 {
+            return true
+        }
+        let title = (window.title ?? "").lowercased()
+        return title.contains("5h")
+            || title.contains("5 h")
+            || title.contains("300")
+            || title.contains("session")
+    }
+
+    private static func doubleValue(_ values: Any?...) -> Double? {
+        for value in values {
+            if let value = value as? Double { return value }
+            if let value = value as? Int { return Double(value) }
+            if let value = value as? NSNumber { return value.doubleValue }
+            if let value = value as? String,
+               let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let parsed = Int(trimmed) { return parsed }
+            if let parsedDouble = Double(trimmed) { return Int(parsedDouble.rounded()) }
+        }
+        return nil
+    }
+
+    private static func stringValue(_ values: Any?...) -> String? {
+        for value in values {
+            if let value = value as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            } else if let value = value as? NSNumber {
+                return value.stringValue
+            }
+        }
+        return nil
     }
 
     private func resolveToken() throws -> (token: String, source: String) {
@@ -355,4 +601,18 @@ private struct KimiSessionInfo {
     let deviceId: String?
     let sessionId: String?
     let trafficId: String?
+}
+
+private struct ParsedUsageDetail {
+    let limit: Double
+    let used: Double
+    let remaining: Double
+    let resetTime: String?
+}
+
+private struct ParsedWindowUsage {
+    let detail: ParsedUsageDetail
+    let durationMinutes: Int?
+    let timeUnit: String?
+    let title: String?
 }
