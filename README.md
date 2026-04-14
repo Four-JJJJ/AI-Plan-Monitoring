@@ -2,20 +2,22 @@
 
 <img width="2044" height="1472" alt="image" src="https://github.com/user-attachments/assets/9cd87cc2-b914-4669-896c-24aabbc2eb55" />
 
-如果你跟我一样，手握好几个 Codex 账号，每天在登录登出之间反复横跳——恭喜你，苦日子到头了。
+如果你跟我一样，手里攥着好几个 Codex 账号，每天在「切额度 → 忘了登的哪个号 → 掰手指算重置时间」的循环里痛苦挣扎；只想用桌面端、不想折腾 CLI，又懒得部署 CPA / sub2api
 
-我搓了一个 Chrome 扩展：AI Plan Monitoring
+试试这个：AI Plan Monitoring 
 
-🔹 多账号自动记录 & 一键丝滑切换，告别「我刚才登的是哪个号」的灵魂拷问
-🔹 每个账号独立的额度重置倒计时，再也不用掰手指算「这个号啥时候回血」
-🔹 实验性支持第三方网站的用量监控（没错，野心已经开始膨胀了）
+周末高强度搓出来的小工具，专治多账号管理焦虑：
 
-👉 https://github.com/Four-JJJJ/AI-Plan-Monitoring
+🔄 多账号自动记录 & 一键切换 —— 告别「我刚才登的是哪个号」的灵魂拷问
 
-⚠️ 友情提示：第一次做开发，代码可能还带着新手的青涩气息。
-不过别担心——等额度一重置，我就光速修 bug，更新速度比你用额度还快 🚀
+⏳ 独立额度重置倒计时 —— 每个账号何时回血，一目了然，不用再掰手指
 
-欢迎体验、提 issue、顺手点个 ⭐，都是对萌新开发者最大的鼓励！
+🧪 实验性支持第三方网站用量监控 —— 能用，但不保证都能用（懂的都懂）
+
+⚠️ 新手声明： 第一次做开发，代码还带着青涩气息，bug 可能比 feature 还多。
+不过别慌——额度一重置我就光速修 bug，更新速度比你用额度还快 🚀
+
+欢迎体验、提 Issue、顺手点个 ⭐ 支持一下！
 
 [下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
 
