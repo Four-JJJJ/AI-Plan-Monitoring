@@ -161,6 +161,13 @@ swift run
 - 更丰富的 provider 诊断能力
 - 更适合普通用户的首次安装体验
 
+## 参考项目与致谢
+
+以下开源项目在我们设计与实现过程中提供了重要参考，感谢这些项目作者与贡献者：
+
+- [openusage](https://github.com/robinebers/openusage) - 使用量聚合与展示思路参考。
+- [cc-switch](https://github.com/farion1231/cc-switch) - 多模型切换代理与用量查询思路参考。
+
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。

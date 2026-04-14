@@ -143,6 +143,13 @@ Build a universal DMG:
 - better provider diagnostics
 - smoother first-run UX for non-technical users
 
+## References & Acknowledgements
+
+The following open-source projects informed parts of our design and implementation. Thanks to their authors and contributors:
+
+- [openusage](https://github.com/robinebers/openusage) - reference for usage aggregation and presentation ideas.
+- [cc-switch](https://github.com/farion1231/cc-switch) - reference for multi-model switching proxy and usage query workflow ideas.
+
 ## License
 
 MIT. See [LICENSE](../LICENSE).
