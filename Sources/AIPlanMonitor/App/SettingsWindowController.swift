@@ -36,9 +36,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.isOpaque = true
             // 窗口背景色（标题栏和内容区外层底色）。
             panel.backgroundColor = NSColor(
-                red: 0.13874699,
-                green: 0.13874699,
-                blue: 0.13874699,
+                red: 35.0 / 255.0,
+                green: 35.0 / 255.0,
+                blue: 35.0 / 255.0,
                 alpha: 1
             )
             // 强制深色外观，避免跟随系统浅色导致样式偏差。

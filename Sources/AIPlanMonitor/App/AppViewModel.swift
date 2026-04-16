@@ -334,8 +334,10 @@ final class AppViewModel {
     func removeCodexProfile(slotID: CodexSlotID) {
         syncCodexProfilesCurrentState()
         codexProfiles = codexProfileStore.removeProfile(slotID: slotID)
+        codexSlots = codexSlotStore.remove(slotID: slotID)
         codexPrefetchAttemptedIdentity.removeValue(forKey: slotID)
         codexPrefetchInFlightSlots.remove(slotID)
+        setCodexSwitchFeedback(nil, for: slotID)
     }
 
     func requestNotificationPermission() {
@@ -1512,7 +1514,9 @@ final class AppViewModel {
     }
 
     private func mergedCodexSlotsForMenu() -> [CodexAccountSlot] {
-        var mergedBySlotID = Dictionary(uniqueKeysWithValues: codexSlots.map { ($0.slotID, $0) })
+        let profileSlotIDs = Set(codexProfiles.map(\.slotID))
+        let visibleRuntimeSlots = codexSlots.filter { $0.isActive || profileSlotIDs.contains($0.slotID) }
+        var mergedBySlotID = Dictionary(uniqueKeysWithValues: visibleRuntimeSlots.map { ($0.slotID, $0) })
 
         for profile in codexProfiles where mergedBySlotID[profile.slotID] == nil {
             mergedBySlotID[profile.slotID] = placeholderCodexSlot(for: profile)

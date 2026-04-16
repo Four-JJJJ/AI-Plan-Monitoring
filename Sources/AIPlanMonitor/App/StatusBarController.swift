@@ -330,8 +330,27 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         case .kimi:
             return "menu_kimi_icon"
         case .relay, .open, .dragon:
+            if let override = relayModelIconOverrideName(for: provider) {
+                return override
+            }
             return "menu_relay_icon"
         }
+    }
+
+    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
+        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
+            return nil
+        }
+        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
+        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
+        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
+        let providerName = provider.name.lowercased()
+        let relaySignals = "\(relayID)|\(host)|\(providerName)"
+        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
+        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+            return "menu_kimi_icon"
+        }
+        return nil
     }
 
     private func bundledImage(named name: String, ext: String) -> NSImage? {

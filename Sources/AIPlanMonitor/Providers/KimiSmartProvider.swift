@@ -67,7 +67,7 @@ final class KimiSmartProvider: UsageProvider, @unchecked Sendable {
             authMode: .auto,
             manualTokenAccount: authAccount,
             autoCookieEnabled: true,
-            browserOrder: [.arc, .chrome, .safari, .edge, .brave, .chromium]
+            browserOrder: [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
         )
 
         var legacy = descriptor
@@ -77,4 +77,3 @@ final class KimiSmartProvider: UsageProvider, @unchecked Sendable {
         return legacy
     }
 }
-

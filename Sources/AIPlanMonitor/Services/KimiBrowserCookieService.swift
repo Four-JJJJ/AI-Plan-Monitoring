@@ -11,7 +11,7 @@ struct KimiDetectedToken: Equatable {
 final class KimiBrowserCookieService {
     private let fileManager: FileManager
     private var safeStorageCache: [KimiBrowserKind: String] = [:]
-    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .chromium]
+    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -132,6 +132,14 @@ final class KimiBrowserCookieService {
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/BraveSoftware/Brave-Browser")
         case .chromium:
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/Chromium")
+        case .firefox:
+            return firefoxCookiePaths(base: "\(home)/Library/Application Support/Firefox")
+        case .opera:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/com.operasoftware.Opera")
+        case .operaGX:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/com.operasoftware.OperaGX")
+        case .vivaldi:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/Vivaldi")
         }
     }
 
@@ -201,6 +209,14 @@ final class KimiBrowserCookieService {
             return "\(home)/Library/Application Support/BraveSoftware/Brave-Browser"
         case .chromium:
             return "\(home)/Library/Application Support/Chromium"
+        case .opera:
+            return "\(home)/Library/Application Support/com.operasoftware.Opera"
+        case .operaGX:
+            return "\(home)/Library/Application Support/com.operasoftware.OperaGX"
+        case .vivaldi:
+            return "\(home)/Library/Application Support/Vivaldi"
+        case .firefox:
+            return nil
         case .safari:
             return nil
         }
@@ -223,6 +239,19 @@ final class KimiBrowserCookieService {
         return Array(Set(candidates)).sorted()
     }
 
+    private func firefoxCookiePaths(base: String) -> [String] {
+        guard fileManager.fileExists(atPath: base) else { return [] }
+        var candidates: [String] = []
+        let baseURL = URL(fileURLWithPath: base)
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        if let enumerator = fileManager.enumerator(at: baseURL, includingPropertiesForKeys: keys) {
+            for case let url as URL in enumerator where url.lastPathComponent == "cookies.sqlite" {
+                candidates.append(url.path)
+            }
+        }
+        return Array(Set(candidates)).sorted()
+    }
+
     private func tokenFromCookieDatabase(path: String, browser: KimiBrowserKind, cookieName: String, hostContains: String) -> String? {
         guard fileManager.fileExists(atPath: path) else { return nil }
         guard let sqlite = resolvedSQLitePath() else { return nil }
@@ -237,10 +266,14 @@ final class KimiBrowserCookieService {
         }
 
         let queries = [
+            // Chromium / WebKit (encrypted cookies)
             "SELECT value, hex(encrypted_value) FROM cookies WHERE name='\(cookieName)' AND host_key LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM cookies WHERE name='\(cookieName)' AND domain LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM Cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM Cookies WHERE name='\(cookieName)' AND domain LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
+            // Firefox / plain sqlite schema
+            "SELECT value, '' FROM moz_cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC;",
+            "SELECT value, '' FROM cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC;",
         ]
 
         for query in queries {
@@ -286,30 +319,42 @@ final class KimiBrowserCookieService {
             return nil
         }
 
-        let query = "SELECT name, value, hex(encrypted_value) FROM cookies WHERE host_key LIKE '%\(hostContains)%' ORDER BY name;"
-        guard let raw = runProcess(executable: sqlite, arguments: ["-separator", "\t", tempDB, query]) else { return nil }
-        var pairs: [String] = []
-        for lineSub in raw.split(separator: "\n") {
-            let line = String(lineSub)
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 3 else { continue }
-            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { continue }
-            let plain = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            let encryptedHex = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-            let value: String
-            if !plain.isEmpty {
-                value = plain
-            } else if let decrypted = decryptChromiumCookieHex(encryptedHex, browser: browser), !decrypted.isEmpty {
-                value = decrypted
-            } else {
-                continue
+        let queries = [
+            // Chromium / WebKit (encrypted cookies)
+            "SELECT name, value, hex(encrypted_value) FROM cookies WHERE host_key LIKE '%\(hostContains)%' ORDER BY name;",
+            "SELECT name, value, hex(encrypted_value) FROM cookies WHERE domain LIKE '%\(hostContains)%' ORDER BY name;",
+            "SELECT name, value, hex(encrypted_value) FROM Cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
+            "SELECT name, value, hex(encrypted_value) FROM Cookies WHERE domain LIKE '%\(hostContains)%' ORDER BY name;",
+            // Firefox / plain sqlite schema
+            "SELECT name, value, '' FROM moz_cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
+            "SELECT name, value, '' FROM cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
+        ]
+        for query in queries {
+            guard let raw = runProcess(executable: sqlite, arguments: ["-separator", "\t", tempDB, query]) else { continue }
+            var pairs: [String] = []
+            for lineSub in raw.split(separator: "\n") {
+                let line = String(lineSub)
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 3 else { continue }
+                let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                let plain = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let encryptedHex = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                let value: String
+                if !plain.isEmpty {
+                    value = plain
+                } else if let decrypted = decryptChromiumCookieHex(encryptedHex, browser: browser), !decrypted.isEmpty {
+                    value = decrypted
+                } else {
+                    continue
+                }
+                pairs.append("\(name)=\(value)")
             }
-            pairs.append("\(name)=\(value)")
+            if !pairs.isEmpty {
+                return pairs.joined(separator: "; ")
+            }
         }
-
-        guard !pairs.isEmpty else { return nil }
-        return pairs.joined(separator: "; ")
+        return nil
     }
 
     private func bearerTokenCandidatesFromStorage(path: String, host: String) -> [BearerTokenCandidate] {
@@ -524,6 +569,20 @@ final class KimiBrowserCookieService {
             return [("Brave Safe Storage", "Brave")]
         case .chromium:
             return [("Chromium Safe Storage", "Chromium")]
+        case .opera:
+            return [
+                ("Opera Safe Storage", "Opera"),
+                ("Opera Safe Storage", "Opera Stable"),
+            ]
+        case .operaGX:
+            return [
+                ("Opera Safe Storage", "Opera GX Stable"),
+                ("Opera Safe Storage", "Opera GX"),
+            ]
+        case .vivaldi:
+            return [("Vivaldi Safe Storage", "Vivaldi")]
+        case .firefox:
+            return []
         case .safari:
             return []
         }
@@ -684,6 +743,14 @@ final class KimiBrowserCookieService {
             return "auto:Brave"
         case .chromium:
             return "auto:Chromium"
+        case .firefox:
+            return "auto:Firefox"
+        case .opera:
+            return "auto:Opera"
+        case .operaGX:
+            return "auto:OperaGX"
+        case .vivaldi:
+            return "auto:Vivaldi"
         }
     }
 }

@@ -698,8 +698,27 @@ struct MenuContentView: View {
         case .kimi:
             return "menu_kimi_icon"
         case .relay, .open, .dragon:
+            if let override = relayModelIconOverrideName(for: provider) {
+                return override
+            }
             return "menu_relay_icon"
         }
+    }
+
+    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
+        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
+            return nil
+        }
+        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
+        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
+        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
+        let providerName = provider.name.lowercased()
+        let relaySignals = "\(relayID)|\(host)|\(providerName)"
+        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
+        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+            return "menu_kimi_icon"
+        }
+        return nil
     }
 
     private func fallbackIcon(for provider: ProviderDescriptor?) -> String {
@@ -905,7 +924,7 @@ private struct PercentageModelCard: View {
             HStack(spacing: 12) {
                 HStack(alignment: .center, spacing: 6) {
                     BundledIconView(name: iconName, fallback: iconFallback, size: 12, iconOpacity: 0.8)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 0) {
                         Text(title)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Color.white.opacity(0.80))
@@ -923,7 +942,7 @@ private struct PercentageModelCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     if let actionLabel, let action {
                         HoverActionButton(title: actionLabel, disabled: actionDisabled, action: action)
                     }
@@ -972,16 +991,13 @@ private struct PercentageModelCard: View {
         )
         .overlay {
             if let leadingAccentColor {
-                // 左侧状态竖线（当前 Codex 账号高亮）。
-                SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
-                    .strokeBorder(leadingAccentColor, lineWidth: 1.5)
-                    .mask(
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: 1.5)
-                            Spacer(minLength: 0)
-                        }
-                    )
+                // 左侧状态竖线（当前 Codex 账号高亮）：按 Figma 使用纯左侧 1.5px 描边。
+                Rectangle()
+                    .fill(leadingAccentColor)
+                    .frame(width: 1.5)
+                    .frame(maxHeight: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipShape(SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6))
             }
         }
     }

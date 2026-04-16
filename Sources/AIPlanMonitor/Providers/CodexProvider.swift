@@ -414,22 +414,30 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
         let service = KeychainService.defaultServiceName
 
-        if official.webMode == .manual || official.webMode == .autoImport,
-           let account = official.manualCookieAccount,
-           let header = keychain.readToken(service: service, account: account),
-           !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return BrowserCookieHeader(header: header, source: "Manual")
-        }
-
-        guard official.webMode != .manual else {
+        // 手动模式：仅使用用户手工保存的 Cookie。
+        if official.webMode == .manual {
+            if let account = official.manualCookieAccount,
+               let header = keychain.readToken(service: service, account: account),
+               !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return BrowserCookieHeader(header: header, source: "Manual")
+            }
             throw ProviderError.missingCredential(official.manualCookieAccount ?? "official/codex/cookie-header")
         }
 
+        // 自动导入模式：优先从浏览器读取最新登录态（Chrome/Arc 等），命中后回写 Keychain。
         if let detected = browserCookieService.detectCookieHeader(hostContains: "chatgpt.com") {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
             return detected
+        }
+
+        // 浏览器未命中时，回退到历史缓存 Cookie，避免短暂失败。
+        if official.webMode == .autoImport,
+           let account = official.manualCookieAccount,
+           let header = keychain.readToken(service: service, account: account),
+           !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return BrowserCookieHeader(header: header, source: "Manual (cached)")
         }
 
         throw ProviderError.missingCredential("chatgpt.com cookie")

@@ -185,6 +185,10 @@ enum KimiBrowserKind: String, Codable, CaseIterable, Identifiable {
     case edge
     case brave
     case chromium
+    case firefox
+    case opera
+    case operaGX
+    case vivaldi
 
     var id: String { rawValue }
 }
@@ -734,7 +738,7 @@ extension ProviderDescriptor {
             authMode: .auto,
             manualTokenAccount: auth.keychainAccount ?? "kimi.com/kimi-auth-manual",
             autoCookieEnabled: true,
-            browserOrder: [.arc, .chrome, .safari, .edge, .brave, .chromium]
+            browserOrder: [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
         )
     }
 
@@ -1409,7 +1413,8 @@ private extension ProviderDescriptor {
             if copy.kimiConfig == nil {
                 copy.kimiConfig = defaults.kimiConfig
             } else if copy.kimiConfig?.browserOrder.isEmpty ?? true {
-                copy.kimiConfig?.browserOrder = defaults.kimiConfig?.browserOrder ?? [.arc, .chrome, .safari, .edge, .brave, .chromium]
+                copy.kimiConfig?.browserOrder = defaults.kimiConfig?.browserOrder
+                    ?? [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
             }
             return copy.normalized()
         }

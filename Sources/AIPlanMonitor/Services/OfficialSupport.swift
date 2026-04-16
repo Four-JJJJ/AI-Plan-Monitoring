@@ -272,7 +272,7 @@ enum SQLiteShell {
 
 final class BrowserCookieService {
     private let fileManager: FileManager
-    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .chromium]
+    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
     private var safeStorageCache: [KimiBrowserKind: String] = [:]
 
     init(fileManager: FileManager = .default) {
@@ -324,6 +324,14 @@ final class BrowserCookieService {
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/BraveSoftware/Brave-Browser")
         case .chromium:
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/Chromium")
+        case .firefox:
+            return firefoxCookiePaths(base: "\(home)/Library/Application Support/Firefox")
+        case .opera:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/com.operasoftware.Opera")
+        case .operaGX:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/com.operasoftware.OperaGX")
+        case .vivaldi:
+            return chromiumCookiePaths(base: "\(home)/Library/Application Support/Vivaldi")
         }
     }
 
@@ -344,6 +352,19 @@ final class BrowserCookieService {
         return Array(Set(candidates)).sorted()
     }
 
+    private func firefoxCookiePaths(base: String) -> [String] {
+        guard fileManager.fileExists(atPath: base) else { return [] }
+        var candidates: [String] = []
+        let baseURL = URL(fileURLWithPath: base)
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        if let enumerator = fileManager.enumerator(at: baseURL, includingPropertiesForKeys: keys) {
+            for case let url as URL in enumerator where url.lastPathComponent == "cookies.sqlite" {
+                candidates.append(url.path)
+            }
+        }
+        return Array(Set(candidates)).sorted()
+    }
+
     private func tokenFromCookieDatabase(path: String, browser: KimiBrowserKind, cookieName: String, hostContains: String) -> String? {
         guard fileManager.fileExists(atPath: path) else { return nil }
         guard let sqlite = resolvedSQLitePath() else { return nil }
@@ -358,10 +379,14 @@ final class BrowserCookieService {
         }
 
         let queries = [
+            // Chromium / WebKit (encrypted cookies)
             "SELECT value, hex(encrypted_value) FROM cookies WHERE name='\(cookieName)' AND host_key LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM cookies WHERE name='\(cookieName)' AND domain LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM Cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
             "SELECT value, hex(encrypted_value) FROM Cookies WHERE name='\(cookieName)' AND domain LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC, LENGTH(encrypted_value) DESC;",
+            // Firefox / plain sqlite schema
+            "SELECT value, '' FROM moz_cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC;",
+            "SELECT value, '' FROM cookies WHERE name='\(cookieName)' AND host LIKE '%\(hostContains)%' ORDER BY LENGTH(value) DESC;",
         ]
 
         for query in queries {
@@ -408,10 +433,14 @@ final class BrowserCookieService {
         }
 
         let queries = [
+            // Chromium / WebKit (encrypted cookies)
             "SELECT name, value, hex(encrypted_value) FROM cookies WHERE host_key LIKE '%\(hostContains)%' ORDER BY name;",
             "SELECT name, value, hex(encrypted_value) FROM cookies WHERE domain LIKE '%\(hostContains)%' ORDER BY name;",
             "SELECT name, value, hex(encrypted_value) FROM Cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
             "SELECT name, value, hex(encrypted_value) FROM Cookies WHERE domain LIKE '%\(hostContains)%' ORDER BY name;",
+            // Firefox / plain sqlite schema
+            "SELECT name, value, '' FROM moz_cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
+            "SELECT name, value, '' FROM cookies WHERE host LIKE '%\(hostContains)%' ORDER BY name;",
         ]
         for query in queries {
             guard let raw = ShellCommand.run(executable: sqlite, arguments: ["-separator", "\t", tempDB, query], timeout: 5)?.stdout else {
@@ -515,6 +544,20 @@ final class BrowserCookieService {
             return [("Brave Safe Storage", "Brave")]
         case .chromium:
             return [("Chromium Safe Storage", "Chromium")]
+        case .opera:
+            return [
+                ("Opera Safe Storage", "Opera"),
+                ("Opera Safe Storage", "Opera Stable"),
+            ]
+        case .operaGX:
+            return [
+                ("Opera Safe Storage", "Opera GX Stable"),
+                ("Opera Safe Storage", "Opera GX"),
+            ]
+        case .vivaldi:
+            return [("Vivaldi Safe Storage", "Vivaldi")]
+        case .firefox:
+            return []
         case .safari:
             return []
         }
@@ -610,6 +653,14 @@ final class BrowserCookieService {
             return "Auto:Brave"
         case .chromium:
             return "Auto:Chromium"
+        case .firefox:
+            return "Auto:Firefox"
+        case .opera:
+            return "Auto:Opera"
+        case .operaGX:
+            return "Auto:OperaGX"
+        case .vivaldi:
+            return "Auto:Vivaldi"
         }
     }
 }

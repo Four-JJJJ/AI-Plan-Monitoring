@@ -65,11 +65,7 @@ struct SettingsView: View {
 
     // MARK: - 设置页视觉 Token（改这里可全局影响样式）
     // 整个设置页外层深色圆角容器背景。
-    private let panelBackground = Color(hex: 0x232325)
-    // 设置页窗口背景渐变起始色（左侧更亮）。
-    private let panelGradientStart = Color(hex: 0x2A2B30)
-    // 设置页窗口背景渐变结束色（右侧更深）。
-    private let panelGradientEnd = Color(hex: 0x1E2025)
+    private let panelBackground = Color(hex: 0x232323)
     // “通用设置”主内容滚动区域的纯黑底。
     private let cardBackground = Color.black
     // 通用描边色：用于模型面板、卡片边框等 15% 白色描边。
@@ -138,7 +134,6 @@ struct SettingsView: View {
     private enum SettingsTab: String, CaseIterable, Identifiable {
         case general
         case models
-        case about
 
         var id: String { rawValue }
     }
@@ -198,6 +193,7 @@ struct SettingsView: View {
             seedInputsFromConfig()
             syncSelection()
             viewModel.refreshPermissionStatusesNow()
+            viewModel.checkForAppUpdate()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             viewModel.refreshPermissionStatusesNow()
@@ -264,11 +260,7 @@ struct SettingsView: View {
 
     private var settingsMainContent: some View {
         ZStack {
-            LinearGradient(
-                colors: [panelGradientStart, panelGradientEnd],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            panelBackground
 
             VStack(alignment: .leading, spacing: 16) {
                 settingsTabBar
@@ -290,7 +282,7 @@ struct SettingsView: View {
                         .clipShape(
                             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                         )
-                    } else if selectedSettingsTab == .models {
+                    } else {
                         // 模型设置：外层一个黑色容器，内部左右分栏。
                         HStack(spacing: 0) {
                             sidebar
@@ -313,12 +305,6 @@ struct SettingsView: View {
                         .clipShape(
                             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                         )
-                    } else {
-                        // 关于页：单列滚动信息。
-                        ScrollView {
-                            aboutSection
-                        }
-                        .scrollIndicators(.never)
                     }
                 }
             }
@@ -443,12 +429,12 @@ struct SettingsView: View {
     }
 
     private var settingsTabBar: some View {
-        // 顶部三级 tab（通用设置/模型设置/关于）的容器。
+        // 顶部 tab + 右侧版本信息区域。
         HStack(spacing: 8) {
             settingsTabButton(.general)
             settingsTabButton(.models)
-            settingsTabButton(.about)
             Spacer()
+            settingsTopMetaBar
         }
     }
 
@@ -479,9 +465,52 @@ struct SettingsView: View {
             return viewModel.text(.settingsGeneralTab)
         case .models:
             return viewModel.text(.settingsModelsTab)
-        case .about:
-            return viewModel.text(.settingsAboutTab)
         }
+    }
+
+    private var settingsTopMetaBar: some View {
+        HStack(spacing: 12) {
+            if let update = viewModel.availableUpdate {
+                Button {
+                    viewModel.openLatestReleaseDownload()
+                } label: {
+                    Text(updateBadgeTitle(version: update.latestVersion))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0x69BD64))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(currentVersionTitle)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(settingsHintColor)
+                .lineLimit(1)
+
+            Button {
+                viewModel.openRepositoryPage()
+            } label: {
+                Text("GitHub")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var currentVersionTitle: String {
+        if viewModel.language == .zhHans {
+            return "版本 \(viewModel.currentAppVersion)"
+        }
+        return "Version \(viewModel.currentAppVersion)"
+    }
+
+    private func updateBadgeTitle(version: String) -> String {
+        if viewModel.language == .zhHans {
+            return "新版本 \(version)"
+        }
+        return "New \(version)"
     }
 
     @ViewBuilder
@@ -586,37 +615,40 @@ struct SettingsView: View {
     }
 
     private var thirdPartySidebarContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(relayBuiltInPresets) { preset in
-                        relayPresetSidebarRow(preset)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(relayBuiltInPresets) { preset in
+                            relayPresetSidebarRow(preset)
+                        }
                     }
-                }
 
-                if !customRelayProviders.isEmpty {
-                    Spacer()
-                        .frame(height: 8)
+                    if !customRelayProviders.isEmpty {
+                        Spacer()
+                            .frame(height: 8)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(customRelayProviders) { provider in
-                            sidebarProviderRow(provider)
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(customRelayProviders) { provider in
+                                sidebarProviderRow(provider)
+                            }
                         }
                     }
                 }
-
-                Spacer()
-                    .frame(height: 16)
-
-                dividerLine
-
-                Spacer()
-                    .frame(height: 16)
-
-                addNewAPISiteButton
             }
+            .frame(minHeight: 220, maxHeight: .infinity, alignment: .top)
+
+            Spacer(minLength: 16)
+
+            dividerLine
+
+            Spacer()
+                .frame(height: 16)
+
+            addNewAPISiteButton
         }
-        .frame(minHeight: 220, maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, 16)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var officialSidebarContent: some View {
@@ -757,90 +789,6 @@ struct SettingsView: View {
                 .frame(height: 24)
 
             permissionsSection
-        }
-    }
-
-    private var aboutSection: some View {
-        // 关于页主卡内容样式。
-        VStack(alignment: .leading, spacing: 12) {
-            Text(viewModel.text(.aboutTitle))
-                .font(settingsTitleFont)
-                .foregroundStyle(settingsTitleColor)
-
-            aboutRow(label: viewModel.text(.aboutVersion), value: viewModel.currentAppVersion)
-            aboutRow(label: viewModel.text(.aboutGitHub), value: AppUpdateService.repositoryURL.absoluteString)
-
-            HStack(spacing: 10) {
-                settingsActionButton(viewModel.text(.aboutOpenGitHub)) {
-                    viewModel.openRepositoryPage()
-                }
-
-                settingsActionButton(viewModel.text(.aboutCheckUpdates)) {
-                    viewModel.checkForAppUpdate(force: true)
-                }
-            }
-
-            if viewModel.updateCheckInFlight {
-                Text(viewModel.text(.aboutUpdateChecking))
-                    .font(settingsBodyFont)
-                    .foregroundStyle(settingsHintColor)
-            } else if let error = viewModel.updateCheckErrorMessage,
-                      !error.isEmpty {
-                Text(viewModel.text(.aboutUpdateFailed))
-                    .font(settingsBodyFont)
-                    .foregroundStyle(Color(hex: 0xFF5A5A))
-            } else if let latest = viewModel.lastCheckedLatestVersion,
-                      viewModel.availableUpdate == nil {
-                Text(String(format: viewModel.text(.aboutUpdateUpToDate), viewModel.currentAppVersion, latest))
-                    .font(settingsBodyFont)
-                    .foregroundStyle(Color(hex: 0x51DB42))
-            }
-
-            if let update = viewModel.availableUpdate {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(viewModel.text(.updateAvailableTitle))
-                        .font(settingsLabelFont)
-                        .foregroundStyle(Color(hex: 0x51DB42))
-                    Text(String(format: viewModel.text(.updateAvailableBody), update.latestVersion, viewModel.currentAppVersion))
-                        .font(settingsBodyFont)
-                        .foregroundStyle(settingsBodyColor)
-
-                    settingsActionButton(viewModel.text(.updateDownloadAction), prominent: true) {
-                        viewModel.openLatestReleaseDownload()
-                    }
-                }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(hex: 0x51DB42).opacity(0.10))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color(hex: 0x51DB42).opacity(0.45), lineWidth: 1)
-                )
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .fill(cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(outlineColor, lineWidth: 1)
-        )
-    }
-
-    private func aboutRow(label: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(label)
-                .font(settingsLabelFont)
-                .foregroundStyle(settingsBodyColor)
-            Text(value)
-                .font(settingsBodyFont)
-                .foregroundStyle(settingsHintColor)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
         }
     }
 
@@ -1415,10 +1363,8 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 52)
-            .overlay(
-                Rectangle()
-                    .stroke(outlineColor, lineWidth: 1)
-            )
+
+            dividerLine
 
             VStack(alignment: .leading, spacing: 24) {
                 thirdPartyThresholdRow(provider)
@@ -1434,11 +1380,6 @@ struct SettingsView: View {
 
                 if provider.isRelay {
                     openRelayConfigSection(provider)
-                }
-
-                if snapshot != nil || error != nil {
-                    dividerLine
-                    providerUsageSummarySection(snapshot: snapshot, error: error)
                 }
             }
             .padding(.top, 22)
@@ -1945,18 +1886,12 @@ struct SettingsView: View {
         label: @escaping (Option) -> String
     ) -> some View where Option.ID == String {
         HStack(spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+            ForEach(options, id: \.id) { option in
                 officialSegmentButton(
                     title: label(option),
                     isSelected: selection.wrappedValue == option
                 ) {
                     selection.wrappedValue = option
-                }
-
-                if index < options.count - 1 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.30))
-                        .frame(width: 1, height: 12)
                 }
             }
         }
@@ -2079,7 +2014,7 @@ struct SettingsView: View {
                 codexAccountIcon(size: 12)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Codex")
+                    Text("Codex \(profile.slotID.rawValue)")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(settingsBodyColor)
                     Text(profile.accountEmail ?? viewModel.text(.codexProfileEmailUnknown))
@@ -2201,10 +2136,12 @@ struct SettingsView: View {
 
     private func codexQuotaMetricView(_ metric: CodexQuotaMetricDisplay) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Text(metric.title)
                     .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(settingsHintColor)
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .lineSpacing(0)
+                    .lineLimit(1)
 
                 Spacer(minLength: 4)
 
@@ -2212,20 +2149,19 @@ struct SettingsView: View {
                     if let image = bundledImage(named: "menu_reset_clock_icon") {
                         Image(nsImage: image)
                             .resizable()
-                            .renderingMode(.template)
                             .scaledToFit()
                             .frame(width: 10, height: 10)
-                            .foregroundStyle(Color.white.opacity(0.40))
                     } else {
                         Image(systemName: "clock")
-                            .font(.system(size: 9, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.40))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.80))
                     }
 
                     Text(metric.resetText)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color.white.opacity(0.40))
                         .monospacedDigit()
+                        .lineSpacing(0)
                         .frame(minWidth: 42, alignment: .trailing)
                         .fixedSize(horizontal: true, vertical: false)
                         .lineLimit(1)
@@ -2235,18 +2171,21 @@ struct SettingsView: View {
                 .layoutPriority(2)
                 .frame(height: 10)
             }
+            .frame(height: 10)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Text(metric.valueText)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(settingsBodyColor)
-                    .frame(width: 46, alignment: .leading)
+                    .foregroundStyle(Color.white.opacity(0.80))
+                    .lineSpacing(0)
+                    .frame(width: 44, alignment: .leading)
+                    .lineLimit(1)
 
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Color.white.opacity(0.30))
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(metric.barColor)
                             .frame(width: max(1, proxy.size.width * metric.percent / 100))
                     }
@@ -2612,11 +2551,6 @@ struct SettingsView: View {
         let accountChannelEnabled = accountEnabledInputs[provider.id]
             ?? relayViewConfig?.accountBalance?.enabled
             ?? selectedTemplate.match.defaultBalanceChannelEnabled
-        let tokenTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
-        let balanceTemplate = relayCredentialTemplate(
-            authHeader: selectedTemplate.balanceRequest.authHeader ?? relayViewConfig?.accountBalance?.authHeader,
-            authScheme: selectedTemplate.balanceRequest.authScheme ?? relayViewConfig?.accountBalance?.authScheme
-        )
         let showTokenCredential = tokenChannelEnabled
         let showBalanceCredential = accountChannelEnabled
         let defaultUserID = relayViewConfig?.accountBalance?.userID
@@ -2627,6 +2561,12 @@ struct SettingsView: View {
         let usesGenericTemplate = (selectedRelayTemplateInputs[provider.id] ?? providerAdapterID) == "generic-newapi"
         let showNameField = usesGenericTemplate
         let showBaseURLField = usesGenericTemplate || !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
+        let tokenFieldTitle = viewModel.language == .zhHans ? "Token" : "Token"
+        let tokenSaveButtonTitle = viewModel.language == .zhHans ? "保存" : "Save"
+        let tokenPlaceholder = viewModel.language == .zhHans
+            ? "例如 Bearer eyJ...或ey."
+            : "e.g. Bearer eyJ... or ey..."
+        let tokenHintLines = relayTokenHintLines(for: provider)
         let credentialModeBinding = Binding<RelayCredentialMode>(
             get: {
                 relayCredentialModeInputs[provider.id]
@@ -2637,40 +2577,33 @@ struct SettingsView: View {
         )
         let contentLeading = thirdPartyConfigLabelWidth + thirdPartyConfigLabelSpacing
 
-        VStack(alignment: .leading, spacing: 10) {
-            if let currentPreset, selectedRelayTemplateInputs[provider.id] == nil, !usesGenericTemplate {
-                thirdPartyConfigRow(title: viewModel.text(.relayTemplate)) {
-                    Text(currentPreset.displayName)
-                        .font(settingsLabelFont)
-                        .foregroundStyle(settingsBodyColor)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                thirdPartyConfigRow(title: viewModel.text(.relayTemplate)) {
-                    Picker("", selection: Binding(
-                        get: { selectedRelayTemplateInputs[provider.id] ?? "generic-newapi" },
-                        set: { selectedRelayTemplateInputs[provider.id] = $0 }
-                    )) {
-                        ForEach(relaySiteTemplates) { preset in
-                            Text(preset.displayName).tag(preset.id)
-                        }
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let currentPreset, selectedRelayTemplateInputs[provider.id] == nil, !usesGenericTemplate {
+                    thirdPartyConfigRow(title: viewModel.text(.relayTemplate)) {
+                        Text(currentPreset.displayName)
+                            .font(settingsLabelFont)
+                            .foregroundStyle(settingsBodyColor)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                } else {
+                    thirdPartyConfigRow(title: viewModel.text(.relayTemplate)) {
+                        Picker("", selection: Binding(
+                            get: { selectedRelayTemplateInputs[provider.id] ?? "generic-newapi" },
+                            set: { selectedRelayTemplateInputs[provider.id] = $0 }
+                        )) {
+                            ForEach(relaySiteTemplates) { preset in
+                                Text(preset.displayName).tag(preset.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
                 }
-            }
 
-            if showNameField {
-                thirdPartyConfigRow(title: viewModel.text(.providerName)) {
-                    TextField(viewModel.text(.providerName), text: Binding(
-                        get: { providerNameInputs[provider.id] ?? provider.name },
-                        set: { providerNameInputs[provider.id] = $0 }
-                    ))
-                    .textFieldStyle(.plain)
-                    .relayProminentInput()
-                    .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if simpleMode, !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
+                    thirdPartyHintText("Base URL: \(suggestedBaseURL)")
                 }
             }
 
@@ -2687,111 +2620,118 @@ struct SettingsView: View {
                 }
             }
 
-            if simpleMode {
-                if !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
-                    thirdPartyHintText("Base URL: \(suggestedBaseURL)")
-                }
-            }
-
-            if showUserIDField {
-                thirdPartyConfigRow(title: viewModel.text(.userID)) {
-                    TextField(viewModel.text(.userID), text: Binding(
-                        get: { userIDInputs[provider.id] ?? defaultUserID },
-                        set: { userIDInputs[provider.id] = $0 }
+            if showNameField {
+                thirdPartyConfigRow(title: viewModel.text(.providerName)) {
+                    TextField(viewModel.text(.providerName), text: Binding(
+                        get: { providerNameInputs[provider.id] ?? provider.name },
+                        set: { providerNameInputs[provider.id] = $0 }
                     ))
                     .textFieldStyle(.plain)
                     .relayProminentInput()
                     .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
 
-                if let userIDHint = relaySetupHint(for: selectedTemplate, field: .userID) {
-                    thirdPartyHintText(userIDHint)
+            if showUserIDField {
+                VStack(alignment: .leading, spacing: 8) {
+                    thirdPartyConfigRow(title: viewModel.text(.userID)) {
+                        TextField(viewModel.text(.userID), text: Binding(
+                            get: { userIDInputs[provider.id] ?? defaultUserID },
+                            set: { userIDInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayProminentInput()
+                        .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let userIDHint = relaySetupHint(for: selectedTemplate, field: .userID) {
+                        thirdPartyHintText(userIDHint)
+                    }
                 }
             }
 
             if showBalanceCredential {
                 let hasSavedBalanceToken = accountAuth.map { viewModel.hasToken(auth: $0) } ?? false
 
-                thirdPartyConfigRow(title: relayCredentialSectionTitle(isAccount: true, templateKind: balanceTemplate.kind), alignment: .top) {
-                    HStack(spacing: 8) {
-                        SecureField("", text: Binding(
-                            get: { systemTokenInputs[provider.id, default: ""] },
-                            set: { systemTokenInputs[provider.id] = $0 }
-                        ), prompt: Text(hasSavedBalanceToken ? maskedSecretDots : balanceTemplate.placeholder)
-                            .foregroundStyle(settingsHintColor))
-                        .textFieldStyle(.plain)
-                        .relayProminentInput()
-                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+                VStack(alignment: .leading, spacing: 8) {
+                    thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
+                        HStack(spacing: 8) {
+                            SecureField("", text: Binding(
+                                get: { systemTokenInputs[provider.id, default: ""] },
+                                set: { systemTokenInputs[provider.id] = $0 }
+                            ), prompt: Text(hasSavedBalanceToken ? maskedSecretDots : tokenPlaceholder)
+                                .foregroundStyle(settingsHintColor))
+                            .textFieldStyle(.plain)
+                            .relayProminentInput()
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
-                        settingsCapsuleButton(relayCredentialSaveLabel(templateKind: balanceTemplate.kind)) {
-                            guard let accountAuth else { return }
-                            let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !token.isEmpty else { return }
-                            _ = viewModel.saveToken(token, auth: accountAuth)
-                            systemTokenInputs[provider.id] = ""
-                            viewModel.restartPolling()
+                            settingsCapsuleButton(tokenSaveButtonTitle) {
+                                guard let accountAuth else { return }
+                                let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !token.isEmpty else { return }
+                                _ = viewModel.saveToken(token, auth: accountAuth)
+                                systemTokenInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
                         }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ForEach(tokenHintLines, id: \.self) { line in
+                        thirdPartyHintText(line)
+                    }
                 }
-
-                thirdPartyHintText(balanceTemplate.hint)
-
-                if let balanceSetupHint = relaySetupHint(for: selectedTemplate, field: .balanceAuth) {
-                    thirdPartyHintText(balanceSetupHint)
-                }
-
-                thirdPartyHintText(relayCredentialLookupHint(templateKind: balanceTemplate.kind))
             }
 
             if showTokenCredential {
                 let hasSavedToken = viewModel.hasToken(for: provider)
 
-                thirdPartyConfigRow(title: relayCredentialSectionTitle(isAccount: false, templateKind: tokenTemplate.kind), alignment: .top) {
-                    HStack(spacing: 8) {
-                        SecureField("", text: Binding(
-                            get: { tokenInputs[provider.id, default: ""] },
-                            set: { tokenInputs[provider.id] = $0 }
-                        ), prompt: Text(hasSavedToken ? maskedSecretDots : tokenTemplate.placeholder)
-                            .foregroundStyle(settingsHintColor))
-                        .textFieldStyle(.plain)
-                        .relayProminentInput()
-                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+                VStack(alignment: .leading, spacing: 8) {
+                    thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
+                        HStack(spacing: 8) {
+                            SecureField("", text: Binding(
+                                get: { tokenInputs[provider.id, default: ""] },
+                                set: { tokenInputs[provider.id] = $0 }
+                            ), prompt: Text(hasSavedToken ? maskedSecretDots : tokenPlaceholder)
+                                .foregroundStyle(settingsHintColor))
+                            .textFieldStyle(.plain)
+                            .relayProminentInput()
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
-                        settingsCapsuleButton(relayCredentialSaveLabel(templateKind: tokenTemplate.kind)) {
-                            let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !token.isEmpty else { return }
-                            _ = viewModel.saveToken(token, for: provider)
-                            tokenInputs[provider.id] = ""
-                            viewModel.restartPolling()
+                            settingsCapsuleButton(tokenSaveButtonTitle) {
+                                let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !token.isEmpty else { return }
+                                _ = viewModel.saveToken(token, for: provider)
+                                tokenInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
                         }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ForEach(tokenHintLines, id: \.self) { line in
+                        thirdPartyHintText(line)
+                    }
                 }
-
-                thirdPartyHintText(tokenTemplate.hint)
-
-                if let quotaSetupHint = relaySetupHint(for: selectedTemplate, field: .quotaAuth) {
-                    thirdPartyHintText(quotaSetupHint)
-                }
-
-                thirdPartyHintText(relayCredentialLookupHint(templateKind: tokenTemplate.kind))
             }
 
-            thirdPartyConfigRow(title: viewModel.text(.credentialMode)) {
-                officialSegmentControl(
-                    selection: credentialModeBinding,
-                    options: RelayCredentialMode.allCases,
-                    label: relayCredentialModeLabel
-                )
-            }
+            VStack(alignment: .leading, spacing: 8) {
+                thirdPartyConfigRow(title: viewModel.text(.credentialMode)) {
+                    officialSegmentControl(
+                        selection: credentialModeBinding,
+                        options: RelayCredentialMode.allCases,
+                        label: relayCredentialModeLabel
+                    )
+                }
 
-            thirdPartyHintText(viewModel.text(.credentialModeHint))
+                thirdPartyHintText(viewModel.text(.credentialModeHint))
+            }
 
             HStack(spacing: 8) {
                 settingsCapsuleButton(viewModel.text(.saveConfig)) {
@@ -2881,197 +2821,210 @@ struct SettingsView: View {
             }
 
             dividerLine
+            
+            VStack(alignment: .leading, spacing: 16) {
+                Text(viewModel.language == .zhHans ? "连接状态" : "Connection status")
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
 
-            Text(viewModel.language == .zhHans ? "连接状态" : "Connection status")
-                .font(settingsLabelFont)
-                .foregroundStyle(settingsBodyColor)
-
-            relayRuntimeStatusSection(provider, selectedTemplate: selectedTemplate)
+                relayRuntimeStatusSection(provider, selectedTemplate: selectedTemplate)
+            }
 
             dividerLine
 
-            DisclosureGroup(
-                isExpanded: Binding(
-                    get: { relayAdvancedExpanded[provider.id] ?? false },
-                    set: { relayAdvancedExpanded[provider.id] = $0 }
-                ),
-                content: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(relayRequiredInputSummary(
-                            manifest: selectedTemplate,
-                            tokenChannelEnabled: showTokenCredential,
-                            accountChannelEnabled: showBalanceCredential,
-                            showsManualUserID: showUserIDField
-                        ))
+            let advancedExpandedBinding = Binding(
+                get: { relayAdvancedExpanded[provider.id] ?? false },
+                set: { relayAdvancedExpanded[provider.id] = $0 }
+            )
+
+            Button {
+                advancedExpandedBinding.wrappedValue.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.advancedSettings))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsBodyColor)
+                    Spacer(minLength: 0)
+                    Image(systemName: advancedExpandedBinding.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(settingsBodyColor)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            if advancedExpandedBinding.wrappedValue {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(relayRequiredInputSummary(
+                        manifest: selectedTemplate,
+                        tokenChannelEnabled: showTokenCredential,
+                        accountChannelEnabled: showBalanceCredential,
+                        showsManualUserID: showUserIDField
+                    ))
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+
+                    Text(relayFixedTemplateSummary(for: selectedTemplate))
                         .font(settingsHintFont)
                         .foregroundStyle(settingsHintColor)
 
-                        Text(relayFixedTemplateSummary(for: selectedTemplate))
+                    if let diagnosticHint = relayDiagnosticHint(for: selectedTemplate) {
+                        Text(diagnosticHint)
                             .font(settingsHintFont)
                             .foregroundStyle(settingsHintColor)
+                    }
 
-                        if let diagnosticHint = relayDiagnosticHint(for: selectedTemplate) {
-                            Text(diagnosticHint)
-                                .font(settingsHintFont)
-                                .foregroundStyle(settingsHintColor)
-                        }
+                    let tokenChannelBinding = Binding(
+                        get: { tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled },
+                        set: { tokenUsageEnabledInputs[provider.id] = $0 }
+                    )
+                    HStack(spacing: 10) {
+                        Text(viewModel.text(.enableTokenChannel))
+                            .font(settingsLabelFont)
+                            .foregroundStyle(settingsBodyColor)
+                            .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
+                        Toggle("", isOn: tokenChannelBinding)
+                            .toggleStyle(FigmaSwitchToggleStyle())
+                            .labelsHidden()
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: 24)
 
-                        let tokenChannelBinding = Binding(
-                            get: { tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled },
-                            set: { tokenUsageEnabledInputs[provider.id] = $0 }
-                        )
-                        HStack(spacing: 10) {
-                            Text(viewModel.text(.enableTokenChannel))
-                                .font(settingsLabelFont)
-                                .foregroundStyle(settingsBodyColor)
-                                .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
-                            Toggle("", isOn: tokenChannelBinding)
-                                .toggleStyle(FigmaSwitchToggleStyle())
-                                .labelsHidden()
-                            Spacer(minLength: 0)
-                        }
-                        .frame(height: 24)
+                    let accountChannelBinding = Binding(
+                        get: { accountEnabledInputs[provider.id] ?? accountChannelEnabled },
+                        set: { accountEnabledInputs[provider.id] = $0 }
+                    )
+                    HStack(spacing: 10) {
+                        Text(viewModel.text(.enableAccountChannel))
+                            .font(settingsLabelFont)
+                            .foregroundStyle(settingsBodyColor)
+                            .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
+                        Toggle("", isOn: accountChannelBinding)
+                            .toggleStyle(FigmaSwitchToggleStyle())
+                            .labelsHidden()
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: 24)
 
-                        let accountChannelBinding = Binding(
-                            get: { accountEnabledInputs[provider.id] ?? accountChannelEnabled },
-                            set: { accountEnabledInputs[provider.id] = $0 }
-                        )
-                        HStack(spacing: 10) {
-                            Text(viewModel.text(.enableAccountChannel))
-                                .font(settingsLabelFont)
-                                .foregroundStyle(settingsBodyColor)
-                                .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
-                            Toggle("", isOn: accountChannelBinding)
-                                .toggleStyle(FigmaSwitchToggleStyle())
-                                .labelsHidden()
-                            Spacer(minLength: 0)
-                        }
-                        .frame(height: 24)
-
-                        HStack(spacing: 8) {
-                            TextField(viewModel.text(.authHeader), text: Binding(
-                                get: {
-                                    authHeaderInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.authHeader
-                                        ?? selectedTemplate.balanceRequest.authHeader
-                                        ?? "Authorization"
-                                },
-                                set: { authHeaderInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-
-                            TextField(viewModel.text(.authScheme), text: Binding(
-                                get: {
-                                    authSchemeInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.authScheme
-                                        ?? selectedTemplate.balanceRequest.authScheme
-                                        ?? "Bearer"
-                                },
-                                set: { authSchemeInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-                        }
-
-                        HStack(spacing: 8) {
-                            TextField(viewModel.text(.userIDHeader), text: Binding(
-                                get: {
-                                    userHeaderInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.userIDHeader
-                                        ?? selectedTemplate.balanceRequest.userIDHeader
-                                        ?? "New-Api-User"
-                                },
-                                set: { userHeaderInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-
-                            TextField(viewModel.text(.endpointPath), text: Binding(
-                                get: {
-                                    endpointPathInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.endpointPath
-                                        ?? selectedTemplate.balanceRequest.path
-                                },
-                                set: { endpointPathInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-                        }
-
-                        HStack(spacing: 8) {
-                            TextField(viewModel.text(.unit), text: Binding(
-                                get: {
-                                    unitInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.unit
-                                        ?? selectedTemplate.extract.unit
-                                        ?? "quota"
-                                },
-                                set: { unitInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-
-                            TextField(viewModel.text(.remainingPath), text: Binding(
-                                get: {
-                                    remainingPathInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.remainingJSONPath
-                                        ?? selectedTemplate.extract.remaining
-                                },
-                                set: { remainingPathInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-                        }
-
-                        HStack(spacing: 8) {
-                            TextField(viewModel.text(.usedPath), text: Binding(
-                                get: {
-                                    usedPathInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.usedJSONPath
-                                        ?? selectedTemplate.extract.used
-                                        ?? ""
-                                },
-                                set: { usedPathInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-
-                            TextField(viewModel.text(.limitPath), text: Binding(
-                                get: {
-                                    limitPathInputs[provider.id]
-                                        ?? relayViewConfig?.accountBalance?.limitJSONPath
-                                        ?? selectedTemplate.extract.limit
-                                        ?? ""
-                                },
-                                set: { limitPathInputs[provider.id] = $0 }
-                            ))
-                            .textFieldStyle(.plain)
-                            .relayCompactInput()
-                        }
-
-                        TextField(viewModel.text(.successPath), text: Binding(
+                    HStack(spacing: 8) {
+                        TextField(viewModel.text(.authHeader), text: Binding(
                             get: {
-                                successPathInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.successJSONPath
-                                    ?? selectedTemplate.extract.success
-                                    ?? ""
+                                authHeaderInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.authHeader
+                                    ?? selectedTemplate.balanceRequest.authHeader
+                                    ?? "Authorization"
                             },
-                            set: { successPathInputs[provider.id] = $0 }
+                            set: { authHeaderInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+
+                        TextField(viewModel.text(.authScheme), text: Binding(
+                            get: {
+                                authSchemeInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.authScheme
+                                    ?? selectedTemplate.balanceRequest.authScheme
+                                    ?? "Bearer"
+                            },
+                            set: { authSchemeInputs[provider.id] = $0 }
                         ))
                         .textFieldStyle(.plain)
                         .relayCompactInput()
                     }
-                    .padding(.top, 8)
-                    .padding(.leading, contentLeading)
-                },
-                label: {
-                    Text(viewModel.text(.advancedSettings))
-                        .font(settingsLabelFont)
-                        .foregroundStyle(settingsBodyColor)
+
+                    HStack(spacing: 8) {
+                        TextField(viewModel.text(.userIDHeader), text: Binding(
+                            get: {
+                                userHeaderInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.userIDHeader
+                                    ?? selectedTemplate.balanceRequest.userIDHeader
+                                    ?? "New-Api-User"
+                            },
+                            set: { userHeaderInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+
+                        TextField(viewModel.text(.endpointPath), text: Binding(
+                            get: {
+                                endpointPathInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.endpointPath
+                                    ?? selectedTemplate.balanceRequest.path
+                            },
+                            set: { endpointPathInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(viewModel.text(.unit), text: Binding(
+                            get: {
+                                unitInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.unit
+                                    ?? selectedTemplate.extract.unit
+                                    ?? "quota"
+                            },
+                            set: { unitInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+
+                        TextField(viewModel.text(.remainingPath), text: Binding(
+                            get: {
+                                remainingPathInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.remainingJSONPath
+                                    ?? selectedTemplate.extract.remaining
+                            },
+                            set: { remainingPathInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(viewModel.text(.usedPath), text: Binding(
+                            get: {
+                                usedPathInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.usedJSONPath
+                                    ?? selectedTemplate.extract.used
+                                    ?? ""
+                            },
+                            set: { usedPathInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+
+                        TextField(viewModel.text(.limitPath), text: Binding(
+                            get: {
+                                limitPathInputs[provider.id]
+                                    ?? relayViewConfig?.accountBalance?.limitJSONPath
+                                    ?? selectedTemplate.extract.limit
+                                    ?? ""
+                            },
+                            set: { limitPathInputs[provider.id] = $0 }
+                        ))
+                        .textFieldStyle(.plain)
+                        .relayCompactInput()
+                    }
+
+                    TextField(viewModel.text(.successPath), text: Binding(
+                        get: {
+                            successPathInputs[provider.id]
+                                ?? relayViewConfig?.accountBalance?.successJSONPath
+                                ?? selectedTemplate.extract.success
+                                ?? ""
+                        },
+                        set: { successPathInputs[provider.id] = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .relayCompactInput()
                 }
-            )
+                .padding(.top, 8)
+                .padding(.leading, contentLeading)
+            }
         }
+        .padding(.bottom, 24)
     }
 
     private var sidebarProviders: [ProviderDescriptor] {
@@ -3465,8 +3418,27 @@ struct SettingsView: View {
         case .kimi:
             return "menu_kimi_icon"
         case .relay, .open, .dragon:
+            if let override = relayModelIconOverrideName(for: provider) {
+                return override
+            }
             return "menu_relay_icon"
         }
+    }
+
+    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
+        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
+            return nil
+        }
+        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
+        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
+        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
+        let providerName = provider.name.lowercased()
+        let relaySignals = "\(relayID)|\(host)|\(providerName)"
+        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
+        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+            return "menu_kimi_icon"
+        }
+        return nil
     }
 
     private func fallbackIcon(for provider: ProviderDescriptor) -> String {
@@ -3765,6 +3737,22 @@ struct SettingsView: View {
                 ? "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制 \(header) 的值。"
                 : "Open the matching request in browser DevTools Network and copy the \(header) value from Request Headers."
         }
+    }
+
+    private func relayTokenHintLines(for provider: ProviderDescriptor) -> [String] {
+        let providerName = sidebarDisplayName(for: provider)
+        if viewModel.language == .zhHans {
+            return [
+                "这里填写 Authorization Bearer 值，带或不带 Bearer 前缀都可以",
+                "填写 \(providerName) 后台生成的访问令牌，直接粘贴即可。",
+                "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制 Authorization 的 Bearer 值。"
+            ]
+        }
+        return [
+            "Paste the Authorization bearer token here, with or without the Bearer prefix.",
+            "Use the access token generated by \(providerName).",
+            "You can copy the Authorization bearer value from browser DevTools Network Request Headers."
+        ]
     }
 
     private func relayCredentialModeLabel(_ mode: RelayCredentialMode) -> String {

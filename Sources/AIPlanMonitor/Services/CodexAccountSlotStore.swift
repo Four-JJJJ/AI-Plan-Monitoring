@@ -129,6 +129,16 @@ final class CodexAccountSlotStore {
         return slots.sorted(by: sortRule)
     }
 
+    func remove(slotID: CodexSlotID, now: Date = Date()) -> [CodexAccountSlot] {
+        removeStaleSlots(now: now)
+        let originalCount = slots.count
+        slots.removeAll { $0.slotID == slotID }
+        if slots.count != originalCount {
+            save()
+        }
+        return slots.sorted(by: sortRule)
+    }
+
     func upsertActive(snapshot: UsageSnapshot, now: Date = Date()) -> [CodexAccountSlot] {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
