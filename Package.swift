@@ -3,26 +3,26 @@
 import PackageDescription
 
 let package = Package(
-    name: "AIBalanceMonitor",
+    name: "AIPlanMonitor",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "AIBalanceMonitor",
-            targets: ["AIBalanceMonitor"]
+            name: "AIPlanMonitor",
+            targets: ["AIPlanMonitor"]
         )
     ],
     targets: [
         .executableTarget(
-            name: "AIBalanceMonitor",
+            name: "AIPlanMonitor",
             resources: [
                 .process("Resources")
             ]
         ),
         .testTarget(
-            name: "AIBalanceMonitorTests",
-            dependencies: ["AIBalanceMonitor"]
+            name: "AIPlanMonitorTests",
+            dependencies: ["AIPlanMonitor"]
         )
     ]
 )

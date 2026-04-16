@@ -108,8 +108,8 @@ For step-by-step instructions, see [Install Guide](DOWNLOAD.md).
 ## Security
 
 - Credentials saved from settings are stored in macOS Keychain by default
-- Legacy `AIBalanceMonitor` keychain entries are migrated to `AI Plan Monitor`
-- App configuration is stored under `~/Library/Application Support/AIBalanceMonitor`
+- Legacy `AIPlanMonitor` keychain entries are migrated to `AI Plan Monitor`
+- App configuration is stored under `~/Library/Application Support/AIPlanMonitor`
 - Browser-derived credentials can be used as fallback for supported relay sites
 
 ## Build From Source
