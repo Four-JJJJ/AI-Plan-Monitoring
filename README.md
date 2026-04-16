@@ -150,8 +150,8 @@ AI Plan Monitor 解决的是一个很实际的问题：现在 AI 服务的额度
 ## 安全说明
 
 - 用户在设置中手动保存的凭证默认存放在 macOS Keychain
-- 旧版 `AIBalanceMonitor` 的钥匙串条目会迁移到新的 `AI Plan Monitor`
-- 应用配置保存在 `~/Library/Application Support/AIBalanceMonitor`
+- 旧版 `AIPlanMonitor` 的钥匙串条目会迁移到新的 `AI Plan Monitor`
+- 应用配置保存在 `~/Library/Application Support/AIPlanMonitor`
 - 对于支持的第三方站点，应用可以在浏览器优先模式下读取浏览器登录态作为兜底
 
 ## 从源码运行

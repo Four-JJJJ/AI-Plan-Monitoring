@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="AI Plan Monitor"
-EXECUTABLE_NAME="AIBalanceMonitor"
+EXECUTABLE_NAME="AIPlanMonitor"
 BUNDLE_ID="com.aiplanmonitor.app"
 DIST_DIR="$ROOT_DIR/dist"
 TMP_ROOT="$(mktemp -d /tmp/aibm_pkg.XXXXXX)"
@@ -18,7 +18,7 @@ RW_DMG_PATH="$TMP_ROOT/$APP_NAME-rw.dmg"
 MOUNT_POINT="$TMP_ROOT/mount"
 APP_ZIP_PATH="$TMP_ROOT/$APP_NAME.zip"
 INSTALL_GUIDE_NAME="安装说明（请先看这里）.txt"
-ICON_SOURCE_PATH="$ROOT_DIR/Sources/AIBalanceMonitor/Resources/app_icon_source.png"
+ICON_SOURCE_PATH="$ROOT_DIR/Sources/AIPlanMonitor/Resources/app_icon_source.png"
 ICONSET_DIR="$TMP_ROOT/AppIcon.iconset"
 ICNS_PATH="$TMP_ROOT/AppIcon.icns"
 INSTALL_GUIDE_PATH="$DMG_STAGING/$INSTALL_GUIDE_NAME"
@@ -321,7 +321,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key>
   <string>AI Plan Monitor</string>
   <key>CFBundleExecutable</key>
-  <string>AIBalanceMonitor</string>
+  <string>AIPlanMonitor</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIconName</key>
