@@ -365,17 +365,51 @@ final class AppViewModel {
         return ok
     }
 
-    func openFullDiskAccessSettings() {
-        fullDiskAccessRequested = true
-        openSystemSettingsApplication()
+    func openNotificationSettings() {
+        openSystemSettings(
+            urlCandidates: [
+                "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+                "x-apple.systempreferences:com.apple.preference.notifications"
+            ]
+        )
     }
 
-    private func openSystemSettingsApplication() {
-        let bundleIDs = [
-            "com.apple.systemsettings",
-            "com.apple.systempreferences"
-        ]
+    func openKeychainAccessSettings() {
+        openSystemSettings(
+            urlCandidates: [
+                "x-apple.systempreferences:com.apple.Passwords-Settings.extension",
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy"
+            ],
+            fallbackBundleIDs: [
+                "com.apple.keychainaccess",
+                "com.apple.systemsettings",
+                "com.apple.systempreferences"
+            ]
+        )
+    }
 
+    func openFullDiskAccessSettings() {
+        fullDiskAccessRequested = true
+        openSystemSettings(
+            urlCandidates: [
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+            ]
+        )
+    }
+
+    private func openSystemSettings(urlCandidates: [String], fallbackBundleIDs: [String] = ["com.apple.systemsettings", "com.apple.systempreferences"]) {
+        for raw in urlCandidates {
+            guard let url = URL(string: raw) else { continue }
+            if NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+        openSystemSettingsApplication(bundleIDs: fallbackBundleIDs)
+    }
+
+    private func openSystemSettingsApplication(bundleIDs: [String]) {
         for bundleID in bundleIDs {
             guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
                 continue

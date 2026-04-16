@@ -60,7 +60,7 @@ struct MenuContentView: View {
         // 顶部工具条：更新时间 + 刷新/设置/退出三个图标按钮。
         HStack(spacing: 12) {
             Text(headerUpdatedText)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.35))
                 .lineSpacing(0)
                 .lineLimit(1)
@@ -714,9 +714,27 @@ struct MenuContentView: View {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
-        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+        if relaySignals.contains("moonshot") {
             return "menu_kimi_icon"
+        }
+        if relaySignals.contains("deepseek") {
+            return firstExistingRelayIconName(["menu_deepseek_icon", "menu_deep_seek_icon"])
+        }
+        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
+            return firstExistingRelayIconName(["menu_mimo_icon", "menu_xiaomimimo_icon", "menu_xiaomi_mimo_icon"])
+        }
+        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
+            return firstExistingRelayIconName(["menu_minimax_icon", "menu_minimaxi_icon"])
+        }
+        return nil
+    }
+
+    private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
+        for name in candidates {
+            if Bundle.module.url(forResource: name, withExtension: "png") != nil ||
+                Bundle.module.url(forResource: name, withExtension: "svg") != nil {
+                return name
+            }
         }
         return nil
     }
@@ -991,13 +1009,16 @@ private struct PercentageModelCard: View {
         )
         .overlay {
             if let leadingAccentColor {
-                // 左侧状态竖线（当前 Codex 账号高亮）：按 Figma 使用纯左侧 1.5px 描边。
-                Rectangle()
-                    .fill(leadingAccentColor)
-                    .frame(width: 1.5)
-                    .frame(maxHeight: .infinity, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .clipShape(SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6))
+                // 左侧状态描边：保留左上/左下圆角端点，避免只剩中间直线。
+                SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+                    .strokeBorder(leadingAccentColor, lineWidth: 1.5)
+                    .mask(
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .frame(width: 12)
+                            Spacer(minLength: 0)
+                        }
+                    )
             }
         }
     }

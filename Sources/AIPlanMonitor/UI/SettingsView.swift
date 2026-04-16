@@ -43,6 +43,7 @@ struct SettingsView: View {
     @State private var permissionPrompt: PermissionPrompt?
     @State private var permissionResultMessage: [String: String] = [:]
     @State private var permissionResultIsError: [String: Bool] = [:]
+    @State private var autoDiscoveryScanning = false
     @State private var permissionTileHeight: CGFloat = 0
     @State private var relayTestResult: [String: RelayDiagnosticResult] = [:]
     @State private var relayAdvancedExpanded: [String: Bool] = [:]
@@ -94,6 +95,10 @@ struct SettingsView: View {
     private let settingsBodyColor = Color.white.opacity(0.80)
     // 次级提示色（55% 白）。
     private let settingsHintColor = Color.white.opacity(0.55)
+    // 输入框填充色（white_15）。
+    private let settingsInputFillColor = Color.white.opacity(0.15)
+    // 输入框占位色（white_30）。
+    private let settingsInputPlaceholderColor = Color.white.opacity(0.30)
     // API 余额页右侧配置项统一标签列宽（设计稿为 60）。
     private let thirdPartyConfigLabelWidth: CGFloat = 60
     private let thirdPartyConfigLabelSpacing: CGFloat = 12
@@ -474,28 +479,68 @@ struct SettingsView: View {
                 Button {
                     viewModel.openLatestReleaseDownload()
                 } label: {
-                    Text(updateBadgeTitle(version: update.latestVersion))
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(hex: 0x69BD64))
-                        .lineLimit(1)
+                    settingsTopMetaItem(
+                        text: updateBadgeTitle(version: update.latestVersion),
+                        iconName: "settings_download_icon",
+                        fallbackIcon: "arrow.down",
+                        textColor: Color(hex: 0x69BD64),
+                        textWeight: .semibold
+                    )
                 }
                 .buttonStyle(.plain)
             }
 
-            Text(currentVersionTitle)
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(settingsHintColor)
-                .lineLimit(1)
+            settingsTopMetaItem(
+                text: currentVersionTitle,
+                iconName: "settings_version_icon",
+                fallbackIcon: "chevron.left.forwardslash.chevron.right",
+                textColor: settingsHintColor
+            )
 
             Button {
                 viewModel.openRepositoryPage()
             } label: {
-                Text("GitHub")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(settingsHintColor)
-                    .lineLimit(1)
+                settingsTopMetaItem(
+                    text: "GitHub",
+                    iconName: "settings_github_icon",
+                    fallbackIcon: "chevron.left.forwardslash.chevron.right",
+                    textColor: settingsHintColor
+                )
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsTopMetaItem(
+        text: String,
+        iconName: String,
+        fallbackIcon: String,
+        textColor: Color,
+        textWeight: Font.Weight = .regular
+    ) -> some View {
+        HStack(spacing: 4) {
+            settingsTopMetaIcon(name: iconName, fallbackIcon: fallbackIcon, tint: textColor)
+            Text(text)
+                .font(.system(size: 11, weight: textWeight))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsTopMetaIcon(name: String, fallbackIcon: String, tint: Color) -> some View {
+        if let image = bundledImage(named: name) {
+            // 图标按原始宽高比缩放，避免不同视觉比例被拉伸。
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 11, height: 11)
+        } else {
+            Image(systemName: fallbackIcon)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(tint)
+                .frame(width: 11, height: 11)
         }
     }
 
@@ -671,12 +716,8 @@ struct SettingsView: View {
             }
             isNewAPISiteDialogPresented = true
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(viewModel.language == .zhHans ? "添加 NewAPI 站点" : "Add NewAPI Site")
-                    .font(.system(size: 10, weight: .semibold))
-            }
+            Text(viewModel.language == .zhHans ? "添加 NewAPI 站点" : "Add NewAPI Site")
+                .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(Color.white.opacity(0.55))
             .frame(maxWidth: .infinity, alignment: .center)
             .frame(height: 22)
@@ -695,7 +736,10 @@ struct SettingsView: View {
         return HStack(spacing: 8) {
             Toggle("", isOn: Binding(
                 get: { provider.enabled },
-                set: { viewModel.setEnabled($0, providerID: provider.id) }
+                set: {
+                    viewModel.setEnabled($0, providerID: provider.id)
+                    selectedProviderID = provider.id
+                }
             ))
             .toggleStyle(SettingsModelCheckboxToggleStyle())
             .labelsHidden()
@@ -719,6 +763,11 @@ struct SettingsView: View {
                 .stroke(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.30), lineWidth: 1)
         )
         .contentShape(Rectangle())
+        .highPriorityGesture(
+            TapGesture().onEnded {
+                selectedProviderID = provider.id
+            }
+        )
         .onTapGesture {
             selectedProviderID = provider.id
         }
@@ -807,7 +856,7 @@ struct SettingsView: View {
                         buttonTitle: notificationActionTitle,
                         buttonMutedStyle: viewModel.hasNotificationPermission
                     ) {
-                        permissionPrompt = .notifications
+                        handlePermissionAction(.notifications)
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
@@ -820,7 +869,7 @@ struct SettingsView: View {
                         buttonTitle: keychainActionTitle,
                         buttonMutedStyle: viewModel.secureStorageReady
                     ) {
-                        permissionPrompt = .keychain
+                        handlePermissionAction(.keychain)
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
@@ -833,7 +882,7 @@ struct SettingsView: View {
                         buttonTitle: fullDiskActionTitle,
                         buttonMutedStyle: viewModel.fullDiskAccessGranted
                     ) {
-                        permissionPrompt = .fullDisk
+                        handlePermissionAction(.fullDisk)
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
@@ -855,14 +904,21 @@ struct SettingsView: View {
                         title: localDiscoveryTitleText,
                         hint: viewModel.text(.localDiscoveryHint),
                         alignCenter: true,
-                        buttonTitle: viewModel.text(.localDiscoveryAction)
+                        buttonTitle: autoDiscoveryActionTitle,
+                        buttonDisabled: autoDiscoveryScanning
                     ) {
-                        permissionPrompt = .autoDiscovery
+                        startAutoDiscoveryScan()
                     }
 
-                    Text(localDiscoverySuccessHint)
-                        .font(settingsHintFont)
-                        .foregroundStyle(Color(hex: 0x69BD64))
+                    if let result = permissionResultMessage[PermissionPrompt.autoDiscovery.id], !result.isEmpty {
+                        Text(result)
+                            .font(settingsHintFont)
+                            .foregroundStyle((permissionResultIsError[PermissionPrompt.autoDiscovery.id] ?? false) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
+                    } else {
+                        Text(localDiscoverySuccessHint)
+                            .font(settingsHintFont)
+                            .foregroundStyle(Color(hex: 0x69BD64))
+                    }
 
                     Text(viewModel.text(.permissionsPrivacyPromise))
                         .font(.system(size: 10, weight: .semibold))
@@ -958,6 +1014,7 @@ struct SettingsView: View {
         hintLineSpacing: CGFloat = 2.5,
         alignCenter: Bool = false,
         buttonTitle: String,
+        buttonDisabled: Bool = false,
         destructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -976,7 +1033,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            settingsCapsuleButton(buttonTitle, destructive: destructive, action: action)
+            settingsCapsuleButton(buttonTitle, destructive: destructive, disabled: buttonDisabled, action: action)
                 // 非居中模式时，按钮略微下移与文字基线对齐。
                 .padding(.top, alignCenter ? 0 : 3)
         }
@@ -1028,6 +1085,7 @@ struct SettingsView: View {
     private func settingsCapsuleButton(
         _ title: String,
         destructive: Bool = false,
+        disabled: Bool = false,
         textOpacity: Double = 0.80,
         borderOpacity: Double = 0.55,
         action: @escaping () -> Void
@@ -1036,7 +1094,7 @@ struct SettingsView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : textOpacity))
+                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(textOpacity, 0.45) : textOpacity)))
                 .padding(.horizontal, 10)
                 .frame(height: 24)
                 .background(
@@ -1045,10 +1103,11 @@ struct SettingsView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : borderOpacity), lineWidth: 1)
+                        .stroke((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(borderOpacity, 0.35) : borderOpacity)), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
     }
 
     private var resetSectionTitle: String {
@@ -1063,6 +1122,37 @@ struct SettingsView: View {
         viewModel.language == .zhHans
             ? "扫描到 KIMI / Codex / Gemini ，自动添加到监控"
             : "Detected KIMI / Codex / Gemini and added them to monitoring."
+    }
+
+    private var autoDiscoveryActionTitle: String {
+        if autoDiscoveryScanning {
+            return viewModel.language == .zhHans ? "扫描中···" : "Scanning..."
+        }
+        return viewModel.text(.localDiscoveryAction)
+    }
+
+    private func settingsInputPrompt(_ text: String) -> Text {
+        Text(text)
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(settingsInputPlaceholderColor)
+    }
+
+    private func relayProminentTextField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField("", text: text, prompt: settingsInputPrompt(placeholder))
+            .textFieldStyle(.plain)
+            .relayProminentInput()
+    }
+
+    private func relayProminentSecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        SecureField("", text: text, prompt: settingsInputPrompt(placeholder))
+            .textFieldStyle(.plain)
+            .relayProminentInput()
+    }
+
+    private func relayCompactTextField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField("", text: text, prompt: settingsInputPrompt(placeholder))
+            .textFieldStyle(.plain)
+            .relayCompactInput()
     }
 
     private var localDiscoveryTitleText: String {
@@ -1168,12 +1258,10 @@ struct SettingsView: View {
 
             HStack(spacing: 8) {
                 if showNameField {
-                    TextField(viewModel.text(.providerName), text: $newProviderName)
-                        .textFieldStyle(.roundedBorder)
+                    relayProminentTextField(viewModel.text(.providerName), text: $newProviderName)
                 }
                 if showBaseURLField {
-                    TextField(viewModel.text(.baseURL), text: $newProviderBaseURL)
-                        .textFieldStyle(.roundedBorder)
+                    relayProminentTextField(viewModel.text(.baseURL), text: $newProviderBaseURL)
                 }
                 settingsActionButton(viewModel.text(.addProvider), prominent: true) {
                     let beforeIDs = Set(viewModel.config.providers.map(\.id))
@@ -1340,11 +1428,7 @@ struct SettingsView: View {
         }
     }
 
-    private func thirdPartyProviderSettingsCard(
-        _ provider: ProviderDescriptor,
-        snapshot: UsageSnapshot?,
-        error: String?
-    ) -> some View {
+    private func providerSettingsHeader(_ provider: ProviderDescriptor) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Text(sidebarDisplayName(for: provider))
@@ -1365,6 +1449,16 @@ struct SettingsView: View {
             .frame(height: 52)
 
             dividerLine
+        }
+    }
+
+    private func thirdPartyProviderSettingsCard(
+        _ provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        error: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            providerSettingsHeader(provider)
 
             VStack(alignment: .leading, spacing: 24) {
                 thirdPartyThresholdRow(provider)
@@ -1442,27 +1536,7 @@ struct SettingsView: View {
         error: String?
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                Text(sidebarDisplayName(for: provider))
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(settingsTitleColor)
-
-                Toggle("", isOn: Binding(
-                    get: { provider.enabled },
-                    set: { viewModel.setEnabled($0, providerID: provider.id) }
-                ))
-                .toggleStyle(FigmaSwitchToggleStyle())
-                .labelsHidden()
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 52)
-            .overlay(
-                Rectangle()
-                    .stroke(outlineColor, lineWidth: 1)
-            )
+            providerSettingsHeader(provider)
 
             VStack(alignment: .leading, spacing: 24) {
                 officialThresholdRow(provider)
@@ -1548,8 +1622,7 @@ struct SettingsView: View {
                     },
                     set: { officialThresholdInputs[provider.id] = $0 }
                 ),
-                prompt: Text("0.00")
-                    .foregroundStyle(settingsHintColor)
+                prompt: settingsInputPrompt("0.00")
             )
             .textFieldStyle(.plain)
             .font(.system(size: 12, weight: .semibold))
@@ -1599,11 +1672,11 @@ struct SettingsView: View {
         .frame(width: 90, height: 24)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
+                .fill(settingsInputFillColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -1785,23 +1858,12 @@ struct SettingsView: View {
                             .foregroundStyle(settingsBodyColor)
                             .frame(width: 60, alignment: .leading)
 
-                        SecureField("", text: Binding(
-                            get: { officialCookieInputs[provider.id, default: ""] },
-                            set: { officialCookieInputs[provider.id] = $0 }
-                        ), prompt: Text(hasSavedManualCookie ? maskedSecretDots : viewModel.text(.manualCookieHeader))
-                            .foregroundStyle(settingsHintColor))
-                        .textFieldStyle(.plain)
-                        .font(settingsBodyFont)
-                        .foregroundStyle(settingsBodyColor)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                                .fill(Color.white.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                                .stroke(outlineColor, lineWidth: 1)
+                        relayProminentSecureField(
+                            hasSavedManualCookie ? maskedSecretDots : viewModel.text(.manualCookieHeader),
+                            text: Binding(
+                                get: { officialCookieInputs[provider.id, default: ""] },
+                                set: { officialCookieInputs[provider.id] = $0 }
+                            )
                         )
                         .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
@@ -2493,30 +2555,40 @@ struct SettingsView: View {
     private func handlePermissionPrompt() {
         let prompt = permissionPrompt
         permissionPrompt = nil
+        handlePermissionAction(prompt)
+    }
 
+    private func handlePermissionAction(_ prompt: PermissionPrompt?) {
         switch prompt {
         case .notifications:
-            viewModel.requestNotificationPermission()
-            permissionResultMessage[PermissionPrompt.notifications.id] = viewModel.text(.permissionNotificationsRequested)
+            if !viewModel.hasNotificationPermission {
+                viewModel.requestNotificationPermission()
+            }
+            viewModel.openNotificationSettings()
+            permissionResultMessage[PermissionPrompt.notifications.id] = viewModel.hasNotificationPermission
+                ? (viewModel.language == .zhHans ? "已打开系统通知设置" : "Opened Notification settings.")
+                : viewModel.text(.permissionNotificationsRequested)
             permissionResultIsError[PermissionPrompt.notifications.id] = false
         case .keychain:
-            let ok = viewModel.prepareSecureStorageAccess()
-            permissionResultMessage[PermissionPrompt.keychain.id] = ok
-                ? viewModel.text(.permissionKeychainReady)
-                : viewModel.text(.permissionKeychainFailed)
-            permissionResultIsError[PermissionPrompt.keychain.id] = !ok
+            if !viewModel.secureStorageReady {
+                let ok = viewModel.prepareSecureStorageAccess()
+                permissionResultMessage[PermissionPrompt.keychain.id] = ok
+                    ? viewModel.text(.permissionKeychainReady)
+                    : viewModel.text(.permissionKeychainFailed)
+                permissionResultIsError[PermissionPrompt.keychain.id] = !ok
+            } else {
+                permissionResultMessage[PermissionPrompt.keychain.id] = viewModel.language == .zhHans
+                    ? "已打开钥匙串相关设置"
+                    : "Opened Keychain related settings."
+                permissionResultIsError[PermissionPrompt.keychain.id] = false
+            }
+            viewModel.openKeychainAccessSettings()
         case .fullDisk:
             viewModel.openFullDiskAccessSettings()
             permissionResultMessage[PermissionPrompt.fullDisk.id] = viewModel.text(.permissionFullDiskRequested)
             permissionResultIsError[PermissionPrompt.fullDisk.id] = false
         case .autoDiscovery:
-            permissionResultMessage[PermissionPrompt.autoDiscovery.id] = viewModel.text(.localDiscoveryScanning)
-            permissionResultIsError[PermissionPrompt.autoDiscovery.id] = false
-            Task { @MainActor in
-                let result = await viewModel.discoverLocalProviders()
-                permissionResultMessage[PermissionPrompt.autoDiscovery.id] = result
-                permissionResultIsError[PermissionPrompt.autoDiscovery.id] = result == viewModel.text(.localDiscoveryNothingFound)
-            }
+            startAutoDiscoveryScan()
         case .resetLocalData:
             viewModel.resetLocalAppData()
             seedInputsFromConfig()
@@ -2528,6 +2600,20 @@ struct SettingsView: View {
             break
         }
         viewModel.refreshPermissionStatusesNow()
+    }
+
+    private func startAutoDiscoveryScan() {
+        guard !autoDiscoveryScanning else { return }
+        autoDiscoveryScanning = true
+        permissionResultMessage[PermissionPrompt.autoDiscovery.id] = nil
+        permissionResultIsError[PermissionPrompt.autoDiscovery.id] = false
+
+        Task { @MainActor in
+            let result = await viewModel.discoverLocalProviders()
+            permissionResultMessage[PermissionPrompt.autoDiscovery.id] = result
+            permissionResultIsError[PermissionPrompt.autoDiscovery.id] = result == viewModel.text(.localDiscoveryNothingFound)
+            autoDiscoveryScanning = false
+        }
     }
 
     @ViewBuilder
@@ -2609,12 +2695,10 @@ struct SettingsView: View {
 
             if showBaseURLField {
                 thirdPartyConfigRow(title: "Base URL") {
-                    TextField(viewModel.text(.baseURL), text: Binding(
+                    relayProminentTextField(viewModel.text(.baseURL), text: Binding(
                         get: { baseURLInputs[provider.id] ?? (provider.baseURL ?? "") },
                         set: { baseURLInputs[provider.id] = $0 }
                     ))
-                    .textFieldStyle(.plain)
-                    .relayProminentInput()
                     .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2622,12 +2706,10 @@ struct SettingsView: View {
 
             if showNameField {
                 thirdPartyConfigRow(title: viewModel.text(.providerName)) {
-                    TextField(viewModel.text(.providerName), text: Binding(
+                    relayProminentTextField(viewModel.text(.providerName), text: Binding(
                         get: { providerNameInputs[provider.id] ?? provider.name },
                         set: { providerNameInputs[provider.id] = $0 }
                     ))
-                    .textFieldStyle(.plain)
-                    .relayProminentInput()
                     .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2636,12 +2718,10 @@ struct SettingsView: View {
             if showUserIDField {
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: viewModel.text(.userID)) {
-                        TextField(viewModel.text(.userID), text: Binding(
+                        relayProminentTextField(viewModel.text(.userID), text: Binding(
                             get: { userIDInputs[provider.id] ?? defaultUserID },
                             set: { userIDInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayProminentInput()
                         .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -2658,13 +2738,10 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
                         HStack(spacing: 8) {
-                            SecureField("", text: Binding(
+                            relayProminentSecureField(hasSavedBalanceToken ? maskedSecretDots : tokenPlaceholder, text: Binding(
                                 get: { systemTokenInputs[provider.id, default: ""] },
                                 set: { systemTokenInputs[provider.id] = $0 }
-                            ), prompt: Text(hasSavedBalanceToken ? maskedSecretDots : tokenPlaceholder)
-                                .foregroundStyle(settingsHintColor))
-                            .textFieldStyle(.plain)
-                            .relayProminentInput()
+                            ))
                             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
                             settingsCapsuleButton(tokenSaveButtonTitle) {
@@ -2693,13 +2770,10 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
                         HStack(spacing: 8) {
-                            SecureField("", text: Binding(
+                            relayProminentSecureField(hasSavedToken ? maskedSecretDots : tokenPlaceholder, text: Binding(
                                 get: { tokenInputs[provider.id, default: ""] },
                                 set: { tokenInputs[provider.id] = $0 }
-                            ), prompt: Text(hasSavedToken ? maskedSecretDots : tokenPlaceholder)
-                                .foregroundStyle(settingsHintColor))
-                            .textFieldStyle(.plain)
-                            .relayProminentInput()
+                            ))
                             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
                             settingsCapsuleButton(tokenSaveButtonTitle) {
@@ -2907,7 +2981,7 @@ struct SettingsView: View {
                     .frame(height: 24)
 
                     HStack(spacing: 8) {
-                        TextField(viewModel.text(.authHeader), text: Binding(
+                        relayCompactTextField(viewModel.text(.authHeader), text: Binding(
                             get: {
                                 authHeaderInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.authHeader
@@ -2916,10 +2990,8 @@ struct SettingsView: View {
                             },
                             set: { authHeaderInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
 
-                        TextField(viewModel.text(.authScheme), text: Binding(
+                        relayCompactTextField(viewModel.text(.authScheme), text: Binding(
                             get: {
                                 authSchemeInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.authScheme
@@ -2928,12 +3000,10 @@ struct SettingsView: View {
                             },
                             set: { authSchemeInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
                     }
 
                     HStack(spacing: 8) {
-                        TextField(viewModel.text(.userIDHeader), text: Binding(
+                        relayCompactTextField(viewModel.text(.userIDHeader), text: Binding(
                             get: {
                                 userHeaderInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.userIDHeader
@@ -2942,10 +3012,8 @@ struct SettingsView: View {
                             },
                             set: { userHeaderInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
 
-                        TextField(viewModel.text(.endpointPath), text: Binding(
+                        relayCompactTextField(viewModel.text(.endpointPath), text: Binding(
                             get: {
                                 endpointPathInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.endpointPath
@@ -2953,12 +3021,10 @@ struct SettingsView: View {
                             },
                             set: { endpointPathInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
                     }
 
                     HStack(spacing: 8) {
-                        TextField(viewModel.text(.unit), text: Binding(
+                        relayCompactTextField(viewModel.text(.unit), text: Binding(
                             get: {
                                 unitInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.unit
@@ -2967,10 +3033,8 @@ struct SettingsView: View {
                             },
                             set: { unitInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
 
-                        TextField(viewModel.text(.remainingPath), text: Binding(
+                        relayCompactTextField(viewModel.text(.remainingPath), text: Binding(
                             get: {
                                 remainingPathInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.remainingJSONPath
@@ -2978,12 +3042,10 @@ struct SettingsView: View {
                             },
                             set: { remainingPathInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
                     }
 
                     HStack(spacing: 8) {
-                        TextField(viewModel.text(.usedPath), text: Binding(
+                        relayCompactTextField(viewModel.text(.usedPath), text: Binding(
                             get: {
                                 usedPathInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.usedJSONPath
@@ -2992,10 +3054,8 @@ struct SettingsView: View {
                             },
                             set: { usedPathInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
 
-                        TextField(viewModel.text(.limitPath), text: Binding(
+                        relayCompactTextField(viewModel.text(.limitPath), text: Binding(
                             get: {
                                 limitPathInputs[provider.id]
                                     ?? relayViewConfig?.accountBalance?.limitJSONPath
@@ -3004,11 +3064,9 @@ struct SettingsView: View {
                             },
                             set: { limitPathInputs[provider.id] = $0 }
                         ))
-                        .textFieldStyle(.plain)
-                        .relayCompactInput()
                     }
 
-                    TextField(viewModel.text(.successPath), text: Binding(
+                    relayCompactTextField(viewModel.text(.successPath), text: Binding(
                         get: {
                             successPathInputs[provider.id]
                                 ?? relayViewConfig?.accountBalance?.successJSONPath
@@ -3017,14 +3075,13 @@ struct SettingsView: View {
                         },
                         set: { successPathInputs[provider.id] = $0 }
                     ))
-                    .textFieldStyle(.plain)
-                    .relayCompactInput()
                 }
                 .padding(.top, 8)
                 .padding(.leading, contentLeading)
             }
         }
-        .padding(.bottom, 24)
+        // detailPane 外层已有 vertical 16；这里留 8 让容器底部总留白约 24。
+        .padding(.bottom, 8)
     }
 
     private var sidebarProviders: [ProviderDescriptor] {
@@ -3434,11 +3491,33 @@ struct SettingsView: View {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
-        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+        if relaySignals.contains("moonshot") {
             return "menu_kimi_icon"
         }
+        if relaySignals.contains("deepseek") {
+            return firstExistingRelayIconName([
+                "menu_deepseek_icon",
+                "menu_deep_seek_icon"
+            ])
+        }
+        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
+            return firstExistingRelayIconName([
+                "menu_mimo_icon",
+                "menu_xiaomimimo_icon",
+                "menu_xiaomi_mimo_icon"
+            ])
+        }
+        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
+            return firstExistingRelayIconName([
+                "menu_minimax_icon",
+                "menu_minimaxi_icon"
+            ])
+        }
         return nil
+    }
+
+    private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
+        candidates.first { bundledImage(named: $0) != nil }
     }
 
     private func fallbackIcon(for provider: ProviderDescriptor) -> String {
@@ -4230,34 +4309,34 @@ private extension Color {
 private extension View {
     func relayCompactInput() -> some View {
         self
-            .font(.system(size: 12, weight: .regular))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Color.white.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
+                    .fill(Color.white.opacity(0.15))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
             )
     }
 
     func relayProminentInput() -> some View {
         // Relay 基础输入框样式（与 token 输入框保持一致）。
         self
-            .font(.system(size: 12, weight: .regular))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Color.white.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
+                    .fill(Color.white.opacity(0.15))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
             )
     }
 }

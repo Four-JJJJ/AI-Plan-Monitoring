@@ -9,7 +9,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private var refreshTimer: Timer?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
-    private let statusIconSize: CGFloat = 18
+    private let statusIconSize: CGFloat = 16
     private let statusSpacing: CGFloat = 4
     private let protectedOutsideClickBundleIDs: Set<String> = [
         "com.apple.securityagent",
@@ -346,9 +346,27 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        let kimiLikeRelayIDs = ["deepseek", "xiaomimimo", "moonshot", "minimax", "minimaxi"]
-        if kimiLikeRelayIDs.contains(where: { relaySignals.contains($0) }) {
+        if relaySignals.contains("moonshot") {
             return "menu_kimi_icon"
+        }
+        if relaySignals.contains("deepseek") {
+            return firstExistingRelayIconName(["menu_deepseek_icon", "menu_deep_seek_icon"])
+        }
+        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
+            return firstExistingRelayIconName(["menu_mimo_icon", "menu_xiaomimimo_icon", "menu_xiaomi_mimo_icon"])
+        }
+        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
+            return firstExistingRelayIconName(["menu_minimax_icon", "menu_minimaxi_icon"])
+        }
+        return nil
+    }
+
+    private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
+        for name in candidates {
+            if Bundle.module.url(forResource: name, withExtension: "png") != nil ||
+                Bundle.module.url(forResource: name, withExtension: "svg") != nil {
+                return name
+            }
         }
         return nil
     }
