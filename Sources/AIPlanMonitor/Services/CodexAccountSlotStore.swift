@@ -242,11 +242,6 @@ final class CodexAccountSlotStore {
             return explicitKey.lowercased()
         }
 
-        if let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !accountID.isEmpty {
-            return "account:\(accountID.lowercased())"
-        }
-
         if let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !fingerprint.isEmpty {
             return "fingerprint:\(fingerprint.lowercased())"

@@ -21,6 +21,7 @@ struct CodexParsedAuthPayload {
     var accountId: String?
     var idToken: String?
     var accountEmail: String?
+    var accountSubject: String?
     var credentialFingerprint: String
 }
 
@@ -148,10 +149,12 @@ final class CodexAccountProfileStore {
             updated.authJSON = trimmed
             updated.accountId = payload.accountId
             updated.accountEmail = payload.accountEmail
+            updated.accountSubject = payload.accountSubject
             updated.credentialFingerprint = payload.credentialFingerprint
             if previous.authJSON.trimmingCharacters(in: .whitespacesAndNewlines) != trimmed
                 || previous.accountId != payload.accountId
                 || previous.accountEmail != payload.accountEmail
+                || previous.accountSubject != payload.accountSubject
                 || previous.credentialFingerprint?.lowercased() != currentFingerprint {
                 updated.lastImportedAt = Date()
             }
@@ -170,6 +173,7 @@ final class CodexAccountProfileStore {
                 authJSON: trimmed,
                 accountId: payload.accountId,
                 accountEmail: payload.accountEmail,
+                accountSubject: payload.accountSubject,
                 credentialFingerprint: payload.credentialFingerprint,
                 lastImportedAt: Date(),
                 isCurrentSystemAccount: true
@@ -193,6 +197,7 @@ final class CodexAccountProfileStore {
             authJSON: authJSON.trimmingCharacters(in: .whitespacesAndNewlines),
             accountId: payload.accountId,
             accountEmail: payload.accountEmail,
+            accountSubject: payload.accountSubject,
             credentialFingerprint: payload.credentialFingerprint,
             lastImportedAt: importedAt,
             isCurrentSystemAccount: false
@@ -216,7 +221,11 @@ final class CodexAccountProfileStore {
         let refreshToken = OfficialValueParser.string(tokens["refresh_token"] ?? tokens["refreshToken"])
         let idToken = OfficialValueParser.string(tokens["id_token"] ?? tokens["idToken"])
         let email = idToken.flatMap(decodeEmailFromJWT)
-        let fingerprint = credentialFingerprint(for: accessToken) ?? credentialFingerprint(for: trimmed) ?? UUID().uuidString
+        let subject = idToken.flatMap(decodeSubjectFromJWT)
+        let refreshFingerprint = refreshToken.flatMap { credentialFingerprint(for: $0) }
+        let accessFingerprint = credentialFingerprint(for: accessToken)
+        let payloadFingerprint = credentialFingerprint(for: trimmed)
+        let fingerprint = refreshFingerprint ?? accessFingerprint ?? payloadFingerprint ?? UUID().uuidString
 
         return CodexParsedAuthPayload(
             accessToken: accessToken,
@@ -224,6 +233,7 @@ final class CodexAccountProfileStore {
             accountId: accountId,
             idToken: idToken,
             accountEmail: email,
+            accountSubject: subject,
             credentialFingerprint: fingerprint
         )
     }
@@ -236,6 +246,14 @@ final class CodexAccountProfileStore {
     }
 
     private static func decodeEmailFromJWT(_ token: String) -> String? {
+        decodedJWTValue(token, key: "email")
+    }
+
+    private static func decodeSubjectFromJWT(_ token: String) -> String? {
+        decodedJWTValue(token, key: "sub")
+    }
+
+    private static func decodedJWTValue(_ token: String, key: String) -> String? {
         let parts = token.split(separator: ".")
         guard parts.count >= 2 else { return nil }
         var payload = String(parts[1])
@@ -249,7 +267,7 @@ final class CodexAccountProfileStore {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return OfficialValueParser.string(json["email"])
+        return OfficialValueParser.string(json[key])
     }
 
     private func load() -> [CodexAccountProfile] {
@@ -298,8 +316,8 @@ final class CodexAccountProfileStore {
             return index
         }
 
-        if let accountId = payload.accountId?.lowercased(),
-           let index = profiles.firstIndex(where: { $0.accountId?.lowercased() == accountId }) {
+        if let subject = payload.accountSubject?.lowercased(),
+           let index = profiles.firstIndex(where: { $0.accountSubject?.lowercased() == subject }) {
             return index
         }
 
