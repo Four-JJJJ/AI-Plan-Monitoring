@@ -4,22 +4,22 @@ import XCTest
 final class CodexAccountSlotStoreTests: XCTestCase {
     func testAccountKeyPriority() {
         var snapshot = makeSnapshot(accountID: "acc-1", accountLabel: "a@test.com", subject: "sub-1")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "account:acc-1")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:account:acc-1|principal:subject:sub-1")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: "a@test.com", subject: "sub-1", fingerprint: "abc12345")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "fingerprint:abc12345")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:default|principal:subject:sub-1")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: "a@test.com", subject: "sub-1")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "subject:sub-1")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:default|principal:subject:sub-1")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: nil, subject: "sub-1")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "subject:sub-1")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:default|principal:subject:sub-1")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: nil, subject: nil, fingerprint: "abc12345")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "fingerprint:abc12345")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:default|principal:fingerprint:abc12345")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: "a@test.com", subject: nil, fingerprint: nil)
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "email:a@test.com")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "tenant:default|principal:email:a@test.com")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: nil, subject: nil)
         XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "unknown")
@@ -35,9 +35,9 @@ final class CodexAccountSlotStoreTests: XCTestCase {
 
         XCTAssertEqual(slots.count, 3)
         let keys = Set(slots.map(\.accountKey))
-        XCTAssertTrue(keys.contains("account:a"))
-        XCTAssertTrue(keys.contains("account:b"))
-        XCTAssertTrue(keys.contains("account:c"))
+        XCTAssertTrue(keys.contains("tenant:account:a|principal:unknown"))
+        XCTAssertTrue(keys.contains("tenant:account:b|principal:unknown"))
+        XCTAssertTrue(keys.contains("tenant:account:c|principal:unknown"))
         XCTAssertEqual(Set(slots.map(\.slotID.rawValue)), ["A", "B", "C"])
     }
 
@@ -51,7 +51,7 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         let slots = store.upsertActive(snapshot: bSnap, now: base.addingTimeInterval(60))
 
         XCTAssertEqual(slots.count, 2)
-        let inactive = slots.first(where: { $0.accountKey == "account:a" })
+        let inactive = slots.first(where: { $0.accountKey == "tenant:account:a|principal:unknown" })
         XCTAssertNotNil(inactive)
         XCTAssertEqual(inactive?.isActive, false)
         XCTAssertEqual(inactive?.lastSnapshot.quotaWindows.first?.resetAt, aSnap.quotaWindows.first?.resetAt)
@@ -81,12 +81,15 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(slots.count, 2)
-        XCTAssertEqual(Set(slots.map(\.accountKey)), ["fingerprint:finger-a", "fingerprint:finger-b"])
-        let inactive = slots.first(where: { $0.accountKey == "fingerprint:finger-a" })
+        XCTAssertEqual(
+            Set(slots.map(\.accountKey)),
+            ["tenant:default|principal:fingerprint:finger-a", "tenant:default|principal:fingerprint:finger-b"]
+        )
+        let inactive = slots.first(where: { $0.accountKey == "tenant:default|principal:fingerprint:finger-a" })
         XCTAssertEqual(inactive?.lastSnapshot.quotaWindows.first?.resetAt, base.addingTimeInterval(1_800))
     }
 
-    func testEmailCollisionDoesNotMergeDifferentFingerprints() throws {
+    func testEmailIdentityMergesFingerprintRotation() throws {
         let store = makeStore(staleInterval: 10_000)
         let base = Date(timeIntervalSince1970: 3_800)
 
@@ -111,10 +114,9 @@ final class CodexAccountSlotStoreTests: XCTestCase {
             now: base.addingTimeInterval(45)
         )
 
-        XCTAssertEqual(slots.count, 2)
-        XCTAssertEqual(Set(slots.map(\.accountKey)), ["fingerprint:finger-a", "fingerprint:finger-b"])
-        let inactive = slots.first(where: { $0.accountKey == "fingerprint:finger-a" })
-        XCTAssertEqual(inactive?.lastSnapshot.quotaWindows.first?.resetAt, base.addingTimeInterval(1_200))
+        XCTAssertEqual(slots.count, 1)
+        XCTAssertEqual(slots.first?.accountKey, "tenant:default|principal:email:shared@example.com")
+        XCTAssertEqual(slots.first?.lastSnapshot.quotaWindows.first?.resetAt, base.addingTimeInterval(3_600))
     }
 
     func testExplicitSlotIDIsHonoredForImportedProfiles() throws {

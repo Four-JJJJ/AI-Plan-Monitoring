@@ -91,7 +91,7 @@ final class KeychainService {
             return persist(snapshot)
         }
 
-        let ok = persistSecureSnapshot(snapshot)
+        let ok = persistSecureSnapshot(snapshot, interactive: false)
         if ok {
             defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
         }
@@ -160,7 +160,7 @@ final class KeychainService {
             defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
             return true
         }
-        let ok = persistSecureSnapshot(tokenCache)
+        let ok = persistSecureSnapshot(tokenCache, interactive: true)
         if ok {
             defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
         }
@@ -239,7 +239,7 @@ final class KeychainService {
         }
         lock.unlock()
 
-        guard persistSecureSnapshot(merged) else {
+        guard persistSecureSnapshot(merged, interactive: false) else {
             return false
         }
 
@@ -271,14 +271,19 @@ final class KeychainService {
         return try? JSONDecoder().decode([String: String].self, from: data)
     }
 
-    private func persistSecureSnapshot(_ snapshot: [String: String]) -> Bool {
+    private func persistSecureSnapshot(_ snapshot: [String: String], interactive: Bool) -> Bool {
         let encoded: Data
         do {
             encoded = try JSONEncoder().encode(snapshot)
         } catch {
             return false
         }
-        return saveDataToSecureStore(encoded, service: Self.defaultServiceName, account: Self.vaultAccount)
+        return saveDataToSecureStore(
+            encoded,
+            service: Self.defaultServiceName,
+            account: Self.vaultAccount,
+            interactive: interactive
+        )
     }
 
     private func readFromSecureStore(service: String, account: String, interactive: Bool) -> String? {
@@ -348,11 +353,12 @@ final class KeychainService {
         return result
     }
 
-    private func saveDataToSecureStore(_ data: Data, service: String, account: String) -> Bool {
+    private func saveDataToSecureStore(_ data: Data, service: String, account: String, interactive: Bool) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseAuthenticationContext as String: authenticationContext(interactive: interactive)
         ]
 
         let updateAttributes: [String: Any] = [
@@ -373,7 +379,8 @@ final class KeychainService {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecUseAuthenticationContext as String: authenticationContext(interactive: interactive)
         ]
         let addStatus = SecItemAdd(addAttributes as CFDictionary, nil)
         return addStatus == errSecSuccess

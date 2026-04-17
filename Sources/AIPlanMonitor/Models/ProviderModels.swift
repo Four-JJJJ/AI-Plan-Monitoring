@@ -423,12 +423,58 @@ struct CodexAccountProfile: Codable, Equatable, Identifiable {
     var authJSON: String
     var accountId: String?
     var accountEmail: String?
+    var accountSubject: String? = nil
+    var tenantKey: String? = nil
+    var identityKey: String? = nil
     var credentialFingerprint: String?
     var lastImportedAt: Date
     var isCurrentSystemAccount: Bool
 }
 
 struct CodexSwitchFeedback: Equatable {
+    var message: String
+    var isError: Bool
+}
+
+enum ClaudeProfileSource: String, Codable, CaseIterable, Identifiable {
+    case configDir
+    case manualCredentials
+
+    var id: String { rawValue }
+}
+
+struct ClaudeSlotViewModel: Identifiable, Equatable {
+    var id: String { slotID.rawValue }
+    var slotID: CodexSlotID
+    var title: String
+    var snapshot: UsageSnapshot
+    var isActive: Bool
+    var lastSeenAt: Date
+    var displayName: String
+    var source: ClaudeProfileSource?
+    var isSwitching: Bool = false
+    var canSwitch: Bool = false
+    var isCurrentSystemAccount: Bool = false
+    var profileDisplayName: String?
+    var switchMessage: String?
+    var switchMessageIsError: Bool = false
+}
+
+struct ClaudeAccountProfile: Codable, Equatable, Identifiable {
+    var id: String { slotID.rawValue }
+    var slotID: CodexSlotID
+    var displayName: String
+    var source: ClaudeProfileSource
+    var configDir: String?
+    var credentialsJSON: String?
+    var accountId: String?
+    var accountEmail: String?
+    var credentialFingerprint: String?
+    var lastImportedAt: Date
+    var isCurrentSystemAccount: Bool
+}
+
+struct ClaudeSwitchFeedback: Equatable {
     var message: String
     var isError: Bool
 }
@@ -445,7 +491,7 @@ struct AppConfig: Codable, Equatable {
         language: AppLanguage = .zhHans,
         launchAtLoginEnabled: Bool = false,
         simplifiedRelayConfig: Bool = true,
-        showOfficialAccountEmailInMenuBar: Bool = true,
+        showOfficialAccountEmailInMenuBar: Bool = false,
         statusBarProviderID: String? = nil,
         providers: [ProviderDescriptor]
     ) {
@@ -488,7 +534,7 @@ struct AppConfig: Codable, Equatable {
         self.language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
         self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
         self.simplifiedRelayConfig = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig) ?? true
-        self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? true
+        self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
         let decodedProviders = try container.decodeIfPresent([ProviderDescriptor].self, forKey: .providers) ?? AppConfig.default.providers
         self.providers = decodedProviders.map { $0.normalized() }
         self.statusBarProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)

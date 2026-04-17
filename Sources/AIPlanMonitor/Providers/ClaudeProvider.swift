@@ -3,11 +3,14 @@ import Foundation
 final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private static let cache = ClaudeSnapshotCache()
     private static let gate = ClaudeFetchGate()
+    private static let webReadBackoff = WebOverlayRetryBackoff()
 
     private let cacheTTL: TimeInterval = 15
+    private let webRetryBackoffInterval: TimeInterval = 15 * 60
     private let session: URLSession
     private let keychain: KeychainService
-    private let browserCookieService: BrowserCookieService
+    private let browserCookieService: BrowserCookieDetecting
+    private let webReadBackoff: WebOverlayRetryBackoff
 
     let descriptor: ProviderDescriptor
 
@@ -15,12 +18,14 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         descriptor: ProviderDescriptor,
         session: URLSession = .shared,
         keychain: KeychainService,
-        browserCookieService: BrowserCookieService
+        browserCookieService: BrowserCookieDetecting,
+        webReadBackoff: WebOverlayRetryBackoff = ClaudeProvider.webReadBackoff
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
         self.browserCookieService = browserCookieService
+        self.webReadBackoff = webReadBackoff
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -35,7 +40,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             }
 
             do {
-                let snapshot = try await loadSnapshot()
+                let snapshot = try await loadSnapshot(forceRefresh: forceRefresh)
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
@@ -51,29 +56,29 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         }
     }
 
-    private func loadSnapshot() async throws -> UsageSnapshot {
+    private func loadSnapshot(forceRefresh: Bool) async throws -> UsageSnapshot {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
         switch official.sourceMode {
         case .api:
-            return try await loadFromAPI(includeWebOverlay: official.webMode != .disabled)
+            return try await loadFromAPI(includeWebOverlay: official.webMode != .disabled, forceRefresh: forceRefresh)
         case .cli:
-            return try await loadFromCLI()
+            return try await loadFromCLI(forceRefresh: forceRefresh)
         case .web:
-            return try await loadFromWeb()
+            return try await loadFromWeb(forceRefresh: forceRefresh)
         case .auto:
             do {
-                return try await loadFromAPI(includeWebOverlay: official.webMode != .disabled)
+                return try await loadFromAPI(includeWebOverlay: official.webMode != .disabled, forceRefresh: forceRefresh)
             } catch {
                 do {
-                    return try await loadFromCLI()
+                    return try await loadFromCLI(forceRefresh: forceRefresh)
                 } catch {
-                    return try await loadFromWeb()
+                    return try await loadFromWeb(forceRefresh: forceRefresh)
                 }
             }
         }
     }
 
-    private func loadFromAPI(includeWebOverlay: Bool) async throws -> UsageSnapshot {
+    private func loadFromAPI(includeWebOverlay: Bool, forceRefresh: Bool) async throws -> UsageSnapshot {
         var credentials = try loadCredentials()
         guard !credentials.inferenceOnly else {
             throw ProviderError.unauthorizedDetail("inference-only token cannot read Claude quota")
@@ -92,23 +97,23 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             planHint: credentials.subscriptionType
         )
 
-        if includeWebOverlay, let webSnapshot = try? await loadWebSnapshot() {
+        if includeWebOverlay, let webSnapshot = try? await loadWebSnapshot(forceRefresh: forceRefresh) {
             snapshot = merge(primary: snapshot, overlay: webSnapshot, sourceLabel: "API+Web")
         }
         return snapshot
     }
 
-    private func loadFromCLI() async throws -> UsageSnapshot {
+    private func loadFromCLI(forceRefresh: Bool) async throws -> UsageSnapshot {
         let snapshot = try runClaudeCLIUsage()
         if descriptor.officialConfig?.webMode != .disabled,
-           let webSnapshot = try? await loadWebSnapshot() {
+           let webSnapshot = try? await loadWebSnapshot(forceRefresh: forceRefresh) {
             return merge(primary: snapshot, overlay: webSnapshot, sourceLabel: "CLI+Web")
         }
         return snapshot
     }
 
-    private func loadFromWeb() async throws -> UsageSnapshot {
-        try await loadWebSnapshot()
+    private func loadFromWeb(forceRefresh: Bool) async throws -> UsageSnapshot {
+        try await loadWebSnapshot(forceRefresh: forceRefresh)
     }
 
     private func loadCredentials() throws -> ClaudeCredentials {
@@ -258,8 +263,8 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         return json
     }
 
-    private func loadWebSnapshot() async throws -> UsageSnapshot {
-        let cookie = try resolveClaudeCookieHeader()
+    private func loadWebSnapshot(forceRefresh: Bool) async throws -> UsageSnapshot {
+        let cookie = try await resolveClaudeCookieHeader(forceRefresh: forceRefresh)
 
         if let token = extractCookieValue(name: "sessionKey", from: cookie.header),
            let oauthSnapshot = try? await loadWebOAuthSnapshot(token: token, source: cookie.source) {
@@ -295,7 +300,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         return snapshot
     }
 
-    private func resolveClaudeCookieHeader() throws -> BrowserCookieHeader {
+    private func resolveClaudeCookieHeader(forceRefresh: Bool) async throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
         let service = KeychainService.defaultServiceName
         if let account = official.manualCookieAccount,
@@ -309,19 +314,37 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential(official.manualCookieAccount ?? "official/claude/cookie-header")
         }
 
-        if let detected = browserCookieService.detectNamedCookie(name: "sessionKey", hostContains: "claude.ai") {
+        guard official.webMode == .autoImport else {
+            throw ProviderError.missingCredential("claude.ai session cookie")
+        }
+
+        let backoffKey = webReadBackoffKey(for: official)
+        guard await webReadBackoff.shouldAttempt(for: backoffKey, forceRefresh: forceRefresh) else {
+            throw ProviderError.missingCredential("claude.ai session cookie")
+        }
+
+        if let detected = browserCookieService.detectNamedCookie(name: "sessionKey", hostContains: "claude.ai", order: nil) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
+            await webReadBackoff.clearFailure(for: backoffKey)
             return detected
         }
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "claude.ai") {
+        if let detected = browserCookieService.detectCookieHeader(hostContains: "claude.ai", order: nil) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
+            await webReadBackoff.clearFailure(for: backoffKey)
             return detected
         }
+        await webReadBackoff.markFailure(for: backoffKey, interval: webRetryBackoffInterval)
         throw ProviderError.missingCredential("claude.ai session cookie")
+    }
+
+    private func webReadBackoffKey(for official: OfficialProviderConfig) -> String {
+        let account = official.manualCookieAccount?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (account?.isEmpty == false ? account! : descriptor.id)
+        return "claude:\(normalized)"
     }
 
     private func fetchClaudeOrganizationID(cookieHeader: String) async throws -> String? {

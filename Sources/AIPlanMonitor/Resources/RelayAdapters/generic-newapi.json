@@ -14,8 +14,8 @@
       "en": "Enter the site's API key or sk token. Both `sk-...` and `Bearer sk-...` are supported."
     },
     "balanceAuthHint": {
-      "zhHans": "如果你开启账户余额通道，这里通常填后台 access token；少数站点需要粘贴完整 Cookie。",
-      "en": "If account balance is enabled, this is usually a dashboard access token; some sites require the full Cookie instead."
+      "zhHans": "如果你开启账户余额通道，这里通常粘贴请求头中的 Authorization 值；少数站点需要完整 Cookie。",
+      "en": "If account balance is enabled, this usually uses the Authorization value from request headers; some sites require the full Cookie instead."
     }
   },
   "authStrategies": [

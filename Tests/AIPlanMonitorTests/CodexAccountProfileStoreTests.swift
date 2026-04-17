@@ -15,6 +15,9 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profile.displayName, "Main")
         XCTAssertEqual(profile.accountId, "acc-1")
         XCTAssertEqual(profile.accountEmail, "user@example.com")
+        XCTAssertEqual(profile.accountSubject, "sub-acc-1")
+        XCTAssertEqual(profile.tenantKey, "account:acc-1")
+        XCTAssertEqual(profile.identityKey, "tenant:account:acc-1|principal:subject:sub-acc-1")
         XCTAssertNotNil(profile.credentialFingerprint)
     }
 
@@ -78,6 +81,27 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertFalse(profiles.first(where: { $0.slotID == .a })?.isCurrentSystemAccount == true)
     }
 
+    func testCaptureCurrentAuthKeepsSameEmailDifferentTeamsAsSeparateProfiles() {
+        let store = makeStore()
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-a",
+                email: "shared@example.com",
+                subject: "sub-shared"
+            )
+        )
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-b",
+                email: "shared@example.com",
+                subject: "sub-shared"
+            )
+        )
+
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(Set(profiles.compactMap(\.accountId)), ["team-a", "team-b"])
+    }
+
     func testCaptureCurrentAuthStoresThirdDistinctAccountIntoSlotC() {
         let store = makeStore()
 
@@ -113,6 +137,89 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profiles.count, 1)
         XCTAssertEqual(profiles.first?.slotID, .a)
         XCTAssertTrue(profiles.first?.authJSON.contains("rotated-access-token") == true)
+    }
+
+    func testCaptureCurrentAuthDoesNotMergeDifferentTeamsEvenWhenFingerprintMatches() {
+        let store = makeStore()
+        let sharedToken = "same-access-token"
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-a",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-b",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(Set(profiles.compactMap(\.accountId)), ["team-a", "team-b"])
+    }
+
+    func testCurrentSystemAccountUsesIdentityWhenFingerprintIsSharedAcrossTeams() {
+        let store = makeStore()
+        let sharedToken = "same-access-token"
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-a",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-b",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+
+        XCTAssertEqual(profiles.filter(\.isCurrentSystemAccount).count, 1)
+        XCTAssertEqual(profiles.first(where: \.isCurrentSystemAccount)?.accountId, "team-b")
+    }
+
+    func testSnapshotMatchingPrefersTeamScopedIdentityOverFingerprintFallback() {
+        let store = makeStore()
+        let sharedToken = "same-access-token"
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-a",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(
+                accountID: "team-b",
+                email: "shared@example.com",
+                subject: "sub-shared",
+                accessToken: sharedToken
+            )
+        )
+        let snapshot = makeSnapshot(
+            accountID: "team-b",
+            accountLabel: "shared@example.com",
+            subject: "sub-shared",
+            fingerprint: try? CodexAccountProfileStore.parseAuthJSON(
+                sampleAuthJSON(accountID: "team-a", email: "shared@example.com", subject: "sub-shared", accessToken: sharedToken)
+            ).credentialFingerprint
+        )
+
+        guard let index = CodexAccountProfileStore.matchingIndex(for: snapshot, in: profiles) else {
+            return XCTFail("expected snapshot to match a profile")
+        }
+
+        XCTAssertEqual(profiles[index].accountId, "team-b")
     }
 
     func testRemoveProfileDeletesSlot() {
@@ -197,20 +304,73 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         return CodexAccountProfileStore(fileURL: path)
     }
 
-    private func sampleAuthJSON(accountID: String, email: String, accessToken: String? = nil) -> String {
-        let payload = Data(#"{"email":"\#(email)"}"#.utf8).base64EncodedString()
+    private func sampleAuthJSON(
+        accountID: String?,
+        email: String,
+        subject: String? = nil,
+        accessToken: String? = nil
+    ) -> String {
+        let subjectValue = subject ?? "sub-\(accountID ?? "default")"
+        let payload = Data(#"{"email":"\#(email)","sub":"\#(subjectValue)"}"#.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+        let accountLine: String
+        if let accountID {
+            accountLine = #"""
+            "account_id": "\#(accountID)",
+            """#
+        } else {
+            accountLine = ""
+        }
+        let accountSuffix = accountID ?? "default"
         return #"""
         {
           "tokens": {
-            "access_token": "\#(accessToken ?? "access-token-\(accountID)")",
-            "refresh_token": "refresh-token-\#(accountID)",
-            "account_id": "\#(accountID)",
+            "access_token": "\#(accessToken ?? "access-token-\(accountSuffix)")",
+            "refresh_token": "refresh-token-\#(accountSuffix)",
+            \#(accountLine)
             "id_token": "header.\#(payload).signature"
           }
         }
         """#
+    }
+
+    private func makeSnapshot(
+        accountID: String?,
+        accountLabel: String?,
+        subject: String?,
+        fingerprint: String?
+    ) -> UsageSnapshot {
+        var rawMeta: [String: String] = [:]
+        if let accountID {
+            rawMeta["codex.accountId"] = accountID
+            rawMeta["codex.teamId"] = accountID
+        }
+        if let accountLabel {
+            rawMeta["codex.accountLabel"] = accountLabel
+        }
+        if let subject {
+            rawMeta["codex.subject"] = subject
+        }
+        if let fingerprint {
+            rawMeta["codex.credentialFingerprint"] = fingerprint
+        }
+
+        return UsageSnapshot(
+            source: "codex-official",
+            status: .ok,
+            remaining: 50,
+            used: 50,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(),
+            note: "",
+            quotaWindows: [],
+            sourceLabel: "API",
+            accountLabel: accountLabel,
+            extras: [:],
+            rawMeta: rawMeta
+        )
     }
 }

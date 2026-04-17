@@ -14,6 +14,10 @@ final class AppViewModel {
     private let codexProfileSnapshotService = CodexProfileSnapshotService()
     private let codexDesktopAuthService = CodexDesktopAuthService()
     private let codexDesktopAppService = CodexDesktopAppService()
+    private let claudeSlotStore = ClaudeAccountSlotStore()
+    private let claudeProfileStore = ClaudeAccountProfileStore()
+    private let claudeProfileSnapshotService = ClaudeProfileSnapshotService()
+    private let claudeDesktopAuthService = ClaudeDesktopAuthService()
     private let launchAtLoginService = LaunchAtLoginService()
     private let notifications = NotificationService()
     private let providerFactory: ProviderFactory
@@ -23,6 +27,9 @@ final class AppViewModel {
     private(set) var codexSlots: [CodexAccountSlot] = []
     private(set) var codexProfiles: [CodexAccountProfile] = []
     private(set) var codexSwitchFeedback: [CodexSlotID: CodexSwitchFeedback] = [:]
+    private(set) var claudeSlots: [ClaudeAccountSlot] = []
+    private(set) var claudeProfiles: [ClaudeAccountProfile] = []
+    private(set) var claudeSwitchFeedback: [CodexSlotID: ClaudeSwitchFeedback] = [:]
     private(set) var errors: [String: String] = [:]
     private(set) var lastUpdatedAt: Date?
     private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
@@ -42,6 +49,10 @@ final class AppViewModel {
     private var codexSwitchingSlots: Set<CodexSlotID> = []
     private var codexPrefetchInFlightSlots: Set<CodexSlotID> = []
     private var codexPrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
+    private var claudeFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
+    private var claudeSwitchingSlots: Set<CodexSlotID> = []
+    private var claudePrefetchInFlightSlots: Set<CodexSlotID> = []
+    private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
     private var hasStarted = false
@@ -58,13 +69,16 @@ final class AppViewModel {
         self.currentAppVersion = Self.detectCurrentAppVersion()
         self.providerFactory = ProviderFactory(keychain: keychain)
         self.codexSlots = codexSlotStore.visibleSlots()
+        self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
+        self.claudeProfiles = []
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
             try? configStore.save(self.config)
         }
         syncCodexProfilesCurrentState()
+        syncClaudeProfilesCurrentState()
         refreshPermissionStatuses(force: true)
     }
 
@@ -256,6 +270,10 @@ final class AppViewModel {
         Localizer.text(key, language: config.language)
     }
 
+    func localizedText(_ zhHans: String, _ en: String) -> String {
+        config.language == .zhHans ? zhHans : en
+    }
+
     func aggregateStatusTitle(_ status: AggregateStatus) -> String {
         switch status {
         case .normal:
@@ -340,6 +358,88 @@ final class AppViewModel {
         setCodexSwitchFeedback(nil, for: slotID)
     }
 
+    func claudeSlotViewModels() -> [ClaudeSlotViewModel] {
+        syncClaudeProfilesCurrentState()
+        claudeSlots = claudeSlotStore.visibleSlots()
+        triggerClaudeProfileSnapshotPrefetchIfNeeded()
+        let now = Date()
+        return mergedClaudeSlotsForMenu()
+            .sorted { lhs, rhs in
+                if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
+                if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
+                return lhs.slotID < rhs.slotID
+            }
+            .map { slot in
+                let profile = matchedClaudeProfile(for: slot)
+                let feedback = claudeSwitchFeedback[slot.slotID]
+                let displaySnapshot = CodexQuotaDisplayNormalizer.normalize(
+                    snapshot: slot.lastSnapshot,
+                    isActive: slot.isActive,
+                    now: now
+                )
+                return ClaudeSlotViewModel(
+                    slotID: slot.slotID,
+                    title: claudeMenuTitle(for: slot.slotID),
+                    snapshot: displaySnapshot,
+                    isActive: slot.isActive,
+                    lastSeenAt: slot.lastSeenAt,
+                    displayName: profile?.displayName ?? slot.displayName,
+                    source: profile?.source,
+                    isSwitching: claudeSwitchingSlots.contains(slot.slotID),
+                    canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
+                    isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
+                    profileDisplayName: profile?.displayName,
+                    switchMessage: feedback?.message,
+                    switchMessageIsError: feedback?.isError ?? false
+                )
+            }
+    }
+
+    func claudeProfilesForSettings() -> [ClaudeAccountProfile] {
+        syncClaudeProfilesCurrentState()
+        return claudeProfiles.sorted { $0.slotID < $1.slotID }
+    }
+
+    func nextClaudeProfileSlotID() -> CodexSlotID {
+        claudeProfileStore.nextAvailableSlotID()
+    }
+
+    func claudeSettingsTitle(for slotID: CodexSlotID) -> String {
+        "Claude \(slotID.rawValue)"
+    }
+
+    func saveClaudeProfile(
+        slotID: CodexSlotID,
+        displayName: String,
+        source: ClaudeProfileSource,
+        configDir: String?,
+        credentialsJSON: String?
+    ) -> String {
+        do {
+            _ = try claudeProfileStore.saveProfile(
+                slotID: slotID,
+                displayName: displayName,
+                source: source,
+                configDir: configDir,
+                credentialsJSON: credentialsJSON,
+                currentFingerprint: claudeDesktopAuthService.currentCredentialFingerprint()
+            )
+            syncClaudeProfilesCurrentState()
+            return localizedText("Claude 账号档案已导入", "Claude profile imported")
+        } catch {
+            return "\(localizedText("导入失败", "Import failed")): \(error.localizedDescription)"
+        }
+    }
+
+    func removeClaudeProfile(slotID: CodexSlotID) {
+        syncClaudeProfilesCurrentState()
+        claudeProfiles = claudeProfileStore.removeProfile(slotID: slotID)
+        claudeSlots = claudeSlotStore.remove(slotID: slotID)
+        claudePrefetchAttemptedIdentity.removeValue(forKey: slotID)
+        claudePrefetchInFlightSlots.remove(slotID)
+        setClaudeSwitchFeedback(nil, for: slotID)
+    }
+
     func requestNotificationPermission() {
         notifications.requestPermissionIfNeeded()
         notificationPermissionPollingTask?.cancel()
@@ -360,7 +460,12 @@ final class AppViewModel {
 
     @discardableResult
     func prepareSecureStorageAccess() -> Bool {
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        SettingsWindowController.shared.show(viewModel: self)
         let ok = keychain.prepareSecureStoreAccess()
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { $0.isVisible })?.makeKeyAndOrderFront(nil)
         refreshPermissionStatuses(force: true)
         return ok
     }
@@ -375,18 +480,7 @@ final class AppViewModel {
     }
 
     func openKeychainAccessSettings() {
-        openSystemSettings(
-            urlCandidates: [
-                "x-apple.systempreferences:com.apple.Passwords-Settings.extension",
-                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy",
-                "x-apple.systempreferences:com.apple.preference.security?Privacy"
-            ],
-            fallbackBundleIDs: [
-                "com.apple.keychainaccess",
-                "com.apple.systemsettings",
-                "com.apple.systempreferences"
-            ]
-        )
+        // 保留接口兼容旧调用，但不再主动拉起系统应用，避免钥匙串授权时打断当前窗口焦点。
     }
 
     func openFullDiskAccessSettings() {
@@ -437,10 +531,16 @@ final class AppViewModel {
         pollTasks.removeAll()
         codexFeedbackTasks.values.forEach { $0.cancel() }
         codexFeedbackTasks.removeAll()
+        claudeFeedbackTasks.values.forEach { $0.cancel() }
+        claudeFeedbackTasks.removeAll()
         codexSwitchingSlots.removeAll()
         codexPrefetchInFlightSlots.removeAll()
         codexPrefetchAttemptedIdentity.removeAll()
         codexSwitchFeedback.removeAll()
+        claudeSwitchingSlots.removeAll()
+        claudePrefetchInFlightSlots.removeAll()
+        claudePrefetchAttemptedIdentity.removeAll()
+        claudeSwitchFeedback.removeAll()
         snapshots.removeAll()
         errors.removeAll()
         consecutiveFailures.removeAll()
@@ -451,11 +551,15 @@ final class AppViewModel {
         keychain.resetAllStoredCredentials()
         codexProfileStore.reset()
         codexSlotStore.reset()
+        claudeProfileStore.reset()
+        claudeSlotStore.reset()
         try? configStore.reset()
 
         config = .default
         codexSlots = []
         codexProfiles = []
+        claudeSlots = []
+        claudeProfiles = []
         notificationAuthorizationStatus = .notDetermined
         secureStorageReady = false
         fullDiskAccessGranted = false
@@ -483,6 +587,10 @@ final class AppViewModel {
                 if descriptor.type == .codex {
                     let snapshot = markCodexSnapshotActive(fetched)
                     codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+                    snapshots[descriptor.id] = snapshot
+                } else if descriptor.type == .claude {
+                    let snapshot = markClaudeSnapshotActive(fetched)
+                    claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
                     snapshots[descriptor.id] = snapshot
                 } else {
                     snapshots[descriptor.id] = fetched
@@ -583,6 +691,83 @@ final class AppViewModel {
             setCodexSwitchFeedback(
                 CodexSwitchFeedback(
                     message: "\(text(.codexSwitchFailed)): \(error.localizedDescription)",
+                    isError: true
+                ),
+                for: slotID
+            )
+        }
+    }
+
+    func switchClaudeProfile(slotID: CodexSlotID) async {
+        guard !claudeSwitchingSlots.contains(slotID) else { return }
+        syncClaudeProfilesCurrentState()
+        claudeSwitchingSlots.insert(slotID)
+        setClaudeSwitchFeedback(nil, for: slotID)
+        defer { claudeSwitchingSlots.remove(slotID) }
+
+        guard let profile = claudeProfiles.first(where: { $0.slotID == slotID }) else {
+            setClaudeSwitchFeedback(
+                ClaudeSwitchFeedback(
+                    message: localizedText("该槽位还没有导入可切换的 Claude 账号", "No imported Claude profile is available for this slot"),
+                    isError: true
+                ),
+                for: slotID
+            )
+            return
+        }
+
+        do {
+            let credentialsJSON = try claudeProfileStore.resolvedCredentialsJSON(for: profile)
+            try claudeDesktopAuthService.applyCredentialsJSON(credentialsJSON)
+            syncClaudeProfilesCurrentState()
+
+            guard let descriptor = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
+                setClaudeSwitchFeedback(
+                    ClaudeSwitchFeedback(
+                        message: localizedText("已写入本机 Claude 登录", "Local Claude credentials updated"),
+                        isError: false
+                    ),
+                    for: slotID
+                )
+                return
+            }
+
+            let provider = providerFactory.makeProvider(for: descriptor)
+            do {
+                let fetched = try await provider.fetch(forceRefresh: true)
+                let snapshot = markClaudeSnapshotActive(fetched, preferredSlotID: slotID)
+                claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
+                snapshots[descriptor.id] = snapshot
+                errors.removeValue(forKey: descriptor.id)
+                consecutiveFailures[descriptor.id] = 0
+                lastUpdatedAt = Date()
+                let successMessage = localizedText("已切换 Claude 账号", "Claude account switched")
+                setClaudeSwitchFeedback(
+                    ClaudeSwitchFeedback(message: successMessage, isError: false),
+                    for: slotID
+                )
+                notifications.notify(
+                    title: "Claude",
+                    body: successMessage,
+                    identifier: "claude-switch-\(slotID.rawValue.lowercased())"
+                )
+            } catch {
+                errors[descriptor.id] = error.localizedDescription
+                let message = "\(localizedText("已切换到该账号，但需要重新验证", "Switched to this account, but re-verification is required")): \(error.localizedDescription)"
+                setClaudeSwitchFeedback(
+                    ClaudeSwitchFeedback(message: message, isError: true),
+                    for: slotID
+                )
+                notifications.notify(
+                    title: "Claude",
+                    body: message,
+                    identifier: "claude-switch-\(slotID.rawValue.lowercased())"
+                )
+            }
+        } catch {
+            setClaudeSwitchFeedback(
+                ClaudeSwitchFeedback(
+                    message: "\(localizedText("切换失败", "Switch failed")): \(error.localizedDescription)",
                     isError: true
                 ),
                 for: slotID
@@ -740,12 +925,26 @@ final class AppViewModel {
         return keychain.readToken(service: service, account: account)?.isEmpty == false
     }
 
+    func savedTokenLength(for descriptor: ProviderDescriptor) -> Int? {
+        savedCredentialLength(
+            service: descriptor.auth.keychainService,
+            account: descriptor.auth.keychainAccount
+        )
+    }
+
     func hasToken(auth: AuthConfig) -> Bool {
         guard let service = auth.keychainService,
               let account = auth.keychainAccount else {
             return false
         }
         return keychain.readToken(service: service, account: account)?.isEmpty == false
+    }
+
+    func savedTokenLength(auth: AuthConfig) -> Int? {
+        savedCredentialLength(
+            service: auth.keychainService,
+            account: auth.keychainAccount
+        )
     }
 
     func saveToken(_ token: String, for descriptor: ProviderDescriptor) -> Bool {
@@ -776,6 +975,14 @@ final class AppViewModel {
         return keychain.readToken(service: KeychainService.defaultServiceName, account: account)?.isEmpty == false
     }
 
+    func savedOfficialManualCookieLength(for provider: ProviderDescriptor) -> Int? {
+        guard provider.family == .official,
+              let account = provider.officialConfig?.manualCookieAccount else {
+            return nil
+        }
+        return savedCredentialLength(service: KeychainService.defaultServiceName, account: account)
+    }
+
     func saveOfficialManualCookie(_ value: String, providerID: String) -> Bool {
         guard let provider = config.providers.first(where: { $0.id == providerID }),
               provider.family == .official,
@@ -785,6 +992,20 @@ final class AppViewModel {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return keychain.saveToken(trimmed, service: KeychainService.defaultServiceName, account: account)
+    }
+
+    private func savedCredentialLength(service: String?, account: String?) -> Int? {
+        guard let service,
+              let account,
+              !service.isEmpty,
+              !account.isEmpty else {
+            return nil
+        }
+        guard let token = keychain.readToken(service: service, account: account),
+              !token.isEmpty else {
+            return nil
+        }
+        return token.count
     }
 
     func addOpenRelay(name: String, baseURL: String, preferredAdapterID: String? = nil) {
@@ -1145,8 +1366,18 @@ final class AppViewModel {
     }
 
     private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
+        let isClaudeOfficial = descriptor.type == .claude && descriptor.family == .official
         if descriptor.type == .codex, descriptor.family == .official {
             syncCodexProfilesCurrentState()
+        }
+        if isClaudeOfficial {
+            syncClaudeProfilesCurrentState()
+        }
+        defer {
+            if isClaudeOfficial {
+                syncClaudeProfilesCurrentState()
+                triggerClaudeProfileSnapshotPrefetchIfNeeded()
+            }
         }
         let provider = providerFactory.makeProvider(for: descriptor)
 
@@ -1156,6 +1387,9 @@ final class AppViewModel {
             if descriptor.type == .codex, descriptor.family == .official {
                 snapshot = markCodexSnapshotActive(fetched)
                 codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+            } else if descriptor.type == .claude, descriptor.family == .official {
+                snapshot = markClaudeSnapshotActive(fetched)
+                claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
             } else {
                 snapshot = fetched
             }
@@ -1442,12 +1676,20 @@ final class AppViewModel {
         isActive: Bool = true
     ) -> UsageSnapshot {
         var copy = snapshot
+        if let teamID = CodexIdentity.teamID(from: copy) {
+            copy.rawMeta["codex.accountId"] = teamID
+            copy.rawMeta["codex.teamId"] = teamID
+        }
+        let identity = CodexIdentity.from(snapshot: copy)
         let resolvedSlotID = preferredSlotID ?? matchedCodexProfile(for: copy)?.slotID
         let accountKey = CodexAccountSlotStore.accountKey(from: copy)
         let label = CodexAccountSlotStore.accountLabel(from: copy)
         if let resolvedSlotID {
             copy.rawMeta["codex.slotID"] = resolvedSlotID.rawValue
         }
+        copy.rawMeta["codex.tenantKey"] = identity.tenantKey
+        copy.rawMeta["codex.principalKey"] = identity.principalKey
+        copy.rawMeta["codex.identityKey"] = identity.identityKey
         copy.rawMeta["codex.accountKey"] = accountKey
         copy.rawMeta["codex.accountLabel"] = label
         copy.rawMeta["codex.lastSeenAt"] = ISO8601DateFormatter().string(from: Date())
@@ -1478,10 +1720,7 @@ final class AppViewModel {
             if codexPrefetchInFlightSlots.contains(profile.slotID) {
                 continue
             }
-            let identityKey = profile.credentialFingerprint?.lowercased()
-                ?? profile.accountId?.lowercased()
-                ?? profile.accountEmail?.lowercased()
-                ?? profile.slotID.rawValue.lowercased()
+            let identityKey = CodexIdentity.from(profile: profile).identityKey
             if codexPrefetchAttemptedIdentity[profile.slotID] == identityKey {
                 continue
             }
@@ -1556,22 +1795,53 @@ final class AppViewModel {
             mergedBySlotID[profile.slotID] = placeholderCodexSlot(for: profile)
         }
 
-        return mergedBySlotID.values.map { slot in
+        // 登录切换瞬间可能出现“旧 active 槽位 + 新 current profile 槽位”并存。
+        // 这里把菜单展示的 active 状态统一收敛到单一槽位，避免短暂显示两张“使用中”卡。
+        let preferredActiveSlotID = codexProfiles
+            .filter(\.isCurrentSystemAccount)
+            .sorted { lhs, rhs in
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+            .first?.slotID
+
+        var merged = mergedBySlotID.values.map { slot -> CodexAccountSlot in
             var updated = slot
-            if let profile = codexProfiles.first(where: { $0.slotID == slot.slotID }),
-               profile.isCurrentSystemAccount {
-                updated.isActive = true
+            if let preferredActiveSlotID {
+                updated.isActive = updated.slotID == preferredActiveSlotID
             }
             return updated
         }
+
+        if preferredActiveSlotID == nil {
+            let activeSlots = merged.filter(\.isActive)
+            if activeSlots.count > 1 {
+                let keep = activeSlots
+                    .sorted { lhs, rhs in
+                        if lhs.lastSeenAt != rhs.lastSeenAt {
+                            return lhs.lastSeenAt > rhs.lastSeenAt
+                        }
+                        return lhs.slotID < rhs.slotID
+                    }
+                    .first?.slotID
+                merged = merged.map { slot in
+                    var updated = slot
+                    updated.isActive = updated.slotID == keep
+                    return updated
+                }
+            }
+        }
+
+        return merged
     }
 
     private func placeholderCodexSlot(for profile: CodexAccountProfile) -> CodexAccountSlot {
-        CodexAccountSlot(
+        let identity = CodexIdentity.from(profile: profile)
+        return CodexAccountSlot(
             slotID: profile.slotID,
-            accountKey: profile.accountId?.lowercased()
-                ?? profile.credentialFingerprint?.lowercased()
-                ?? "profile:\(profile.slotID.rawValue.lowercased())",
+            accountKey: identity.identityKey,
             displayName: profile.displayName,
             lastSnapshot: placeholderCodexSnapshot(for: profile),
             lastSeenAt: profile.lastImportedAt,
@@ -1580,13 +1850,22 @@ final class AppViewModel {
     }
 
     private func placeholderCodexSnapshot(for profile: CodexAccountProfile) -> UsageSnapshot {
+        let identity = CodexIdentity.from(profile: profile)
         var rawMeta: [String: String] = [
             "codex.slotID": profile.slotID.rawValue,
-            "codex.menuPlaceholder": "true"
+            "codex.menuPlaceholder": "true",
+            "codex.tenantKey": identity.tenantKey,
+            "codex.principalKey": identity.principalKey,
+            "codex.identityKey": identity.identityKey
         ]
         if let accountId = profile.accountId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !accountId.isEmpty {
             rawMeta["codex.accountId"] = accountId
+            rawMeta["codex.teamId"] = accountId
+        }
+        if let subject = profile.accountSubject?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subject.isEmpty {
+            rawMeta["codex.subject"] = subject
         }
         if let fingerprint = profile.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
            !fingerprint.isEmpty {
@@ -1640,27 +1919,279 @@ final class AppViewModel {
 
     private func matchedCodexProfile(for snapshot: UsageSnapshot) -> CodexAccountProfile? {
         syncCodexProfilesCurrentState()
-        let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = (snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"])?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let index = CodexAccountProfileStore.matchingIndex(for: snapshot, in: codexProfiles) else {
+            return nil
+        }
+        return codexProfiles[index]
+    }
 
-        if let explicitSlotID = CodexAccountSlotStore.explicitSlotID(from: snapshot),
-           let matched = codexProfiles.first(where: { $0.slotID == explicitSlotID }) {
-            return matched
+    private func markClaudeSnapshotActive(
+        _ snapshot: UsageSnapshot,
+        preferredSlotID: CodexSlotID? = nil,
+        isActive: Bool = true
+    ) -> UsageSnapshot {
+        var copy = snapshot
+        let fallbackProfile = claudeProfiles.first(where: { $0.isCurrentSystemAccount })
+        let matchedProfile = matchedClaudeProfile(for: copy) ?? fallbackProfile
+
+        if let accountId = matchedProfile?.accountId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !accountId.isEmpty {
+            copy.rawMeta["claude.accountId"] = accountId
         }
-        if let accountID, !accountID.isEmpty,
-           let matched = codexProfiles.first(where: { $0.accountId?.caseInsensitiveCompare(accountID) == .orderedSame }) {
-            return matched
+        if let fingerprint = matchedProfile?.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fingerprint.isEmpty,
+           (copy.rawMeta["claude.credentialFingerprint"]?.isEmpty ?? true) {
+            copy.rawMeta["claude.credentialFingerprint"] = fingerprint
         }
-        if let fingerprint, !fingerprint.isEmpty,
-           let matched = codexProfiles.first(where: { $0.credentialFingerprint?.lowercased() == fingerprint }) {
-            return matched
+        if let configDir = matchedProfile?.configDir?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configDir.isEmpty {
+            copy.rawMeta["claude.configDir"] = configDir
         }
-        if let email, !email.isEmpty,
-           let matched = codexProfiles.first(where: { $0.accountEmail?.lowercased() == email }) {
-            return matched
+        if (copy.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+           let email = matchedProfile?.accountEmail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            copy.accountLabel = email
+            copy.rawMeta["claude.accountLabel"] = email
         }
-        return nil
+
+        let resolvedSlotID = preferredSlotID
+            ?? matchedProfile?.slotID
+            ?? claudeProfiles
+            .filter(\.isCurrentSystemAccount)
+            .sorted { lhs, rhs in
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+            .first?.slotID
+
+        let accountKey = ClaudeAccountSlotStore.accountKey(from: copy)
+        let label = ClaudeAccountSlotStore.accountLabel(from: copy)
+        if let resolvedSlotID {
+            copy.rawMeta["claude.slotID"] = resolvedSlotID.rawValue
+        }
+        copy.rawMeta["claude.accountKey"] = accountKey
+        copy.rawMeta["claude.accountLabel"] = label
+        copy.rawMeta["claude.lastSeenAt"] = ISO8601DateFormatter().string(from: Date())
+        copy.rawMeta["claude.isActive"] = isActive ? "true" : "false"
+        if copy.accountLabel == nil || copy.accountLabel?.isEmpty == true {
+            copy.accountLabel = label == "Unknown" ? nil : label
+        }
+        return copy
+    }
+
+    private func syncClaudeProfilesCurrentState() {
+        claudeProfiles = claudeProfileStore.captureCurrentCredentialsIfNeeded(
+            credentialsJSON: claudeDesktopAuthService.currentCredentialsJSON(),
+            defaultConfigDir: claudeDesktopAuthService.currentSystemConfigDirectory()
+        )
+    }
+
+    private func claudeMenuTitle(for slotID: CodexSlotID) -> String {
+        "Claude \(slotID.rawValue)"
+    }
+
+    private func triggerClaudeProfileSnapshotPrefetchIfNeeded() {
+        guard let descriptor = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
+            return
+        }
+
+        let preferredActiveSlotID = claudeProfiles
+            .filter(\.isCurrentSystemAccount)
+            .sorted { lhs, rhs in
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+            .first?.slotID
+        let activeRuntimeSlotIDs = Set(claudeSlots.filter(\.isActive).map(\.slotID))
+
+        for profile in claudeProfiles {
+            let isActiveProfile: Bool
+            if let preferredActiveSlotID {
+                isActiveProfile = profile.slotID == preferredActiveSlotID
+            } else {
+                isActiveProfile = activeRuntimeSlotIDs.contains(profile.slotID)
+            }
+            if isActiveProfile {
+                continue
+            }
+            if claudePrefetchInFlightSlots.contains(profile.slotID) {
+                continue
+            }
+            let identityKey = profile.credentialFingerprint?.lowercased()
+                ?? profile.accountEmail?.lowercased()
+                ?? profile.slotID.rawValue.lowercased()
+            claudePrefetchAttemptedIdentity[profile.slotID] = identityKey
+            claudePrefetchInFlightSlots.insert(profile.slotID)
+
+            Task { [weak self] in
+                guard let self else { return }
+                defer { self.claudePrefetchInFlightSlots.remove(profile.slotID) }
+
+                guard let result = try? await self.claudeProfileSnapshotService.fetchSnapshot(
+                    profile: profile,
+                    descriptor: descriptor
+                ) else {
+                    return
+                }
+
+                if let refreshed = result.refreshedCredentialsJSON, !refreshed.isEmpty {
+                    _ = self.claudeProfileStore.updateStoredCredentials(
+                        slotID: profile.slotID,
+                        credentialsJSON: refreshed
+                    )
+                    self.syncClaudeProfilesCurrentState()
+                }
+
+                let snapshot = self.markClaudeSnapshotActive(
+                    result.snapshot,
+                    preferredSlotID: profile.slotID,
+                    isActive: false
+                )
+                self.claudeSlots = self.claudeSlotStore.upsertInactive(
+                    snapshot: snapshot,
+                    preferredSlotID: profile.slotID
+                )
+            }
+        }
+    }
+
+    private func mergedClaudeSlotsForMenu() -> [ClaudeAccountSlot] {
+        let profileSlotIDs = Set(claudeProfiles.map(\.slotID))
+        let visibleRuntimeSlots = claudeSlots.filter { $0.isActive || profileSlotIDs.contains($0.slotID) }
+        var mergedBySlotID = Dictionary(uniqueKeysWithValues: visibleRuntimeSlots.map { ($0.slotID, $0) })
+
+        for profile in claudeProfiles where mergedBySlotID[profile.slotID] == nil {
+            mergedBySlotID[profile.slotID] = placeholderClaudeSlot(for: profile)
+        }
+
+        let preferredActiveSlotID = claudeProfiles
+            .filter(\.isCurrentSystemAccount)
+            .sorted { lhs, rhs in
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+            .first?.slotID
+
+        var merged = mergedBySlotID.values.map { slot -> ClaudeAccountSlot in
+            var updated = slot
+            if let preferredActiveSlotID {
+                updated.isActive = updated.slotID == preferredActiveSlotID
+            }
+            return updated
+        }
+
+        if preferredActiveSlotID == nil {
+            let activeSlots = merged.filter(\.isActive)
+            if activeSlots.count > 1 {
+                let keep = activeSlots
+                    .sorted { lhs, rhs in
+                        if lhs.lastSeenAt != rhs.lastSeenAt {
+                            return lhs.lastSeenAt > rhs.lastSeenAt
+                        }
+                        return lhs.slotID < rhs.slotID
+                    }
+                    .first?.slotID
+                merged = merged.map { slot in
+                    var updated = slot
+                    updated.isActive = updated.slotID == keep
+                    return updated
+                }
+            }
+        }
+
+        return merged
+    }
+
+    private func placeholderClaudeSlot(for profile: ClaudeAccountProfile) -> ClaudeAccountSlot {
+        ClaudeAccountSlot(
+            slotID: profile.slotID,
+            accountKey: profile.credentialFingerprint
+                .map { "fingerprint:\($0.lowercased())" }
+                ?? profile.accountEmail
+                .map { "email:\($0.lowercased())" }
+                ?? "profile:\(profile.slotID.rawValue.lowercased())",
+            displayName: profile.displayName,
+            lastSnapshot: placeholderClaudeSnapshot(for: profile),
+            lastSeenAt: profile.lastImportedAt,
+            isActive: profile.isCurrentSystemAccount
+        )
+    }
+
+    private func placeholderClaudeSnapshot(for profile: ClaudeAccountProfile) -> UsageSnapshot {
+        var rawMeta: [String: String] = [
+            "claude.slotID": profile.slotID.rawValue,
+            "claude.menuPlaceholder": "true"
+        ]
+        if let accountId = profile.accountId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !accountId.isEmpty {
+            rawMeta["claude.accountId"] = accountId
+        }
+        if let fingerprint = profile.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fingerprint.isEmpty {
+            rawMeta["claude.credentialFingerprint"] = fingerprint
+        }
+        if let configDir = profile.configDir?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configDir.isEmpty {
+            rawMeta["claude.configDir"] = configDir
+        }
+
+        return UsageSnapshot(
+            source: "claude-placeholder-\(profile.slotID.rawValue.lowercased())",
+            status: .disabled,
+            fetchHealth: .ok,
+            valueFreshness: .empty,
+            remaining: nil,
+            used: nil,
+            limit: nil,
+            unit: "%",
+            updatedAt: profile.lastImportedAt,
+            note: "",
+            quotaWindows: [],
+            sourceLabel: "Claude",
+            accountLabel: profile.accountEmail,
+            authSourceLabel: nil,
+            diagnosticCode: nil,
+            extras: [:],
+            rawMeta: rawMeta
+        )
+    }
+
+    private func setClaudeSwitchFeedback(_ feedback: ClaudeSwitchFeedback?, for slotID: CodexSlotID) {
+        claudeFeedbackTasks[slotID]?.cancel()
+        claudeFeedbackTasks.removeValue(forKey: slotID)
+
+        guard let feedback else {
+            claudeSwitchFeedback.removeValue(forKey: slotID)
+            return
+        }
+
+        claudeSwitchFeedback[slotID] = feedback
+        claudeFeedbackTasks[slotID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if self.claudeSwitchFeedback[slotID] == feedback {
+                self.claudeSwitchFeedback.removeValue(forKey: slotID)
+            }
+            self.claudeFeedbackTasks.removeValue(forKey: slotID)
+        }
+    }
+
+    private func matchedClaudeProfile(for slot: ClaudeAccountSlot) -> ClaudeAccountProfile? {
+        matchedClaudeProfile(for: slot.lastSnapshot) ?? claudeProfiles.first(where: { $0.slotID == slot.slotID })
+    }
+
+    private func matchedClaudeProfile(for snapshot: UsageSnapshot) -> ClaudeAccountProfile? {
+        syncClaudeProfilesCurrentState()
+        guard let index = ClaudeAccountProfileStore.matchingIndex(for: snapshot, in: claudeProfiles) else {
+            return nil
+        }
+        return claudeProfiles[index]
     }
 }
 

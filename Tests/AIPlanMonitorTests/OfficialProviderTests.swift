@@ -164,6 +164,134 @@ final class OfficialProviderTests: XCTestCase {
         }
     }
 
+    func testCodexWebWithManualCookieSkipsBrowserDetection() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        OfficialMockURLProtocol.requestHandler = { request in
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.absoluteString, "https://chatgpt.com/backend-api/wham/usage")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "manual-cookie=ok")
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let body = """
+            {
+              "plan_type": "plus",
+              "rate_limit": {
+                "primary_window": { "used_percent": 20, "reset_at": 1760000000 },
+                "secondary_window": { "used_percent": 40, "reset_at": 1760500000 }
+              }
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let keychain = KeychainService()
+        let account = "official/codex/cookie-header-\(UUID().uuidString)"
+        XCTAssertTrue(keychain.saveToken("manual-cookie=ok", service: KeychainService.defaultServiceName, account: account))
+
+        var descriptor = ProviderDescriptor.defaultOfficialCodex()
+        descriptor.id = "codex-web-manual-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .web
+        descriptor.officialConfig?.webMode = .autoImport
+        descriptor.officialConfig?.manualCookieAccount = account
+
+        let spy = SpyBrowserCookieDetector()
+        let provider = CodexProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCookieService: spy,
+            webReadBackoff: WebOverlayRetryBackoff()
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: true)
+        XCTAssertEqual(snapshot.sourceLabel, "Web")
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 0)
+    }
+
+    func testCodexWebBackoffSkipsRepeatedBrowserReadAndForceRefreshBypasses() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        OfficialMockURLProtocol.requestHandler = { request in
+            XCTFail("browser cookie missing should fail before network request, got \(request.url?.absoluteString ?? "nil")")
+            let response = HTTPURLResponse(url: request.url ?? URL(string: "https://chatgpt.com")!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        var descriptor = ProviderDescriptor.defaultOfficialCodex()
+        descriptor.id = "codex-web-backoff-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .web
+        descriptor.officialConfig?.webMode = .autoImport
+        descriptor.officialConfig?.manualCookieAccount = "official/codex/cookie-header-\(UUID().uuidString)"
+
+        let spy = SpyBrowserCookieDetector()
+        let provider = CodexProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: KeychainService(),
+            browserCookieService: spy,
+            webReadBackoff: WebOverlayRetryBackoff()
+        )
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: false)
+        }
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: false)
+        }
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: true)
+        }
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 2)
+    }
+
+    func testClaudeWebBackoffSkipsRepeatedBrowserRead() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        OfficialMockURLProtocol.requestHandler = { request in
+            XCTFail("browser cookie missing should fail before network request, got \(request.url?.absoluteString ?? "nil")")
+            let response = HTTPURLResponse(url: request.url ?? URL(string: "https://claude.ai")!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        var descriptor = ProviderDescriptor.defaultOfficialClaude()
+        descriptor.id = "claude-web-backoff-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .web
+        descriptor.officialConfig?.webMode = .autoImport
+        descriptor.officialConfig?.manualCookieAccount = "official/claude/cookie-header-\(UUID().uuidString)"
+
+        let spy = SpyBrowserCookieDetector()
+        let provider = ClaudeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: KeychainService(),
+            browserCookieService: spy,
+            webReadBackoff: WebOverlayRetryBackoff()
+        )
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: false)
+        }
+        XCTAssertEqual(spy.detectNamedCookieCallCount, 1)
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: false)
+        }
+        XCTAssertEqual(spy.detectNamedCookieCallCount, 1)
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+    }
+
     func testClaudeOAuthResponseParsesWindowsAndExtraUsage() throws {
         let root: [String: Any] = [
             "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00Z"],
@@ -242,6 +370,70 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Flash" })?.remainingPercent ?? -1, 80, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "pro")
         XCTAssertEqual(snapshot.extras["project"], "demo-project")
+    }
+
+    func testGeminiQuotaResponseParsesBucketsShapeFromGeminiCLI() throws {
+        let quotaRoot: [String: Any] = [
+            "buckets": [
+                [
+                    "modelId": "gemini-2.5-pro",
+                    "remainingAmount": "400",
+                    "remainingFraction": 0.40,
+                    "resetTime": "2026-04-11T08:00:00Z",
+                ],
+                [
+                    "modelId": "gemini-2.5-flash",
+                    "remainingAmount": "900",
+                    "remainingFraction": 0.90,
+                    "resetTime": "2026-04-11T02:00:00Z",
+                ],
+            ]
+        ]
+        let codeAssistRoot: [String: Any] = [
+            "currentTier": ["id": "legacy-pro"],
+            "cloudaicompanionProject": "demo-project",
+        ]
+
+        let snapshot = try GeminiProvider.parseQuotaSnapshot(
+            root: quotaRoot,
+            codeAssistRoot: codeAssistRoot,
+            descriptor: ProviderDescriptor.defaultOfficialGemini(),
+            sourceLabel: "API",
+            accountLabel: "gemini@example.com",
+            projectLabel: "demo-project"
+        )
+
+        XCTAssertEqual(snapshot.sourceLabel, "API")
+        XCTAssertEqual(snapshot.accountLabel, "gemini@example.com")
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Pro" })?.remainingPercent ?? -1, 40, accuracy: 0.001)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Flash" })?.remainingPercent ?? -1, 90, accuracy: 0.001)
+        XCTAssertEqual(snapshot.extras["planType"], "pro")
+        XCTAssertEqual(snapshot.extras["project"], "demo-project")
+    }
+
+    func testGeminiClientSecretParserSupportsNewBundleConstants() {
+        let source = #"""
+        var OAUTH_CLIENT_ID = "demo-client.apps.googleusercontent.com";
+        var OAUTH_CLIENT_SECRET = "demo-secret";
+        """#
+
+        let parsed = GeminiProvider.parseClientSecrets(in: source)
+        XCTAssertEqual(parsed?.id, "demo-client.apps.googleusercontent.com")
+        XCTAssertEqual(parsed?.secret, "demo-secret")
+    }
+
+    func testGeminiClientSecretParserSupportsLegacyOAuthFilePattern() {
+        let source = #"""
+        export const oauthConfig = {
+          client_id: "legacy-client.apps.googleusercontent.com",
+          client_secret: "legacy-secret"
+        };
+        """#
+
+        let parsed = GeminiProvider.parseClientSecrets(in: source)
+        XCTAssertEqual(parsed?.id, "legacy-client.apps.googleusercontent.com")
+        XCTAssertEqual(parsed?.secret, "legacy-secret")
     }
 
     func testOfficialKimiResponseParsesSessionAndOverallUsage() throws {
@@ -498,4 +690,36 @@ private final class OfficialMockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private func XCTAssertThrowsProviderError(
+    _ operation: () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await operation()
+        XCTFail("Expected ProviderError", file: file, line: line)
+    } catch is ProviderError {
+        return
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private final class SpyBrowserCookieDetector: BrowserCookieDetecting {
+    var detectCookieHeaderCallCount = 0
+    var detectNamedCookieCallCount = 0
+    var cookieHeaderResult: BrowserCookieHeader?
+    var namedCookieResult: BrowserCookieHeader?
+
+    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+        detectCookieHeaderCallCount += 1
+        return cookieHeaderResult
+    }
+
+    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+        detectNamedCookieCallCount += 1
+        return namedCookieResult
+    }
 }

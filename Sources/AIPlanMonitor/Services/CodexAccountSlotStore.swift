@@ -143,6 +143,7 @@ final class CodexAccountSlotStore {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
         let preferredSlotID = Self.explicitSlotID(from: snapshot)
+        let legacyKeys = Self.legacyAccountKeys(from: snapshot)
 
         removeStaleSlots(now: now)
 
@@ -153,6 +154,13 @@ final class CodexAccountSlotStore {
         if let preferredSlotID,
            let conflicting = slots.firstIndex(where: { $0.slotID == preferredSlotID && $0.accountKey != accountKey }) {
             slots.remove(at: conflicting)
+        }
+
+        if accountKey != "unknown",
+           let legacy = slots.firstIndex(where: {
+               Self.isLegacyAccountKey($0.accountKey) && legacyKeys.contains($0.accountKey.lowercased())
+           }) {
+            slots[legacy].accountKey = accountKey
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
@@ -201,12 +209,20 @@ final class CodexAccountSlotStore {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
         let resolvedSlotID = preferredSlotID ?? Self.explicitSlotID(from: snapshot)
+        let legacyKeys = Self.legacyAccountKeys(from: snapshot)
 
         removeStaleSlots(now: now)
 
         if let resolvedSlotID,
            let conflicting = slots.firstIndex(where: { $0.slotID == resolvedSlotID && $0.accountKey != accountKey }) {
             slots.remove(at: conflicting)
+        }
+
+        if accountKey != "unknown",
+           let legacy = slots.firstIndex(where: {
+               Self.isLegacyAccountKey($0.accountKey) && legacyKeys.contains($0.accountKey.lowercased())
+           }) {
+            slots[legacy].accountKey = accountKey
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
@@ -252,27 +268,11 @@ final class CodexAccountSlotStore {
             return explicitKey.lowercased()
         }
 
-        if let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !accountID.isEmpty {
-            return "account:\(accountID.lowercased())"
+        if let identityKey = CodexIdentity.normalizedIdentityKey(snapshot.rawMeta["codex.identityKey"]) {
+            return identityKey
         }
 
-        if let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !fingerprint.isEmpty {
-            return "fingerprint:\(fingerprint.lowercased())"
-        }
-
-        if let subject = snapshot.rawMeta["codex.subject"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !subject.isEmpty {
-            return "subject:\(subject.lowercased())"
-        }
-
-        let label = accountLabel(from: snapshot)
-        if !label.isEmpty, label != "Unknown" {
-            return "email:\(label.lowercased())"
-        }
-
-        return "unknown"
+        return CodexIdentity.from(snapshot: snapshot).identityKey
     }
 
     static func explicitSlotID(from snapshot: UsageSnapshot) -> CodexSlotID? {
@@ -311,6 +311,35 @@ final class CodexAccountSlotStore {
         if slots.count != before {
             save()
         }
+    }
+
+    static func legacyAccountKeys(from snapshot: UsageSnapshot) -> Set<String> {
+        var keys: Set<String> = []
+        if let accountID = CodexIdentity.normalizedAccountID(CodexIdentity.teamID(from: snapshot)) {
+            keys.insert("account:\(accountID)")
+        }
+        if let fingerprint = CodexIdentity.normalizedFingerprint(snapshot.rawMeta["codex.credentialFingerprint"]) {
+            keys.insert("fingerprint:\(fingerprint)")
+        }
+        if let subject = CodexIdentity.normalizedSubject(snapshot.rawMeta["codex.subject"]) {
+            keys.insert("subject:\(subject)")
+        }
+        if let email = CodexIdentity.normalizedEmail(snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"]) {
+            keys.insert("email:\(email)")
+        }
+        if keys.isEmpty {
+            keys.insert("unknown")
+        }
+        return keys
+    }
+
+    static func isLegacyAccountKey(_ accountKey: String) -> Bool {
+        let key = accountKey.lowercased()
+        return key == "unknown"
+            || key.hasPrefix("account:")
+            || key.hasPrefix("subject:")
+            || key.hasPrefix("fingerprint:")
+            || key.hasPrefix("email:")
     }
 
     private func load() -> [CodexAccountSlot] {

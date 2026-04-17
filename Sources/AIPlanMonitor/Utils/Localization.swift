@@ -651,11 +651,15 @@ enum Localizer {
     }
 
     static func localDiscoveryFoundBody(providerNames: [String], language: AppLanguage) -> String {
-        let joined = providerNames.joined(separator: language == .zhHans ? "、" : ", ")
         switch language {
         case .zhHans:
-            return "已自动识别：\(joined)"
+            let normalized = providerNames.map { name in
+                name.caseInsensitiveCompare("kimi") == .orderedSame ? "KIMI" : name
+            }
+            let joined = normalized.joined(separator: " / ")
+            return "扫描到 \(joined) ，自动添加到监控"
         case .en:
+            let joined = providerNames.joined(separator: ", ")
             return "Automatically discovered: \(joined)"
         }
     }

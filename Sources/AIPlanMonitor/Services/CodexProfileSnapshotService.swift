@@ -47,12 +47,20 @@ actor CodexProfileSnapshotService {
 
         if let accountId = payload.accountId, !accountId.isEmpty {
             snapshot.rawMeta["codex.accountId"] = accountId
+            snapshot.rawMeta["codex.teamId"] = accountId
+        }
+        if let subject = payload.accountSubject, !subject.isEmpty {
+            snapshot.rawMeta["codex.subject"] = subject
         }
         if let email = payload.accountEmail, !email.isEmpty {
             snapshot.rawMeta["codex.accountLabel"] = email
             snapshot.accountLabel = email
         }
         snapshot.rawMeta["codex.credentialFingerprint"] = payload.credentialFingerprint
+        let identity = CodexIdentity.from(payload: payload)
+        snapshot.rawMeta["codex.tenantKey"] = identity.tenantKey
+        snapshot.rawMeta["codex.principalKey"] = identity.principalKey
+        snapshot.rawMeta["codex.identityKey"] = identity.identityKey
 
         return snapshot
     }

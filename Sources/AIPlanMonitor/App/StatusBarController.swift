@@ -2,15 +2,20 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class StatusBarController: NSObject, NSPopoverDelegate {
+final class StatusBarController: NSObject {
     private let viewModel: AppViewModel
     private let statusItem: NSStatusItem
-    private let popover: NSPopover
+    private var menuPanel: NSPanel?
+    private var menuHostingController: NSHostingController<MenuContentView>?
     private var refreshTimer: Timer?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private let statusIconSize: CGFloat = 16
     private let statusSpacing: CGFloat = 4
+    private let statusTextBaselineOffset: CGFloat = -1
+    private let popoverWidth: CGFloat = 316
+    private let popoverMinHeight: CGFloat = 60
+    private let popoverGapBelowStatusIcon: CGFloat = 1
     private let protectedOutsideClickBundleIDs: Set<String> = [
         "com.apple.securityagent",
         "com.apple.systemsettings",
@@ -63,10 +68,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     init(viewModel: AppViewModel) {
         self.viewModel = viewModel
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        self.popover = NSPopover()
         super.init()
         configureStatusItem()
-        configurePopover()
+        configureMenuPanel()
         viewModel.start()
         refreshStatusDisplay()
         startRefreshTimer()
@@ -86,18 +90,36 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
-    private func configurePopover() {
+    private func configureMenuPanel() {
         let rootView = MenuContentView(viewModel: viewModel)
         let controller = NSHostingController(rootView: rootView)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 316, height: 570)
+        menuHostingController = controller
+        controller.view.frame = NSRect(x: 0, y: 0, width: popoverWidth, height: popoverMinHeight)
         controller.view.wantsLayer = true
-        controller.view.layer?.backgroundColor = popoverBackgroundColor.cgColor
-        popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 316, height: 570)
-        popover.behavior = .applicationDefined
-        popover.animates = false
-        popover.delegate = self
-        popover.appearance = NSAppearance(named: .darkAqua)
+        controller.view.layer?.backgroundColor = NSColor.clear.cgColor
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverMinHeight),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isFloatingPanel = true
+        panel.level = .popUpMenu
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.hasShadow = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.appearance = NSAppearance(named: .vibrantDark)
+        panel.collectionBehavior = [.transient, .moveToActiveSpace]
+        panel.contentViewController = controller
+        if let contentView = panel.contentView {
+            contentView.wantsLayer = true
+            contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        }
+        menuPanel = panel
+        updatePopoverContentSizeIfNeeded()
     }
 
     private func refreshStatusDisplay() {
@@ -111,35 +133,97 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             for: text,
             appearance: button.effectiveAppearance
         )
+        updatePopoverContentSizeIfNeeded()
     }
 
     @objc
     private func togglePopover(_ sender: AnyObject?) {
-        if popover.isShown {
-            popover.performClose(sender)
+        if isMenuPanelShown {
+            closeMenuPanel()
             return
         }
         guard let button = statusItem.button else { return }
-        refreshStatusDisplay()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        startOutsideClickMonitoring()
+        showPopover(attachedTo: button)
     }
 
-    func popoverDidClose(_ notification: Notification) {
+    private var isMenuPanelShown: Bool {
+        menuPanel?.isVisible == true
+    }
+
+    private func closeMenuPanel() {
+        guard isMenuPanelShown else { return }
+        menuPanel?.orderOut(nil)
         stopOutsideClickMonitoring()
         refreshStatusDisplay()
     }
 
-    func popoverWillShow(_ notification: Notification) {
-        guard let window = popover.contentViewController?.view.window else { return }
-        // 用更贴合 NSPopover 的深色外观，避免系统三角与内容底色分层。
-        window.appearance = NSAppearance(named: .vibrantDark)
-        window.isOpaque = true
-        window.backgroundColor = popoverBackgroundColor
-        if let contentView = window.contentView {
-            contentView.wantsLayer = true
-            contentView.layer?.backgroundColor = popoverBackgroundColor.cgColor
+    private func updatePopoverContentSizeIfNeeded() {
+        guard let controller = menuHostingController else { return }
+        controller.view.layoutSubtreeIfNeeded()
+        let fitted = controller.sizeThatFits(in: NSSize(width: popoverWidth, height: .greatestFiniteMagnitude))
+        let targetHeight = max(popoverMinHeight, ceil(fitted.height))
+        let targetSize = NSSize(width: popoverWidth, height: targetHeight)
+
+        if let panel = menuPanel,
+           abs(panel.frame.size.height - targetHeight) > 0.5 {
+            var frame = panel.frame
+            let anchoredTop = frame.maxY
+            frame.size = targetSize
+            // 调整高度时保持顶部锚点不漂移，避免弹层与状态栏之间出现额外间隙。
+            frame.origin.y = anchoredTop - frame.size.height
+            panel.setFrame(frame, display: true)
         }
+
+        if isMenuPanelShown, let button = statusItem.button {
+            alignPopoverWindow(to: button)
+        }
+    }
+
+    private func showPopover(attachedTo button: NSStatusBarButton) {
+        refreshStatusDisplay()
+        updatePopoverContentSizeIfNeeded()
+        alignPopoverWindow(to: button)
+        menuPanel?.orderFrontRegardless()
+        startOutsideClickMonitoring()
+    }
+
+    private func statusIconRect(in button: NSStatusBarButton) -> NSRect {
+        if let cell = button.cell as? NSButtonCell {
+            let rect = cell.imageRect(forBounds: button.bounds)
+            if rect.width > 0, rect.height > 0 {
+                return rect
+            }
+        }
+        return NSRect(
+            x: button.bounds.minX,
+            y: (button.bounds.height - statusIconSize) / 2,
+            width: statusIconSize,
+            height: statusIconSize
+        )
+    }
+
+    private func alignPopoverWindow(to button: NSStatusBarButton) {
+        guard
+            let menuPanel,
+            let statusItemWindow = button.window
+        else {
+            return
+        }
+
+        let iconRectInWindow = button.convert(statusIconRect(in: button), to: nil)
+        let iconRectOnScreen = statusItemWindow.convertToScreen(iconRectInWindow)
+
+        var frame = menuPanel.frame
+        frame.origin.x = round(iconRectOnScreen.midX - (frame.width / 2))
+        frame.origin.y = round(iconRectOnScreen.minY - popoverGapBelowStatusIcon - frame.height)
+
+        if let screen = statusItemWindow.screen ?? NSScreen.main {
+            let visible = screen.visibleFrame.insetBy(dx: 4, dy: 4)
+            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+        }
+
+        menuPanel.setFrame(frame, display: true)
     }
 
     private func startRefreshTimer() {
@@ -156,11 +240,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self,
                   self.viewModel.shouldShowPermissionGuide,
-                  !self.popover.isShown,
+                  !self.isMenuPanelShown,
                   let button = self.statusItem.button else { return }
-            self.refreshStatusDisplay()
-            self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            self.startOutsideClickMonitoring()
+            self.showPopover(attachedTo: button)
         }
     }
 
@@ -245,7 +327,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             : NSColor.labelColor
         return [
             .font: statusFont,
-            .foregroundColor: textColor
+            .foregroundColor: textColor,
+            // 状态栏里数值文本轻微下移，保证图标+百分比在视觉上垂直居中。
+            .baselineOffset: statusTextBaselineOffset
         ]
     }
 
@@ -346,7 +430,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") {
+        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
             return "menu_kimi_icon"
         }
         if relaySignals.contains("deepseek") {
@@ -412,13 +496,13 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     private func closePopoverIfNeededForOutsideClick() {
-        guard popover.isShown else { return }
+        guard isMenuPanelShown else { return }
         guard !isPermissionPromptForegroundApp() else { return }
         let mouseLocation = NSEvent.mouseLocation
         if isInsidePopover(mouseLocation) || isInsideStatusItem(mouseLocation) {
             return
         }
-        popover.performClose(nil)
+        closeMenuPanel()
     }
 
     private func isPermissionPromptForegroundApp() -> Bool {
@@ -434,7 +518,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     private func isInsidePopover(_ screenPoint: NSPoint) -> Bool {
-        guard let frame = popover.contentViewController?.view.window?.frame else { return false }
+        guard let frame = menuPanel?.frame else { return false }
         return frame.contains(screenPoint)
     }
 

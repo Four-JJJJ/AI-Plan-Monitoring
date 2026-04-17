@@ -40,6 +40,14 @@ struct SettingsView: View {
     @State private var codexProfilePendingDelete: CodexSlotID?
     @State private var codexProfileEditor: CodexProfileEditorState?
     @State private var codexProfileEditorJSON = ""
+    @State private var claudeProfileJSONInputs: [String: String] = [:]
+    @State private var claudeProfileConfigDirInputs: [String: String] = [:]
+    @State private var claudeProfileResult: [String: String] = [:]
+    @State private var claudeProfilePendingDelete: CodexSlotID?
+    @State private var claudeProfileEditor: ClaudeProfileEditorState?
+    @State private var claudeProfileEditorSource: ClaudeProfileSource = .configDir
+    @State private var claudeProfileEditorConfigDir = ""
+    @State private var claudeProfileEditorJSON = ""
     @State private var permissionPrompt: PermissionPrompt?
     @State private var permissionResultMessage: [String: String] = [:]
     @State private var permissionResultIsError: [String: Bool] = [:]
@@ -69,12 +77,16 @@ struct SettingsView: View {
     private let panelBackground = Color(hex: 0x232323)
     // “通用设置”主内容滚动区域的纯黑底。
     private let cardBackground = Color.black
-    // 通用描边色：用于模型面板、卡片边框等 15% 白色描边。
-    private let outlineColor = Color.white.opacity(0.15)
+    // 通用描边色：用于模型面板、卡片边框等 30% 白色描边，保证暗底可见性。
+    private let outlineColor = Color.white.opacity(0.30)
     // 内层卡片/黑色内容容器圆角。
     private let cardCornerRadius: CGFloat = 8
     // 分割线颜色（与 15% 白描边风格一致）。
     private let dividerColor = Color.white.opacity(0.15)
+    // 模型设置详情项垂直间距（设计稿统一 24px）。
+    private let modelSettingsItemSpacing: CGFloat = 24
+    // 本地扫描区内部内容项间距（设计稿统一 12px）。
+    private let localDiscoveryItemSpacing: CGFloat = 12
 
     // 主要标题字号（例如“关于”页标题）。
     private let settingsTitleFont = Font.system(size: 16, weight: .semibold)
@@ -151,6 +163,14 @@ struct SettingsView: View {
         var id: String { "\(slotID.rawValue)-\(isNewSlot ? "new" : "edit")" }
     }
 
+    private struct ClaudeProfileEditorState: Identifiable {
+        var slotID: CodexSlotID
+        var title: String
+        var isNewSlot: Bool
+
+        var id: String { "\(slotID.rawValue)-\(isNewSlot ? "new" : "edit")" }
+    }
+
     private struct CodexQuotaMetricDisplay: Identifiable {
         var id: String
         var title: String
@@ -180,6 +200,13 @@ struct SettingsView: View {
                     .ignoresSafeArea()
 
                 codexProfileEditorDialog
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(1)
+            } else if showsClaudeProfileEditorDialog {
+                Color.white.opacity(0.15)
+                    .ignoresSafeArea()
+
+                claudeProfileEditorDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
             } else if showsNewAPISiteDialog {
@@ -237,6 +264,32 @@ struct SettingsView: View {
             }
         } message: { _ in
             Text(viewModel.text(.codexDeleteProfileMessage))
+        }
+        .alert(
+            viewModel.localizedText("删除 Claude 账号", "Delete Claude account"),
+            isPresented: Binding(
+                get: { claudeProfilePendingDelete != nil },
+                set: { newValue in
+                    if !newValue {
+                        claudeProfilePendingDelete = nil
+                    }
+                }
+            ),
+            presenting: claudeProfilePendingDelete
+        ) { slotID in
+            Button(viewModel.localizedText("确认删除", "Delete"), role: .destructive) {
+                let key = slotID.rawValue
+                viewModel.removeClaudeProfile(slotID: slotID)
+                claudeProfileJSONInputs.removeValue(forKey: key)
+                claudeProfileConfigDirInputs.removeValue(forKey: key)
+                claudeProfileResult.removeValue(forKey: key)
+                claudeProfilePendingDelete = nil
+            }
+            Button(viewModel.text(.done), role: .cancel) {
+                claudeProfilePendingDelete = nil
+            }
+        } message: { _ in
+            Text(viewModel.localizedText("删除后将移除该账号保存的凭证与目录配置，本机当前 Claude 登录态不会立刻受影响。", "This removes the saved credentials and directory binding for the account. It does not immediately sign the current local Claude session out."))
         }
         .confirmationDialog(
             permissionAlertTitle,
@@ -301,7 +354,7 @@ struct SettingsView: View {
                             detailPane
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .padding(.horizontal, 16)
-                                .padding(.vertical, 16)
+                                .padding(.bottom, 16)
                         }
                         .background(
                             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
@@ -328,12 +381,16 @@ struct SettingsView: View {
         codexProfileEditor != nil
     }
 
+    private var showsClaudeProfileEditorDialog: Bool {
+        claudeProfileEditor != nil
+    }
+
     private var showsNewAPISiteDialog: Bool {
         isNewAPISiteDialogPresented
     }
 
     private var showsModalOverlay: Bool {
-        showsResetDataDialog || showsCodexProfileEditorDialog || showsNewAPISiteDialog
+        showsResetDataDialog || showsCodexProfileEditorDialog || showsClaudeProfileEditorDialog || showsNewAPISiteDialog
     }
 
     private var resetDialogTitleText: String {
@@ -763,11 +820,6 @@ struct SettingsView: View {
                 .stroke(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.30), lineWidth: 1)
         )
         .contentShape(Rectangle())
-        .highPriorityGesture(
-            TapGesture().onEnded {
-                selectedProviderID = provider.id
-            }
-        )
         .onTapGesture {
             selectedProviderID = provider.id
         }
@@ -896,58 +948,108 @@ struct SettingsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 24) {
-                dividerLine
-
-                VStack(alignment: .leading, spacing: 12) {
-                    permissionActionRow(
-                        title: localDiscoveryTitleText,
-                        hint: viewModel.text(.localDiscoveryHint),
-                        alignCenter: true,
-                        buttonTitle: autoDiscoveryActionTitle,
-                        buttonDisabled: autoDiscoveryScanning
-                    ) {
-                        startAutoDiscoveryScan()
-                    }
-
-                    if let result = permissionResultMessage[PermissionPrompt.autoDiscovery.id], !result.isEmpty {
-                        Text(result)
-                            .font(settingsHintFont)
-                            .foregroundStyle((permissionResultIsError[PermissionPrompt.autoDiscovery.id] ?? false) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
-                    } else {
-                        Text(localDiscoverySuccessHint)
-                            .font(settingsHintFont)
-                            .foregroundStyle(Color(hex: 0x69BD64))
-                    }
-
-                    Text(viewModel.text(.permissionsPrivacyPromise))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(hex: 0xD87E3E))
-                        // 橙色声明条：撑满容器宽度。
-                        .padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, minHeight: 26, maxHeight: 26, alignment: .leading)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color(hex: 0xD87E3E), lineWidth: 1)
-                        )
-                }
-            }
+            localDiscoverySection
 
             VStack(alignment: .leading, spacing: 24) {
                 dividerLine
 
-                permissionActionRow(
-                    title: resetSectionTitle,
-                    hint: viewModel.text(.resetLocalDataHint),
-                    hintLineSpacing: settingsHintMultilineSpacing,
-                    alignCenter: true,
-                    buttonTitle: resetActionTitle,
-                    destructive: true
-                ) {
-                    permissionPrompt = .resetLocalData
-                }
+                resetDataActionRow
             }
         }
+    }
+
+    private var localDiscoverySection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            dividerLine
+
+            VStack(alignment: .leading, spacing: localDiscoveryItemSpacing) {
+                localDiscoveryHeaderRow
+
+                if let autoDiscoveryResultText {
+                    localDiscoveryResultRow(autoDiscoveryResultText)
+                }
+
+                localDiscoveryPrivacyBanner
+            }
+        }
+    }
+
+    private var localDiscoveryHeaderRow: some View {
+        // 扫描区块头部：按 Figma 47:1737 复原（标题/说明 + 右侧按钮）。
+        HStack(alignment: .center, spacing: 98) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(localDiscoveryTitleText)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsTitleColor)
+                    .lineSpacing(0)
+                Text(viewModel.text(.localDiscoveryHint))
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+                    .lineSpacing(0)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            settingsCapsuleButton(
+                autoDiscoveryActionTitle,
+                disabled: autoDiscoveryScanning,
+                textOpacity: 0.80,
+                borderOpacity: 0.80
+            ) {
+                startAutoDiscoveryScan()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func localDiscoveryResultRow(_ text: String) -> some View {
+        Text(text)
+            .font(settingsHintFont)
+            .foregroundStyle(autoDiscoveryResultColor)
+            .lineSpacing(0)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var localDiscoveryPrivacyBanner: some View {
+        Text(viewModel.text(.permissionsPrivacyPromise))
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Color(hex: 0xD87E3E))
+            .lineSpacing(0)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // 橙色声明条：撑满容器宽度并保持文字垂直居中。
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(hex: 0xD87E3E), lineWidth: 0.5)
+            )
+    }
+
+    private var resetDataActionRow: some View {
+        // 重置区块：按 Figma 47:1727 复原（行高 50、左右列固定间距 98）。
+        HStack(alignment: .center, spacing: 98) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(resetSectionTitle)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsTitleColor)
+                    .lineSpacing(0)
+                    .frame(height: 12, alignment: .leading)
+                Text(viewModel.text(.resetLocalDataHint))
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+                    .lineSpacing(settingsHintMultilineSpacing)
+                    .frame(height: 30, alignment: .topLeading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            settingsCapsuleButton(resetActionTitle, destructive: true) {
+                permissionPrompt = .resetLocalData
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 50, alignment: .center)
     }
 
     private func permissionStatusTile(
@@ -998,7 +1100,7 @@ struct SettingsView: View {
         .overlay(
             // 权限卡边框颜色：white_30。
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(outlineColor, lineWidth: 1)
         )
         .background(
             GeometryReader { proxy in
@@ -1012,7 +1114,9 @@ struct SettingsView: View {
         title: String,
         hint: String,
         hintLineSpacing: CGFloat = 2.5,
+        titleHintSpacing: CGFloat = 4,
         alignCenter: Bool = false,
+        minHeight: CGFloat? = nil,
         buttonTitle: String,
         buttonDisabled: Bool = false,
         destructive: Bool = false,
@@ -1022,7 +1126,7 @@ struct SettingsView: View {
         let rowAlignment: VerticalAlignment = alignCenter ? .center : .top
 
         return HStack(alignment: rowAlignment, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: titleHintSpacing) {
                 Text(title)
                     .font(settingsLabelFont)
                     .foregroundStyle(settingsTitleColor)
@@ -1037,6 +1141,7 @@ struct SettingsView: View {
                 // 非居中模式时，按钮略微下移与文字基线对齐。
                 .padding(.top, alignCenter ? 0 : 3)
         }
+        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: alignCenter ? .center : .topLeading)
     }
 
     private var dividerLine: some View {
@@ -1118,10 +1223,29 @@ struct SettingsView: View {
         viewModel.language == .zhHans ? "重置所有数据" : viewModel.text(.resetLocalDataAction)
     }
 
-    private var localDiscoverySuccessHint: String {
-        viewModel.language == .zhHans
-            ? "扫描到 KIMI / Codex / Gemini ，自动添加到监控"
-            : "Detected KIMI / Codex / Gemini and added them to monitoring."
+    private var autoDiscoveryResultText: String? {
+        let key = PermissionPrompt.autoDiscovery.id
+        guard let rawResult = permissionResultMessage[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawResult.isEmpty else {
+            return nil
+        }
+
+        if rawResult == viewModel.text(.localDiscoveryNothingFound) {
+            return viewModel.language == .zhHans
+                ? "暂无可识别的模型，请手动添加或再次尝试"
+                : "No recognizable models found. Please add one manually or try again."
+        }
+        return rawResult
+    }
+
+    private var autoDiscoveryResultColor: Color {
+        let key = PermissionPrompt.autoDiscovery.id
+        let rawResult = permissionResultMessage[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if rawResult == viewModel.text(.localDiscoveryNothingFound) {
+            // orange_100
+            return Color(hex: 0xD87E3E)
+        }
+        return Color(hex: 0x69BD64)
     }
 
     private var autoDiscoveryActionTitle: String {
@@ -1358,6 +1482,11 @@ struct SettingsView: View {
 
             if let provider {
                 providerIcon(for: provider, size: 12)
+            } else if let image = bundledImage(named: relayPresetIconName(for: preset)) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
             } else if let image = bundledImage(named: "relay_icon") {
                 Image(nsImage: image)
                     .resizable()
@@ -1393,6 +1522,33 @@ struct SettingsView: View {
                 selectedProviderID = provider.id
             }
         }
+    }
+
+    private func relayPresetIconName(for preset: RelayTemplatePreset) -> String {
+        let presetID = preset.id.lowercased()
+        if presetID.contains("moonshot") || presetID.contains("moonsho") {
+            return "menu_kimi_icon"
+        }
+        if presetID.contains("deepseek") {
+            return firstExistingRelayIconName([
+                "menu_deepseek_icon",
+                "menu_deep_seek_icon"
+            ]) ?? "menu_relay_icon"
+        }
+        if presetID.contains("xiaomimimo") || presetID.contains("mimo") {
+            return firstExistingRelayIconName([
+                "menu_mimo_icon",
+                "menu_xiaomimimo_icon",
+                "menu_xiaomi_mimo_icon"
+            ]) ?? "menu_relay_icon"
+        }
+        if presetID.contains("minimax") || presetID.contains("minimaxi") {
+            return firstExistingRelayIconName([
+                "menu_minimax_icon",
+                "menu_minimaxi_icon"
+            ]) ?? "menu_relay_icon"
+        }
+        return "menu_relay_icon"
     }
 
     private var providersSection: some View {
@@ -1444,11 +1600,13 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 52)
+            // 头部标题行：左侧与详情容器保持 16px；上下各 14px。
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+            .padding(.top, 14)
+            .padding(.bottom, 14)
 
             dividerLine
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -1460,10 +1618,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             providerSettingsHeader(provider)
 
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
                 thirdPartyThresholdRow(provider)
 
-                thirdPartyToggleRow(title: officialStatusBarTitle, isOn: Binding(
+                providerNameToggleRow(title: officialStatusBarTitle, isOn: Binding(
                     get: { viewModel.isStatusBarProvider(providerID: provider.id) },
                     set: { newValue in
                         if newValue {
@@ -1476,7 +1634,7 @@ struct SettingsView: View {
                     openRelayConfigSection(provider)
                 }
             }
-            .padding(.top, 22)
+            .padding(.top, modelSettingsItemSpacing)
         }
     }
 
@@ -1514,12 +1672,17 @@ struct SettingsView: View {
         }
     }
 
-    private func thirdPartyToggleRow(title: String, isOn: Binding<Bool>) -> some View {
-        HStack(spacing: thirdPartyConfigLabelSpacing) {
+    private func providerNameToggleRow(
+        title: String,
+        isOn: Binding<Bool>,
+        labelWidth: CGFloat = 60,
+        spacing: CGFloat = 12
+    ) -> some View {
+        HStack(spacing: spacing) {
             Text(title)
                 .font(settingsLabelFont)
                 .foregroundStyle(settingsBodyColor)
-                .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
 
             Toggle("", isOn: isOn)
                 .toggleStyle(FigmaSwitchToggleStyle())
@@ -1538,10 +1701,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             providerSettingsHeader(provider)
 
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
                 officialThresholdRow(provider)
 
-                officialToggleRow(title: officialStatusBarTitle, isOn: Binding(
+                providerNameToggleRow(title: officialStatusBarTitle, isOn: Binding(
                     get: { viewModel.isStatusBarProvider(providerID: provider.id) },
                     set: { newValue in
                         if newValue {
@@ -1550,14 +1713,14 @@ struct SettingsView: View {
                     }
                 ))
 
-                officialToggleRow(title: officialShowEmailTitle, isOn: Binding(
+                providerNameToggleRow(title: officialShowEmailTitle, isOn: Binding(
                     get: { viewModel.showOfficialAccountEmailInMenuBar },
                     set: { viewModel.setShowOfficialAccountEmailInMenuBar($0) }
                 ))
 
                 officialConfigSection(provider)
             }
-            .padding(.top, 22)
+            .padding(.top, modelSettingsItemSpacing)
 
             if provider.type == .codex {
                 dividerLine
@@ -1570,8 +1733,32 @@ struct SettingsView: View {
 
                 codexProfileManagementSection()
                     .padding(.top, 12)
+            } else if provider.type == .claude {
+                dividerLine
+                    .padding(.top, 24)
+                    .padding(.bottom, 16)
+
+                Text(viewModel.localizedText("本机 Claude 账号", "Local Claude Accounts"))
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+
+                claudeProfileManagementSection()
+                    .padding(.top, 12)
+
+                if snapshot != nil || error != nil {
+                    providerMonitorSnapshotSection(
+                        provider: provider,
+                        snapshot: snapshot,
+                        error: error
+                    )
+                        .padding(.top, 16)
+                }
             } else if snapshot != nil || error != nil {
-                providerUsageSummarySection(snapshot: snapshot, error: error)
+                providerMonitorSnapshotSection(
+                    provider: provider,
+                    snapshot: snapshot,
+                    error: error
+                )
                     .padding(.top, 16)
             }
         }
@@ -1625,7 +1812,7 @@ struct SettingsView: View {
                 prompt: settingsInputPrompt("0.00")
             )
             .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 12, weight: .regular))
             .monospacedDigit()
             .foregroundStyle(settingsBodyColor)
             .multilineTextAlignment(.leading)
@@ -1680,102 +1867,106 @@ struct SettingsView: View {
         )
     }
 
-    private func officialToggleRow(title: String, isOn: Binding<Bool>) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(settingsLabelFont)
-                .foregroundStyle(settingsBodyColor)
-                .frame(width: 60, alignment: .leading)
-
-            Toggle("", isOn: isOn)
-                .toggleStyle(FigmaSwitchToggleStyle())
-                .labelsHidden()
-
-            Spacer(minLength: 0)
-        }
-        .frame(height: 24)
-    }
-
     @ViewBuilder
-    private func providerUsageSummarySection(snapshot: UsageSnapshot?, error: String?) -> some View {
-        // 详情卡中的“用量摘要”子卡样式。
-        VStack(alignment: .leading, spacing: 8) {
-            if let snapshot {
-                HStack(spacing: 16) {
-                    if let remaining = snapshot.remaining {
-                        providerUsageMetric(
-                            title: snapshot.unit == "quota" ? viewModel.text(.balanceLabel) : viewModel.text(.remaining),
-                            value: formattedSettingsAmount(remaining),
-                            unit: snapshot.unit
-                        )
+    private func providerMonitorSnapshotSection(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        error: String?
+    ) -> some View {
+        let status = codexSlotStatus(snapshot: snapshot)
+        let metrics = codexQuotaMetrics(snapshot: snapshot)
+        let subtitle = officialMonitorSubtitle(snapshot: snapshot)
+        let hasError = (error?.isEmpty == false) || snapshot?.valueFreshness == .empty
+        let updatedText: String? = {
+            guard let snapshot else { return nil }
+            if viewModel.language == .zhHans {
+                return "更新于 \(settingsElapsedText(from: snapshot.updatedAt))"
+            }
+            return "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: snapshot.updatedAt))"
+        }()
+
+        officialAccountMonitorCard(
+            highlightColor: hasError ? Color(hex: 0xD05757) : nil
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 8) {
+                    providerIcon(for: provider, size: 12)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sidebarDisplayName(for: provider))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(settingsBodyColor)
+                        if let subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
 
-                    if let used = snapshot.used {
-                        providerUsageMetric(
-                            title: viewModel.text(.used),
-                            value: formattedSettingsAmount(used),
-                            unit: snapshot.unit
-                        )
-                    }
+                    Spacer(minLength: 8)
 
-                    if let limit = snapshot.limit {
-                        providerUsageMetric(
-                            title: viewModel.text(.limit),
-                            value: formattedSettingsAmount(limit),
-                            unit: snapshot.unit
-                        )
-                    }
+                    Text(status.text)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(status.color)
+                        .lineLimit(1)
+                }
+                .frame(height: 24)
 
-                    Spacer(minLength: 0)
+                HStack(spacing: 24) {
+                    ForEach(metrics.prefix(2)) { metric in
+                        codexQuotaMetricView(metric)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.top, 8)
+
+                if let error, !error.isEmpty {
+                    Text(error)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0xD05757))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                } else if let snapshot,
+                          snapshot.valueFreshness == .empty,
+                          !snapshot.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(snapshot.note)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0xD05757))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
                 }
 
-                HStack(spacing: 8) {
-                    Text("\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: snapshot.updatedAt))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if !snapshot.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text(snapshot.note)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
+                if let updatedText {
+                    Text(updatedText)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineLimit(1)
+                        .padding(.top, 8)
                 }
-            } else if let error, !error.isEmpty {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(outlineColor, lineWidth: 1)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func providerUsageMetric(title: String, value: String, unit: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(settingsHintFont)
-                .foregroundStyle(settingsHintColor)
-            Text(unit.isEmpty ? value : "\(value) \(unit)")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(settingsTitleColor)
-                .monospacedDigit()
+    private func officialMonitorSubtitle(snapshot: UsageSnapshot?) -> String? {
+        guard viewModel.showOfficialAccountEmailInMenuBar else { return nil }
+        guard let label = snapshot?.accountLabel?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !label.isEmpty else {
+            return nil
         }
+        return label
     }
 
     @ViewBuilder
     private func officialConfigSection(_ provider: ProviderDescriptor) -> some View {
         let supportedSourceModes = provider.supportedOfficialSourceModes
         let supportedWebModes = provider.supportedOfficialWebModes
+        let supportsManualInput = provider.supportsOfficialManualCookieInput
         let quotaDisplayBinding: Binding<OfficialQuotaDisplayMode> = Binding(
             get: {
                 officialQuotaDisplayModeInputs[provider.id]
@@ -1799,59 +1990,67 @@ struct SettingsView: View {
             set: { officialWebModeInputs[provider.id] = $0 }
         )
 
-        VStack(alignment: .leading, spacing: 12) {
-            officialConfigRow(title: viewModel.text(.sourceMode)) {
-                officialSegmentControl(
-                    selection: sourceBinding,
-                    options: supportedSourceModes,
-                    label: sourceModeLabel
-                )
-            }
-
+        VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
             if supportedWebModes.count > 1 {
-                officialConfigRow(title: viewModel.text(.webMode)) {
+                officialConfigRow(title: viewModel.text(.sourceMode)) {
                     officialSegmentControl(
-                        selection: webBinding,
-                        options: supportedWebModes,
-                        label: webModeLabel
+                        selection: sourceBinding,
+                        options: supportedSourceModes,
+                        label: sourceModeLabel
                     )
                 }
-            }
 
-            Text(viewModel.text(.officialAutoDiscoveryHint))
-                .font(settingsHintFont)
-                .foregroundStyle(settingsHintColor)
-                .lineSpacing(settingsHintMultilineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 72)
+                VStack(alignment: .leading, spacing: 8) {
+                    officialConfigRow(title: viewModel.text(.webMode)) {
+                        officialSegmentControl(
+                            selection: webBinding,
+                            options: supportedWebModes,
+                            label: webModeLabel
+                        )
+                    }
+
+                    officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    officialConfigRow(title: viewModel.text(.sourceMode)) {
+                        officialSegmentControl(
+                            selection: sourceBinding,
+                            options: supportedSourceModes,
+                            label: sourceModeLabel
+                        )
+                    }
+
+                    officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                }
+            }
 
             if provider.type == .claude {
-                officialConfigRow(title: viewModel.text(.quotaDisplayMode)) {
-                    officialSegmentControl(
-                        selection: quotaDisplayBinding,
-                        options: [.remaining, .used],
-                        label: { mode in
-                            switch mode {
-                            case .remaining:
-                                viewModel.text(.quotaDisplayRemaining)
-                            case .used:
-                                viewModel.text(.quotaDisplayUsed)
+                VStack(alignment: .leading, spacing: 8) {
+                    officialConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
+                        officialSegmentControl(
+                            selection: quotaDisplayBinding,
+                            options: [.remaining, .used],
+                            label: { mode in
+                                switch mode {
+                                case .remaining:
+                                    viewModel.text(.quotaDisplayRemaining)
+                                case .used:
+                                    viewModel.text(.quotaDisplayUsed)
+                                }
                             }
-                        }
-                    )
-                }
+                        )
+                    }
 
-                Text(viewModel.text(.claudeQuotaDisplayHint))
-                    .font(settingsHintFont)
-                    .foregroundStyle(settingsHintColor)
-                    .lineSpacing(settingsHintMultilineSpacing)
-                    .fixedSize(horizontal: false, vertical: true)
+                    officialConfigHintText(viewModel.text(.claudeQuotaDisplayHint))
+                }
             }
 
-            if provider.supportsOfficialManualCookieInput {
+            if supportsManualInput {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
+                        let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
 
                         Text("Token")
                             .font(settingsLabelFont)
@@ -1859,7 +2058,7 @@ struct SettingsView: View {
                             .frame(width: 60, alignment: .leading)
 
                         relayProminentSecureField(
-                            hasSavedManualCookie ? maskedSecretDots : viewModel.text(.manualCookieHeader),
+                            hasSavedManualCookie ? maskedSecretDots(length: savedManualCookieLength) : viewModel.text(.manualCookieHeader),
                             text: Binding(
                                 get: { officialCookieInputs[provider.id, default: ""] },
                                 set: { officialCookieInputs[provider.id] = $0 }
@@ -1887,20 +2086,33 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-
-            if !provider.supportsOfficialManualCookieInput {
-                HStack {
-                    Spacer(minLength: 0)
-                    settingsCapsuleButton(viewModel.text(.save)) {
-                        viewModel.updateOfficialProviderSettings(
-                            providerID: provider.id,
-                            sourceMode: sourceBinding.wrappedValue,
-                            webMode: webBinding.wrappedValue,
-                            quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
-                        )
-                    }
-                }
-            }
+        }
+        .onChange(of: sourceBinding.wrappedValue) { _, newValue in
+            guard !supportsManualInput else { return }
+            viewModel.updateOfficialProviderSettings(
+                providerID: provider.id,
+                sourceMode: newValue,
+                webMode: webBinding.wrappedValue,
+                quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+            )
+        }
+        .onChange(of: webBinding.wrappedValue) { _, newValue in
+            guard !supportsManualInput else { return }
+            viewModel.updateOfficialProviderSettings(
+                providerID: provider.id,
+                sourceMode: sourceBinding.wrappedValue,
+                webMode: newValue,
+                quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+            )
+        }
+        .onChange(of: quotaDisplayBinding.wrappedValue) { _, newValue in
+            guard !supportsManualInput, provider.type == .claude else { return }
+            viewModel.updateOfficialProviderSettings(
+                providerID: provider.id,
+                sourceMode: sourceBinding.wrappedValue,
+                webMode: webBinding.wrappedValue,
+                quotaDisplayMode: newValue
+            )
         }
     }
 
@@ -1916,6 +2128,15 @@ struct SettingsView: View {
             content()
         }
         .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+    }
+
+    private func officialConfigHintText(_ text: String) -> some View {
+        Text(text)
+            .font(settingsHintFont)
+            .foregroundStyle(settingsHintColor)
+            .lineSpacing(settingsHintMultilineSpacing)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 72)
     }
 
     private func thirdPartyConfigRow<Content: View>(
@@ -1965,7 +2186,7 @@ struct SettingsView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .stroke(outlineColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -2004,8 +2225,9 @@ struct SettingsView: View {
         viewModel.language == .zhHans ? "余额阈值" : "Threshold"
     }
 
-    private var maskedSecretDots: String {
-        "••••••••••"
+    private func maskedSecretDots(length: Int?) -> String {
+        let dotCount = max(length ?? 8, 1)
+        return String(repeating: "•", count: dotCount)
     }
 
     private func formattedOfficialThresholdValue(_ value: Double) -> String {
@@ -2040,6 +2262,22 @@ struct SettingsView: View {
         officialThresholdInputs[key] = formattedOfficialThresholdValue(clamped)
     }
 
+    private func officialAccountMonitorCard<Content: View>(
+        highlightColor: Color? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(12)
+            .background(
+                DialogSmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+                    .fill(cardBackground)
+            )
+            .overlay(
+                DialogSmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+                    .stroke(highlightColor ?? outlineColor, lineWidth: 1)
+            )
+    }
+
     @ViewBuilder
     private func codexProfileManagementSection() -> some View {
         let profiles = viewModel.codexProfilesForSettings()
@@ -2071,129 +2309,417 @@ struct SettingsView: View {
             ? "更新于 \(settingsElapsedText(from: updatedAt))"
             : "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: updatedAt))"
 
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
-                codexAccountIcon(size: 12)
+        return officialAccountMonitorCard(
+            highlightColor: hasError ? Color(hex: 0xD05757) : nil
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 8) {
+                    codexAccountIcon(size: 12)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Codex \(profile.slotID.rawValue)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(settingsBodyColor)
-                    Text(profile.accountEmail ?? viewModel.text(.codexProfileEmailUnknown))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Codex \(profile.slotID.rawValue)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(settingsBodyColor)
+                        Text(profile.accountEmail ?? viewModel.text(.codexProfileEmailUnknown))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(settingsHintColor)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(status.text)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(status.color)
+                        .lineLimit(1)
+                }
+                .frame(height: 24)
+
+                HStack(spacing: 24) {
+                    ForEach(metrics.prefix(2)) { metric in
+                        codexQuotaMetricView(metric)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.top, 8)
+
+                if hasError, let note = snapshot?.note, !note.isEmpty {
+                    Text(note)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0xD05757))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
+
+                dividerLine
+                    .padding(.top, hasError ? 8 : 10)
+
+                HStack(spacing: 8) {
+                    if profile.isCurrentSystemAccount {
+                        Text(viewModel.language == .zhHans ? "正在使用" : viewModel.text(.codexCurrentAccount))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(Color(hex: 0x69BD64))
+                    }
+
+                    Text(trailingInfo)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(settingsHintColor)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+
+                    Spacer(minLength: 8)
+
+                    codexAccountActionButton(codexEditButtonTitle) {
+                        openCodexProfileEditor(slotID: profile.slotID, existingProfile: profile)
+                    }
+                    codexAccountActionButton(codexDeleteButtonTitle, destructive: true) {
+                        codexProfilePendingDelete = profile.slotID
+                    }
                 }
+                .padding(.top, 8)
 
-                Spacer(minLength: 8)
-
-                Text(status.text)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(status.color)
-                    .lineLimit(1)
-            }
-            .frame(height: 24)
-
-            HStack(spacing: 24) {
-                ForEach(metrics.prefix(2)) { metric in
-                    codexQuotaMetricView(metric)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(.top, 8)
-
-            if hasError, let note = snapshot?.note, !note.isEmpty {
-                Text(note)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(Color(hex: 0xD05757))
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
-            }
-
-            dividerLine
-                .padding(.top, hasError ? 8 : 10)
-
-            HStack(spacing: 8) {
-                if profile.isCurrentSystemAccount {
-                    Text(viewModel.language == .zhHans ? "正在使用" : viewModel.text(.codexCurrentAccount))
+                if let result = codexProfileResult[key], !result.isEmpty {
+                    Text(result)
                         .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color(hex: 0x69BD64))
+                        .foregroundStyle(result.contains(viewModel.text(.codexProfileImportFailed)) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
+                        .lineLimit(1)
+                        .padding(.top, 8)
                 }
-
-                Text(trailingInfo)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(settingsHintColor)
-
-                Spacer(minLength: 8)
-
-                codexAccountActionButton(codexEditButtonTitle) {
-                    openCodexProfileEditor(slotID: profile.slotID, existingProfile: profile)
-                }
-                codexAccountActionButton(codexDeleteButtonTitle, destructive: true) {
-                    codexProfilePendingDelete = profile.slotID
-                }
-            }
-            .padding(.top, 8)
-
-            if let result = codexProfileResult[key], !result.isEmpty {
-                Text(result)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(result.contains(viewModel.text(.codexProfileImportFailed)) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
-                    .lineLimit(1)
-                    .padding(.top, 8)
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(hasError ? Color(hex: 0xD05757) : Color.white.opacity(0.30), lineWidth: 1)
-        )
     }
 
     private func codexImportNextProfileCard(nextSlotID: CodexSlotID) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                codexAccountIcon(size: 12)
-                Text(viewModel.language == .zhHans ? "导入另一个Codex" : viewModel.text(.codexImportNextProfile))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(settingsBodyColor)
-                Spacer(minLength: 8)
-            }
-            .frame(height: 24)
+        officialAccountMonitorCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    codexAccountIcon(size: 12)
+                    Text(viewModel.language == .zhHans ? "导入另一个Codex" : viewModel.text(.codexImportNextProfile))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(settingsBodyColor)
+                    Spacer(minLength: 8)
+                }
+                .frame(height: 24)
 
-            dividerLine
+                dividerLine
+                    .padding(.top, 8)
+
+                HStack(spacing: 8) {
+                    Text(viewModel.text(.codexAuthJSONHowTo))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    codexAccountActionButton(codexAddButtonTitle) {
+                        openCodexProfileEditor(slotID: nextSlotID, existingProfile: nil)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func claudeProfileManagementSection() -> some View {
+        let profiles = viewModel.claudeProfilesForSettings()
+        let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.claudeSlotViewModels().map { ($0.slotID, $0) })
+
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(profiles, id: \.slotID.rawValue) { profile in
+                claudeImportedProfileCard(
+                    profile: profile,
+                    slotViewModel: slotsByID[profile.slotID]
+                )
+            }
+
+            claudeImportNextProfileCard(nextSlotID: viewModel.nextClaudeProfileSlotID())
+        }
+    }
+
+    private func claudeImportedProfileCard(
+        profile: ClaudeAccountProfile,
+        slotViewModel: ClaudeSlotViewModel?
+    ) -> some View {
+        let key = profile.slotID.rawValue
+        let snapshot = slotViewModel?.snapshot
+        let status = codexSlotStatus(snapshot: snapshot)
+        let metrics = codexQuotaMetrics(snapshot: snapshot)
+        let hasError = snapshot?.valueFreshness == .empty
+        let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
+        let trailingInfo = viewModel.language == .zhHans
+            ? "更新于 \(settingsElapsedText(from: updatedAt))"
+            : "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: updatedAt))"
+        let subtitle = profile.accountEmail ?? viewModel.localizedText("未识别账号", "Account unavailable")
+
+        return officialAccountMonitorCard(
+            highlightColor: hasError ? Color(hex: 0xD05757) : nil
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 8) {
+                    claudeAccountIcon(size: 12)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Claude \(profile.slotID.rawValue)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(settingsBodyColor)
+                        Text(subtitle)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(settingsHintColor)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(status.text)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(status.color)
+                        .lineLimit(1)
+                }
+                .frame(height: 24)
+
+                HStack(spacing: 24) {
+                    ForEach(metrics.prefix(2)) { metric in
+                        codexQuotaMetricView(metric)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 .padding(.top, 8)
 
-            HStack(spacing: 8) {
-                Text(viewModel.text(.codexAuthJSONHowTo))
+                Text(claudeProfileSourceHint(profile))
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(settingsHintColor)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.top, 8)
 
-                Spacer(minLength: 8)
+                if hasError, let note = snapshot?.note, !note.isEmpty {
+                    Text(note)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0xD05757))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
 
-                codexAccountActionButton(codexAddButtonTitle) {
-                    openCodexProfileEditor(slotID: nextSlotID, existingProfile: nil)
+                dividerLine
+                    .padding(.top, hasError ? 8 : 10)
+
+                HStack(spacing: 8) {
+                    if profile.isCurrentSystemAccount {
+                        Text(viewModel.localizedText("正在使用", "Current"))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(Color(hex: 0x69BD64))
+                    }
+
+                    Text(trailingInfo)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+
+                    Spacer(minLength: 8)
+
+                    codexAccountActionButton(codexEditButtonTitle) {
+                        openClaudeProfileEditor(slotID: profile.slotID, existingProfile: profile)
+                    }
+                    codexAccountActionButton(codexDeleteButtonTitle, destructive: true) {
+                        claudeProfilePendingDelete = profile.slotID
+                    }
+                }
+                .padding(.top, 8)
+
+                if let result = claudeProfileResult[key], !result.isEmpty {
+                    Text(result)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle((result.contains("失败") || result.localizedCaseInsensitiveContains("failed")) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
+                        .lineLimit(1)
+                        .padding(.top, 8)
                 }
             }
-            .padding(.top, 8)
         }
-        .padding(12)
+    }
+
+    private func claudeImportNextProfileCard(nextSlotID: CodexSlotID) -> some View {
+        officialAccountMonitorCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    claudeAccountIcon(size: 12)
+                    Text(viewModel.localizedText("导入另一个 Claude", "Import another Claude account"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(settingsBodyColor)
+                    Spacer(minLength: 8)
+                }
+                .frame(height: 24)
+
+                dividerLine
+                    .padding(.top, 8)
+
+                HStack(spacing: 8) {
+                    Text(viewModel.localizedText("支持绑定 CLAUDE_CONFIG_DIR 目录，或手动粘贴完整 .credentials.json。", "Bind a CLAUDE_CONFIG_DIR directory or paste the full .credentials.json."))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    codexAccountActionButton(codexAddButtonTitle) {
+                        openClaudeProfileEditor(slotID: nextSlotID, existingProfile: nil)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func claudeProfileSourceLabel(_ source: ClaudeProfileSource) -> String {
+        switch source {
+        case .configDir:
+            return viewModel.localizedText("目录绑定", "Config Directory")
+        case .manualCredentials:
+            return viewModel.localizedText("手动粘贴", "Manual Paste")
+        }
+    }
+
+    private func claudeProfileSourceHint(_ profile: ClaudeAccountProfile) -> String {
+        switch profile.source {
+        case .configDir:
+            if let configDir = profile.configDir, !configDir.isEmpty {
+                return "\(claudeProfileSourceLabel(.configDir)) · \(configDir)"
+            }
+            return claudeProfileSourceLabel(.configDir)
+        case .manualCredentials:
+            return claudeProfileSourceLabel(.manualCredentials)
+        }
+    }
+
+    private func openClaudeProfileEditor(slotID: CodexSlotID, existingProfile: ClaudeAccountProfile?) {
+        let key = slotID.rawValue
+        claudeProfileEditorSource = existingProfile?.source ?? .configDir
+        claudeProfileEditorConfigDir = claudeProfileConfigDirInputs[key] ?? existingProfile?.configDir ?? ""
+        claudeProfileEditorJSON = claudeProfileJSONInputs[key] ?? existingProfile?.credentialsJSON ?? ""
+        claudeProfileEditor = ClaudeProfileEditorState(
+            slotID: slotID,
+            title: viewModel.claudeSettingsTitle(for: slotID),
+            isNewSlot: existingProfile == nil
+        )
+    }
+
+    private func saveClaudeProfileEditor() {
+        guard let editor = claudeProfileEditor else { return }
+        let key = editor.slotID.rawValue
+        claudeProfileConfigDirInputs[key] = claudeProfileEditorConfigDir
+        claudeProfileJSONInputs[key] = claudeProfileEditorJSON
+        claudeProfileResult[key] = viewModel.saveClaudeProfile(
+            slotID: editor.slotID,
+            displayName: "Claude \(editor.slotID.rawValue)",
+            source: claudeProfileEditorSource,
+            configDir: claudeProfileEditorConfigDir,
+            credentialsJSON: claudeProfileEditorJSON
+        )
+        claudeProfileEditor = nil
+        claudeProfileEditorConfigDir = ""
+        claudeProfileEditorJSON = ""
+        claudeProfileEditorSource = .configDir
+    }
+
+    private var claudeProfileEditorDialog: some View {
+        VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(claudeProfileEditorTitle)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(settingsBodyColor)
+
+                Text(viewModel.localizedText("支持两种导入方式：绑定一个 CLAUDE_CONFIG_DIR 目录，或粘贴完整 .credentials.json。切换时会同步写回系统默认 Claude 登录。", "You can bind a CLAUDE_CONFIG_DIR directory or paste the full .credentials.json. Switching also writes to the system Claude credentials."))
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                officialSegmentControl(
+                    selection: $claudeProfileEditorSource,
+                    options: ClaudeProfileSource.allCases,
+                    label: claudeProfileSourceLabel
+                )
+
+                HStack(alignment: .center, spacing: 10) {
+                    Text(viewModel.localizedText("目录", "Directory"))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsBodyColor)
+                        .frame(width: 60, alignment: .leading)
+
+                    TextField(
+                        "",
+                        text: $claudeProfileEditorConfigDir,
+                        prompt: settingsInputPrompt("~/.claude-profile")
+                    )
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsBodyColor)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(settingsInputFillColor)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+                }
+
+                if claudeProfileEditorSource == .manualCredentials {
+                    TextEditor(text: $claudeProfileEditorJSON)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(settingsBodyColor)
+                        .frame(height: 220)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(outlineColor, lineWidth: 1)
+                        )
+                }
+            }
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                settingsCapsuleButton(viewModel.text(.permissionCancel)) {
+                    claudeProfileEditor = nil
+                    claudeProfileEditorConfigDir = ""
+                    claudeProfileEditorJSON = ""
+                    claudeProfileEditorSource = .configDir
+                }
+                settingsCapsuleButton(viewModel.text(.save)) {
+                    saveClaudeProfileEditor()
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 560, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black)
+            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
+                .fill(panelBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
+                .stroke(outlineColor, lineWidth: 1)
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .shadow(color: Color.black.opacity(0.50), radius: 45, x: 0, y: 17)
+        .shadow(color: Color.black.opacity(0.20), radius: 1, x: 0, y: 0)
+    }
+
+    private var claudeProfileEditorTitle: String {
+        guard let editor = claudeProfileEditor else { return "" }
+        if viewModel.language == .zhHans {
+            return editor.isNewSlot ? "添加 \(editor.title) 凭证" : "编辑 \(editor.title) 凭证"
+        }
+        return editor.isNewSlot ? "Add \(editor.title) credentials" : "Edit \(editor.title) credentials"
     }
 
     private func codexQuotaMetricView(_ metric: CodexQuotaMetricDisplay) -> some View {
@@ -2288,6 +2814,22 @@ struct SettingsView: View {
                     .scaledToFit()
             } else {
                 Image(systemName: "terminal.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(settingsBodyColor)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func claudeAccountIcon(size: CGFloat) -> some View {
+        Group {
+            if let image = bundledImage(named: "menu_claude_icon") {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "bolt.fill")
                     .resizable()
                     .scaledToFit()
                     .foregroundStyle(settingsBodyColor)
@@ -2577,12 +3119,9 @@ struct SettingsView: View {
                     : viewModel.text(.permissionKeychainFailed)
                 permissionResultIsError[PermissionPrompt.keychain.id] = !ok
             } else {
-                permissionResultMessage[PermissionPrompt.keychain.id] = viewModel.language == .zhHans
-                    ? "已打开钥匙串相关设置"
-                    : "Opened Keychain related settings."
+                permissionResultMessage[PermissionPrompt.keychain.id] = viewModel.text(.permissionKeychainReady)
                 permissionResultIsError[PermissionPrompt.keychain.id] = false
             }
-            viewModel.openKeychainAccessSettings()
         case .fullDisk:
             viewModel.openFullDiskAccessSettings()
             permissionResultMessage[PermissionPrompt.fullDisk.id] = viewModel.text(.permissionFullDiskRequested)
@@ -2611,7 +3150,7 @@ struct SettingsView: View {
         Task { @MainActor in
             let result = await viewModel.discoverLocalProviders()
             permissionResultMessage[PermissionPrompt.autoDiscovery.id] = result
-            permissionResultIsError[PermissionPrompt.autoDiscovery.id] = result == viewModel.text(.localDiscoveryNothingFound)
+            permissionResultIsError[PermissionPrompt.autoDiscovery.id] = false
             autoDiscoveryScanning = false
         }
     }
@@ -2647,12 +3186,31 @@ struct SettingsView: View {
         let usesGenericTemplate = (selectedRelayTemplateInputs[provider.id] ?? providerAdapterID) == "generic-newapi"
         let showNameField = usesGenericTemplate
         let showBaseURLField = usesGenericTemplate || !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
-        let tokenFieldTitle = viewModel.language == .zhHans ? "Token" : "Token"
         let tokenSaveButtonTitle = viewModel.language == .zhHans ? "保存" : "Save"
-        let tokenPlaceholder = viewModel.language == .zhHans
-            ? "例如 Bearer eyJ...或ey."
-            : "e.g. Bearer eyJ... or ey..."
-        let tokenHintLines = relayTokenHintLines(for: provider)
+        let quotaCredentialTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
+        let balanceAuthHeader = authHeaderInputs[provider.id]
+            ?? relayViewConfig?.accountBalance?.authHeader
+            ?? selectedTemplate.balanceRequest.authHeader
+            ?? "Authorization"
+        let balanceAuthScheme = authSchemeInputs[provider.id]
+            ?? relayViewConfig?.accountBalance?.authScheme
+            ?? selectedTemplate.balanceRequest.authScheme
+            ?? "Bearer"
+        let balanceCredentialTemplate = relayCredentialTemplate(authHeader: balanceAuthHeader, authScheme: balanceAuthScheme)
+        let quotaFieldTitle = relayCredentialFieldName(isAccount: false, templateKind: quotaCredentialTemplate.kind)
+        let balanceFieldTitle = relayCredentialFieldName(isAccount: true, templateKind: balanceCredentialTemplate.kind)
+        let quotaPlaceholder = quotaCredentialTemplate.placeholder
+        let balancePlaceholder = balanceCredentialTemplate.placeholder
+        let quotaHintLines = relayCredentialHintLines(
+            for: provider,
+            template: quotaCredentialTemplate,
+            setupHint: relaySetupHint(for: selectedTemplate, field: .quotaAuth)
+        )
+        let balanceHintLines = relayCredentialHintLines(
+            for: provider,
+            template: balanceCredentialTemplate,
+            setupHint: relaySetupHint(for: selectedTemplate, field: .balanceAuth)
+        )
         let credentialModeBinding = Binding<RelayCredentialMode>(
             get: {
                 relayCredentialModeInputs[provider.id]
@@ -2734,11 +3292,12 @@ struct SettingsView: View {
 
             if showBalanceCredential {
                 let hasSavedBalanceToken = accountAuth.map { viewModel.hasToken(auth: $0) } ?? false
+                let savedBalanceTokenLength = accountAuth.flatMap { viewModel.savedTokenLength(auth: $0) }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
+                    thirdPartyConfigRow(title: balanceFieldTitle, alignment: .top) {
                         HStack(spacing: 8) {
-                            relayProminentSecureField(hasSavedBalanceToken ? maskedSecretDots : tokenPlaceholder, text: Binding(
+                            relayProminentSecureField(hasSavedBalanceToken ? maskedSecretDots(length: savedBalanceTokenLength) : balancePlaceholder, text: Binding(
                                 get: { systemTokenInputs[provider.id, default: ""] },
                                 set: { systemTokenInputs[provider.id] = $0 }
                             ))
@@ -2758,7 +3317,7 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    ForEach(tokenHintLines, id: \.self) { line in
+                    ForEach(balanceHintLines, id: \.self) { line in
                         thirdPartyHintText(line)
                     }
                 }
@@ -2766,11 +3325,12 @@ struct SettingsView: View {
 
             if showTokenCredential {
                 let hasSavedToken = viewModel.hasToken(for: provider)
+                let savedTokenLength = viewModel.savedTokenLength(for: provider)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    thirdPartyConfigRow(title: tokenFieldTitle, alignment: .top) {
+                    thirdPartyConfigRow(title: quotaFieldTitle, alignment: .top) {
                         HStack(spacing: 8) {
-                            relayProminentSecureField(hasSavedToken ? maskedSecretDots : tokenPlaceholder, text: Binding(
+                            relayProminentSecureField(hasSavedToken ? maskedSecretDots(length: savedTokenLength) : quotaPlaceholder, text: Binding(
                                 get: { tokenInputs[provider.id, default: ""] },
                                 set: { tokenInputs[provider.id] = $0 }
                             ))
@@ -2789,7 +3349,7 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    ForEach(tokenHintLines, id: \.self) { line in
+                    ForEach(quotaHintLines, id: \.self) { line in
                         thirdPartyHintText(line)
                     }
                 }
@@ -3491,7 +4051,7 @@ struct SettingsView: View {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") {
+        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
             return "menu_kimi_icon"
         }
         if relaySignals.contains("deepseek") {
@@ -3662,6 +4222,16 @@ struct SettingsView: View {
                 codexProfileJSONInputs[key] = profile.authJSON
             }
         }
+
+        for profile in viewModel.claudeProfilesForSettings() {
+            let key = profile.slotID.rawValue
+            if claudeProfileJSONInputs[key] == nil {
+                claudeProfileJSONInputs[key] = profile.credentialsJSON ?? ""
+            }
+            if claudeProfileConfigDirInputs[key] == nil {
+                claudeProfileConfigDirInputs[key] = profile.configDir ?? ""
+            }
+        }
     }
 
     @ViewBuilder
@@ -3818,20 +4388,45 @@ struct SettingsView: View {
         }
     }
 
-    private func relayTokenHintLines(for provider: ProviderDescriptor) -> [String] {
-        let providerName = sidebarDisplayName(for: provider)
-        if viewModel.language == .zhHans {
-            return [
-                "这里填写 Authorization Bearer 值，带或不带 Bearer 前缀都可以",
-                "填写 \(providerName) 后台生成的访问令牌，直接粘贴即可。",
-                "可在浏览器开发者工具的 Network 中打开对应请求，在 Request Headers 里复制 Authorization 的 Bearer 值。"
-            ]
+    private func relayCredentialHintLines(
+        for provider: ProviderDescriptor,
+        template: RelayCredentialTemplate,
+        setupHint: String?
+    ) -> [String] {
+        let lookupHint = relayCredentialLookupHint(templateKind: template.kind)
+        let rawLines = [template.hint, setupHint, lookupHint].compactMap { $0 }
+
+        var output: [String] = []
+        for raw in rawLines {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            guard !shouldStripThirdPartyAccessTokenHint(line, for: provider) else { continue }
+            if !output.contains(line) {
+                output.append(line)
+            }
         }
-        return [
-            "Paste the Authorization bearer token here, with or without the Bearer prefix.",
-            "Use the access token generated by \(providerName).",
-            "You can copy the Authorization bearer value from browser DevTools Network Request Headers."
-        ]
+        return output
+    }
+
+    private func shouldStripThirdPartyAccessTokenHint(_ line: String, for provider: ProviderDescriptor) -> Bool {
+        guard provider.family == .thirdParty else {
+            return false
+        }
+
+        let normalized = line.lowercased()
+        if line.contains("后台") || line.contains("访问令牌") {
+            return true
+        }
+        if normalized.contains("access token generated") {
+            return true
+        }
+        if normalized.contains("generated by"), normalized.contains("token") {
+            return true
+        }
+        if normalized.contains("dashboard"), normalized.contains("token") {
+            return true
+        }
+        return false
     }
 
     private func relayCredentialModeLabel(_ mode: RelayCredentialMode) -> String {
@@ -3988,7 +4583,7 @@ struct SettingsView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(outlineColor, lineWidth: 1)
         )
     }
 
@@ -4309,7 +4904,7 @@ private extension Color {
 private extension View {
     func relayCompactInput() -> some View {
         self
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 12, weight: .regular))
             .foregroundStyle(Color.white.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -4326,7 +4921,7 @@ private extension View {
     func relayProminentInput() -> some View {
         // Relay 基础输入框样式（与 token 输入框保持一致）。
         self
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 12, weight: .regular))
             .foregroundStyle(Color.white.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)

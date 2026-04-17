@@ -5,24 +5,29 @@ import CryptoKit
 final class CodexProvider: UsageProvider, @unchecked Sendable {
     private static let cache = OfficialSnapshotCache()
     private static let gate = OfficialFetchGate()
+    private static let webReadBackoff = WebOverlayRetryBackoff()
 
     private let cacheTTL: TimeInterval = 15
     private let refreshAge: TimeInterval = 8 * 24 * 60 * 60
+    private let webRetryBackoffInterval: TimeInterval = 15 * 60
     let descriptor: ProviderDescriptor
     private let session: URLSession
     private let keychain: KeychainService
-    private let browserCookieService: BrowserCookieService
+    private let browserCookieService: BrowserCookieDetecting
+    private let webReadBackoff: WebOverlayRetryBackoff
 
     init(
         descriptor: ProviderDescriptor,
         session: URLSession = .shared,
         keychain: KeychainService,
-        browserCookieService: BrowserCookieService
+        browserCookieService: BrowserCookieDetecting,
+        webReadBackoff: WebOverlayRetryBackoff = CodexProvider.webReadBackoff
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
         self.browserCookieService = browserCookieService
+        self.webReadBackoff = webReadBackoff
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -37,7 +42,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             }
 
             do {
-                let snapshot = try await loadSnapshot()
+                let snapshot = try await loadSnapshot(forceRefresh: forceRefresh)
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
@@ -55,30 +60,30 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         }
     }
 
-    private func loadSnapshot() async throws -> UsageSnapshot {
+    private func loadSnapshot(forceRefresh: Bool) async throws -> UsageSnapshot {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
         let includeWebOverlay = shouldIncludeWebOverlay(for: official)
         switch official.sourceMode {
         case .api:
-            return try await loadFromAPI(includeWebOverlay: includeWebOverlay)
+            return try await loadFromAPI(includeWebOverlay: includeWebOverlay, forceRefresh: forceRefresh)
         case .cli:
-            return try await loadFromCLI()
+            return try await loadFromCLI(forceRefresh: forceRefresh)
         case .web:
-            return try await loadFromWeb()
+            return try await loadFromWeb(forceRefresh: forceRefresh)
         case .auto:
             do {
-                return try await loadFromAPI(includeWebOverlay: includeWebOverlay)
+                return try await loadFromAPI(includeWebOverlay: includeWebOverlay, forceRefresh: forceRefresh)
             } catch {
                 do {
-                    return try await loadFromCLI()
+                    return try await loadFromCLI(forceRefresh: forceRefresh)
                 } catch {
-                    return try await loadFromWeb()
+                    return try await loadFromWeb(forceRefresh: forceRefresh)
                 }
             }
         }
     }
 
-    private func loadFromAPI(includeWebOverlay: Bool) async throws -> UsageSnapshot {
+    private func loadFromAPI(includeWebOverlay: Bool, forceRefresh: Bool) async throws -> UsageSnapshot {
         var credentials = try loadCredentials()
         if needsRefresh(lastRefresh: credentials.lastRefresh) {
             do {
@@ -103,45 +108,40 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             sourceLabel: "API",
             accountLabel: credentials.accountLabel
         )
-        if let accountID = credentials.accountId, !accountID.isEmpty {
-            snapshot.rawMeta["codex.accountId"] = accountID
-        }
-        if let label = credentials.accountLabel, !label.isEmpty {
-            snapshot.rawMeta["codex.accountLabel"] = label
-        }
-        if let subject = credentials.idToken.flatMap(JWTInspector.subject), !subject.isEmpty {
-            snapshot.rawMeta["codex.subject"] = subject
-        }
-        if let fingerprint = Self.credentialFingerprint(credentials.accessToken) {
-            snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
-        }
+        Self.applyCodexIdentityMetadata(
+            to: &snapshot,
+            accountID: credentials.accountId,
+            subject: credentials.accountSubject,
+            accountLabel: credentials.accountLabel,
+            fingerprint: Self.credentialFingerprint(credentials.accessToken)
+        )
 
-        if includeWebOverlay, let webSnapshot = try? await loadWebSnapshot() {
+        if includeWebOverlay, let webSnapshot = try? await loadWebSnapshot(forceRefresh: forceRefresh) {
             snapshot = merge(primary: snapshot, overlay: webSnapshot, sourceLabel: "API+Web")
         }
 
         return snapshot
     }
 
-    private func loadFromCLI() async throws -> UsageSnapshot {
+    private func loadFromCLI(forceRefresh: Bool) async throws -> UsageSnapshot {
         let rpcSnapshot = try runCodexRPCSnapshot()
         var snapshot = rpcSnapshot
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
 
         if shouldIncludeWebOverlay(for: official),
-           let webSnapshot = try? await loadWebSnapshot() {
+           let webSnapshot = try? await loadWebSnapshot(forceRefresh: forceRefresh) {
             snapshot = merge(primary: snapshot, overlay: webSnapshot, sourceLabel: "CLI-RPC+Web")
         }
 
         return snapshot
     }
 
-    private func loadFromWeb() async throws -> UsageSnapshot {
-        try await loadWebSnapshot()
+    private func loadFromWeb(forceRefresh: Bool) async throws -> UsageSnapshot {
+        try await loadWebSnapshot(forceRefresh: forceRefresh)
     }
 
-    private func loadWebSnapshot() async throws -> UsageSnapshot {
-        let cookie = try resolveCodexCookieHeader()
+    private func loadWebSnapshot(forceRefresh: Bool) async throws -> UsageSnapshot {
+        let cookie = try await resolveCodexCookieHeader(forceRefresh: forceRefresh)
         let (data, response) = try await requestUsage(
             authorization: .cookie(cookie.header),
             accountId: nil
@@ -154,9 +154,13 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             accountLabel: nil
         )
         snapshot.extras["webCookieSource"] = cookie.source
-        if let fingerprint = Self.credentialFingerprint(cookie.header) {
-            snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
-        }
+        Self.applyCodexIdentityMetadata(
+            to: &snapshot,
+            accountID: nil,
+            subject: nil,
+            accountLabel: nil,
+            fingerprint: Self.credentialFingerprint(cookie.header)
+        )
         return snapshot
     }
 
@@ -410,37 +414,75 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         return parts.joined(separator: " | ")
     }
 
-    private func resolveCodexCookieHeader() throws -> BrowserCookieHeader {
+    private static func applyCodexIdentityMetadata(
+        to snapshot: inout UsageSnapshot,
+        accountID: String?,
+        subject: String?,
+        accountLabel: String?,
+        fingerprint: String?
+    ) {
+        if let accountID = CodexIdentity.trimmed(accountID) {
+            snapshot.rawMeta["codex.accountId"] = accountID
+            snapshot.rawMeta["codex.teamId"] = accountID
+        }
+        if let subject = CodexIdentity.trimmed(subject) {
+            snapshot.rawMeta["codex.subject"] = subject
+        }
+        if let accountLabel = CodexIdentity.trimmed(accountLabel) {
+            snapshot.rawMeta["codex.accountLabel"] = accountLabel
+            if snapshot.accountLabel == nil || snapshot.accountLabel?.isEmpty == true {
+                snapshot.accountLabel = accountLabel
+            }
+        }
+        if let fingerprint = CodexIdentity.trimmed(fingerprint) {
+            snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
+        }
+
+        let identity = CodexIdentity.from(snapshot: snapshot)
+        snapshot.rawMeta["codex.tenantKey"] = identity.tenantKey
+        snapshot.rawMeta["codex.principalKey"] = identity.principalKey
+        snapshot.rawMeta["codex.identityKey"] = identity.identityKey
+    }
+
+    private func resolveCodexCookieHeader(forceRefresh: Bool) async throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
         let service = KeychainService.defaultServiceName
 
-        // 手动模式：仅使用用户手工保存的 Cookie。
+        if let account = official.manualCookieAccount,
+           let header = keychain.readToken(service: service, account: account),
+           !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return BrowserCookieHeader(header: header, source: "Manual")
+        }
+
         if official.webMode == .manual {
-            if let account = official.manualCookieAccount,
-               let header = keychain.readToken(service: service, account: account),
-               !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return BrowserCookieHeader(header: header, source: "Manual")
-            }
             throw ProviderError.missingCredential(official.manualCookieAccount ?? "official/codex/cookie-header")
         }
 
-        // 自动导入模式：优先从浏览器读取最新登录态（Chrome/Arc 等），命中后回写 Keychain。
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "chatgpt.com") {
+        guard official.webMode == .autoImport else {
+            throw ProviderError.missingCredential("chatgpt.com cookie")
+        }
+
+        let backoffKey = webReadBackoffKey(for: official)
+        guard await webReadBackoff.shouldAttempt(for: backoffKey, forceRefresh: forceRefresh) else {
+            throw ProviderError.missingCredential("chatgpt.com cookie")
+        }
+
+        if let detected = browserCookieService.detectCookieHeader(hostContains: "chatgpt.com", order: nil) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
+            await webReadBackoff.clearFailure(for: backoffKey)
             return detected
         }
 
-        // 浏览器未命中时，回退到历史缓存 Cookie，避免短暂失败。
-        if official.webMode == .autoImport,
-           let account = official.manualCookieAccount,
-           let header = keychain.readToken(service: service, account: account),
-           !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return BrowserCookieHeader(header: header, source: "Manual (cached)")
-        }
-
+        await webReadBackoff.markFailure(for: backoffKey, interval: webRetryBackoffInterval)
         throw ProviderError.missingCredential("chatgpt.com cookie")
+    }
+
+    private func webReadBackoffKey(for official: OfficialProviderConfig) -> String {
+        let account = official.manualCookieAccount?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (account?.isEmpty == false ? account! : descriptor.id)
+        return "codex:\(normalized)"
     }
 
     private func shouldIncludeWebOverlay(for official: OfficialProviderConfig) -> Bool {
@@ -524,7 +566,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             )
         ]
 
-        return UsageSnapshot(
+        var snapshot = UsageSnapshot(
             source: descriptor.id,
             status: status,
             remaining: min(primaryRemaining, secondaryRemaining),
@@ -546,6 +588,14 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
                 "codex.accountLabel": account.account.email ?? ""
             ]
         )
+        Self.applyCodexIdentityMetadata(
+            to: &snapshot,
+            accountID: nil,
+            subject: nil,
+            accountLabel: account.account.email,
+            fingerprint: nil
+        )
+        return snapshot
     }
 
     private func runCodexRPC(keepAliveSeconds: TimeInterval) throws -> [String: [String: Any]] {
@@ -699,20 +749,12 @@ private struct CodexCredentials {
 
     var accountLabel: String? {
         guard let idToken else { return nil }
-        let parts = idToken.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var payload = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = payload.count % 4
-        if remainder != 0 {
-            payload += String(repeating: "=", count: 4 - remainder)
-        }
-        guard let data = Data(base64Encoded: payload),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return OfficialValueParser.string(json["email"])
+        return JWTInspector.email(idToken)
+    }
+
+    var accountSubject: String? {
+        guard let idToken else { return nil }
+        return JWTInspector.subject(idToken)
     }
 }
 

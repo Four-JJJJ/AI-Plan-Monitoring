@@ -88,18 +88,20 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
         settings: GeminiSettings,
         credentials: GeminiCredentials
     ) async throws -> UsageSnapshot {
+        let initialProjectID = settings.selectedProject
         let codeAssist = try await requestJSON(
             url: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!,
             accessToken: accessToken,
-            body: [:]
+            body: loadCodeAssistBody(projectID: initialProjectID)
         )
+        let resolvedProjectID = resolveProjectID(settings: settings, codeAssistRoot: codeAssist)
         let quotaRoot = try await requestJSON(
             url: URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!,
             accessToken: accessToken,
-            body: [:]
+            body: retrieveQuotaBody(projectID: resolvedProjectID)
         )
 
-        var projectLabel = settings.selectedProject
+        var projectLabel = resolvedProjectID
         if let projectId = projectLabel,
            let resolved = try? await resolveProjectName(accessToken: accessToken, projectID: projectId) {
             projectLabel = resolved
@@ -124,10 +126,75 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.invalidResponse("Gemini settings decode failed")
         }
+        let security = json["security"] as? [String: Any]
+        let auth = security?["auth"] as? [String: Any]
+        let authType = Self.firstNonEmptyString([
+            json["selectedAuthType"],
+            json["authType"],
+            json["auth_type"],
+            auth?["selectedType"],
+            auth?["selectedAuthType"],
+            auth?["authType"],
+            auth?["auth_type"],
+        ]) ?? "oauth-personal"
+        let selectedProject = Self.firstNonEmptyString([
+            json["selectedProject"],
+            json["project"],
+            json["projectId"],
+            json["project_id"],
+            json["cloudaicompanionProject"],
+            auth?["selectedProject"],
+            auth?["project"],
+            auth?["projectId"],
+            auth?["project_id"],
+            auth?["cloudaicompanionProject"],
+        ])
         return GeminiSettings(
-            authType: OfficialValueParser.string(json["selectedAuthType"] ?? json["authType"] ?? json["auth_type"]) ?? "oauth-personal",
-            selectedProject: OfficialValueParser.string(json["selectedProject"] ?? json["projectId"] ?? json["project_id"])
+            authType: authType,
+            selectedProject: selectedProject
         )
+    }
+
+    private func loadCodeAssistBody(projectID: String?) -> [String: Any] {
+        var metadata: [String: Any] = [
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI",
+        ]
+        var body: [String: Any] = [
+            "metadata": metadata,
+        ]
+        if let projectID, !projectID.isEmpty {
+            body["cloudaicompanionProject"] = projectID
+            metadata["duetProject"] = projectID
+            body["metadata"] = metadata
+        }
+        return body
+    }
+
+    private func retrieveQuotaBody(projectID: String?) -> [String: Any] {
+        guard let projectID, !projectID.isEmpty else { return [:] }
+        return ["project": projectID]
+    }
+
+    private func resolveProjectID(settings: GeminiSettings, codeAssistRoot: [String: Any]) -> String? {
+        if let selectedProject = settings.selectedProject, !selectedProject.isEmpty {
+            return selectedProject
+        }
+        if let project = Self.firstNonEmptyString([
+            codeAssistRoot["cloudaicompanionProject"],
+            codeAssistRoot["project"],
+            codeAssistRoot["projectId"],
+            codeAssistRoot["project_id"],
+        ]), !project.isEmpty {
+            return project
+        }
+        if let project = codeAssistRoot["cloudaicompanionProject"] as? [String: Any],
+           let projectID = OfficialValueParser.string(project["id"] ?? project["projectId"] ?? project["project_id"]),
+           !projectID.isEmpty {
+            return projectID
+        }
+        return nil
     }
 
     private func loadCredentials() throws -> GeminiCredentials {
@@ -222,25 +289,45 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func resolveClientSecrets() -> (id: String, secret: String)? {
-        guard let geminiPath = ShellCommand.run(executable: "/usr/bin/which", arguments: ["gemini"], timeout: 5)?.stdout
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !geminiPath.isEmpty else {
+        if let fromCredentials = loadClientSecretsFromOAuthCredentials() {
+            return fromCredentials
+        }
+
+        for path in candidateClientSourcePaths() {
+            guard FileManager.default.fileExists(atPath: path),
+                  let source = try? String(contentsOfFile: path, encoding: .utf8),
+                  let parsed = Self.parseClientSecrets(in: source) else {
+                continue
+            }
+            return parsed
+        }
+
+        return nil
+    }
+
+    private func loadClientSecretsFromOAuthCredentials() -> (id: String, secret: String)? {
+        let path = "\(NSHomeDirectory())/.gemini/oauth_creds.json"
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
 
-        let binaryURL = URL(fileURLWithPath: geminiPath).resolvingSymlinksInPath()
-        let candidates = [
-            binaryURL.deletingLastPathComponent().appendingPathComponent("../lib/auth/oauth2.js").standardizedFileURL.path,
-            binaryURL.deletingLastPathComponent().appendingPathComponent("../dist/auth/oauth2.js").standardizedFileURL.path,
-            binaryURL.deletingLastPathComponent().appendingPathComponent("../build/auth/oauth2.js").standardizedFileURL.path,
-            binaryURL.deletingLastPathComponent().appendingPathComponent("oauth2.js").standardizedFileURL.path,
-        ]
+        let candidateRoots: [[String: Any]] = [
+            json,
+            json["installed"] as? [String: Any],
+            json["web"] as? [String: Any],
+            json["oauth"] as? [String: Any],
+            json["oauth_client"] as? [String: Any],
+            json["oauthClient"] as? [String: Any],
+            json["client"] as? [String: Any],
+        ].compactMap { $0 }
 
-        for path in candidates {
-            guard FileManager.default.fileExists(atPath: path),
-                  let source = try? String(contentsOfFile: path, encoding: .utf8),
-                  let clientID = firstMatch(in: source, pattern: #"client[_-]?id["']?\s*[:=]\s*["']([^"']+)["']"#),
-                  let clientSecret = firstMatch(in: source, pattern: #"client[_-]?secret["']?\s*[:=]\s*["']([^"']+)["']"#) else {
+        for root in candidateRoots {
+            guard let clientID = OfficialValueParser.string(root["client_id"] ?? root["clientId"]),
+                  let clientSecret = OfficialValueParser.string(root["client_secret"] ?? root["clientSecret"]),
+                  !clientID.isEmpty,
+                  !clientSecret.isEmpty else {
                 continue
             }
             return (clientID, clientSecret)
@@ -249,7 +336,70 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
         return nil
     }
 
-    private func firstMatch(in source: String, pattern: String) -> String? {
+    private func candidateClientSourcePaths() -> [String] {
+        var paths: [String] = []
+        func appendUnique(_ path: String) {
+            guard !path.isEmpty else { return }
+            if !paths.contains(path) {
+                paths.append(path)
+            }
+        }
+
+        func appendBundleSources(in bundleDirectory: URL) {
+            let bundlePath = bundleDirectory.path
+            appendUnique(bundleDirectory.appendingPathComponent("gemini.js").path)
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: bundlePath) else {
+                return
+            }
+            for name in entries.sorted() where name.hasPrefix("chunk-") && name.hasSuffix(".js") {
+                appendUnique(bundleDirectory.appendingPathComponent(name).path)
+            }
+        }
+
+        var executableCandidates: [String] = []
+        if let discovered = ShellCommand.run(executable: "/usr/bin/which", arguments: ["gemini"], timeout: 5)?
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+           !discovered.isEmpty {
+            executableCandidates.append(discovered)
+        }
+        executableCandidates.append("/opt/homebrew/bin/gemini")
+        executableCandidates.append("/usr/local/bin/gemini")
+
+        for executablePath in executableCandidates {
+            guard FileManager.default.fileExists(atPath: executablePath) else { continue }
+            let binaryURL = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath()
+
+            appendUnique(binaryURL.path)
+            let binaryDirectory = binaryURL.deletingLastPathComponent()
+            appendUnique(binaryDirectory.appendingPathComponent("../lib/auth/oauth2.js").standardizedFileURL.path)
+            appendUnique(binaryDirectory.appendingPathComponent("../dist/auth/oauth2.js").standardizedFileURL.path)
+            appendUnique(binaryDirectory.appendingPathComponent("../build/auth/oauth2.js").standardizedFileURL.path)
+            appendUnique(binaryDirectory.appendingPathComponent("oauth2.js").standardizedFileURL.path)
+            appendBundleSources(in: binaryDirectory)
+        }
+
+        appendBundleSources(in: URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/@google/gemini-cli/bundle", isDirectory: true))
+        appendBundleSources(in: URL(fileURLWithPath: "/usr/local/lib/node_modules/@google/gemini-cli/bundle", isDirectory: true))
+        appendBundleSources(in: URL(fileURLWithPath: "\(NSHomeDirectory())/.npm-global/lib/node_modules/@google/gemini-cli/bundle", isDirectory: true))
+
+        return paths
+    }
+
+    internal static func parseClientSecrets(in source: String) -> (id: String, secret: String)? {
+        if let clientID = firstMatch(in: source, pattern: #"OAUTH_CLIENT_ID\s*=\s*["']([^"']+)["']"#),
+           let clientSecret = firstMatch(in: source, pattern: #"OAUTH_CLIENT_SECRET\s*=\s*["']([^"']+)["']"#) {
+            return (clientID, clientSecret)
+        }
+
+        if let clientID = firstMatch(in: source, pattern: #"client[_-]?id["']?\s*[:=]\s*["']([^"']+)["']"#),
+           let clientSecret = firstMatch(in: source, pattern: #"client[_-]?secret["']?\s*[:=]\s*["']([^"']+)["']"#) {
+            return (clientID, clientSecret)
+        }
+
+        return nil
+    }
+
+    private static func firstMatch(in source: String, pattern: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(location: 0, length: source.utf16.count)
         guard let match = regex.firstMatch(in: source, range: range),
@@ -395,7 +545,18 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private static func parsePlan(from root: [String: Any]) -> String? {
-        let raw = OfficialValueParser.string(root["tierId"] ?? root["tier"] ?? root["plan"] ?? root["codeAssistTier"])
+        let currentTier = root["currentTier"] as? [String: Any]
+        let paidTier = root["paidTier"] as? [String: Any]
+        let raw = firstNonEmptyString([
+            root["tierId"],
+            root["tier"],
+            root["plan"],
+            root["codeAssistTier"],
+            currentTier?["id"],
+            currentTier?["name"],
+            paidTier?["id"],
+            paidTier?["name"],
+        ])
         guard let raw else { return nil }
         switch raw.lowercased() {
         case let value where value.contains("pro"):
@@ -410,7 +571,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private static func extractQuotaEntries(from root: [String: Any]) -> [GeminiQuotaEntry] {
-        let keys = ["quotaInfos", "quota_infos", "quotas", "modelQuotas", "quotaInfo"]
+        let keys = ["quotaInfos", "quota_infos", "quotas", "modelQuotas", "quotaInfo", "buckets", "quotaBuckets", "quota_buckets"]
         var entries: [GeminiQuotaEntry] = []
 
         for key in keys {
@@ -439,10 +600,32 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
 
     private static func parseQuotaEntry(_ value: Any) -> GeminiQuotaEntry? {
         guard let item = value as? [String: Any] else { return nil }
-        let title = OfficialValueParser.string(item["displayName"] ?? item["modelName"] ?? item["quotaId"] ?? item["name"] ?? item["id"]) ?? "Quota"
+        let title = OfficialValueParser.string(
+            item["displayName"] ??
+                item["modelName"] ??
+                item["modelId"] ??
+                item["model_id"] ??
+                item["quotaId"] ??
+                item["name"] ??
+                item["id"]
+        ) ?? "Quota"
         let lower = title.lowercased()
-        let groupKey = lower.contains("flash") ? "flash" : "pro"
-        let normalizedTitle = lower.contains("flash") ? "Flash" : "Pro"
+        let groupKey: String
+        let normalizedTitle: String
+        let sortRank: Int
+        if lower.contains("flash") {
+            groupKey = "flash"
+            normalizedTitle = "Flash"
+            sortRank = 1
+        } else if lower.contains("pro") {
+            groupKey = "pro"
+            normalizedTitle = "Pro"
+            sortRank = 0
+        } else {
+            groupKey = "other-\(title.replacingOccurrences(of: " ", with: "-").lowercased())"
+            normalizedTitle = title
+            sortRank = 2
+        }
 
         let candidateDictionaries = [
             item,
@@ -466,7 +649,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
             usedPercent: min(100, max(0, usedPercent)),
             remainingPercent: max(0, 100 - usedPercent),
             resetAt: resetAt,
-            sortRank: groupKey == "pro" ? 0 : 1
+            sortRank: sortRank
         )
     }
 
@@ -476,14 +659,59 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
             guard let value = OfficialValueParser.double(dict[key]) else { continue }
             return value <= 1 ? value * 100 : value
         }
+
+        let remainingFractionKeys = ["remainingFraction", "remaining_fraction", "remainingRatio", "remaining_ratio", "fractionRemaining"]
+        for key in remainingFractionKeys {
+            guard let value = OfficialValueParser.double(dict[key]) else { continue }
+            let remainingPercent = value <= 1 ? value * 100 : value
+            return 100 - remainingPercent
+        }
+
+        let remaining = OfficialValueParser.double(
+            dict["remainingAmount"] ??
+                dict["remaining_amount"] ??
+                dict["remaining"]
+        )
+        let limit = OfficialValueParser.double(
+            dict["limitAmount"] ??
+                dict["limit_amount"] ??
+                dict["quotaAmount"] ??
+                dict["quota_amount"] ??
+                dict["totalAmount"] ??
+                dict["total_amount"] ??
+                dict["limit"] ??
+                dict["quota"] ??
+                dict["total"]
+        )
+        if let remaining, let limit, limit > 0 {
+            return (1 - (remaining / limit)) * 100
+        }
         return nil
     }
 
     private static func parseResetAt(dict: [String: Any]) -> Date? {
-        if let raw = OfficialValueParser.string(dict["resetsAt"] ?? dict["resetAt"] ?? dict["reset_at"] ?? dict["nextResetAt"]) {
+        if let raw = OfficialValueParser.string(
+            dict["resetsAt"] ??
+                dict["resetAt"] ??
+                dict["reset_at"] ??
+                dict["nextResetAt"] ??
+                dict["resetTime"] ??
+                dict["reset_time"]
+        ) {
             return OfficialValueParser.isoDate(raw) ?? OfficialValueParser.epochDate(seconds: raw)
         }
         return OfficialValueParser.epochDate(seconds: dict["reset_at"])
+    }
+
+    private static func firstNonEmptyString(_ values: [Any?]) -> String? {
+        for value in values {
+            guard let text = OfficialValueParser.string(value) else { continue }
+            let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+        return nil
     }
 
     private static func buildNote(plan: String, windows: [UsageQuotaWindow], projectLabel: String?) -> String {

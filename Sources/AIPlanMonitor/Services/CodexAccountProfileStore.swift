@@ -21,6 +21,9 @@ struct CodexParsedAuthPayload {
     var accountId: String?
     var idToken: String?
     var accountEmail: String?
+    var accountSubject: String?
+    var tenantKey: String?
+    var identityKey: String?
     var credentialFingerprint: String
 }
 
@@ -28,6 +31,19 @@ final class CodexAccountProfileStore {
     private struct ProfileFile: Codable {
         var profiles: [CodexAccountProfile]
         var ignoredFingerprints: [String]?
+    }
+
+    private struct MatchingProbe {
+        var explicitSlotID: CodexSlotID?
+        var identityKey: String?
+        var accountID: String?
+        var subject: String?
+        var email: String?
+        var fingerprint: String?
+
+        var principal: String? {
+            subject ?? email
+        }
     }
 
     private let fileURL: URL
@@ -63,6 +79,7 @@ final class CodexAccountProfileStore {
         let payload = try Self.parseAuthJSON(authJSON)
         var profile = try Self.makeProfile(slotID: slotID, displayName: displayName, authJSON: authJSON)
         profile.isCurrentSystemAccount = profile.credentialFingerprint == currentFingerprint
+        profile = normalizedProfile(profile, payload: payload)
         var ignoredFingerprints = loadIgnoredFingerprints()
 
         if let matchedIndex = matchingIndex(for: payload, in: items),
@@ -82,19 +99,7 @@ final class CodexAccountProfileStore {
 
     @discardableResult
     func updateCurrentFingerprint(_ fingerprint: String?) -> [CodexAccountProfile] {
-        var items = load()
-        var changed = false
-        for index in items.indices {
-            let isCurrent = items[index].credentialFingerprint == fingerprint && fingerprint != nil
-            if items[index].isCurrentSystemAccount != isCurrent {
-                items[index].isCurrentSystemAccount = isCurrent
-                changed = true
-            }
-        }
-        if changed {
-            try? save(items)
-        }
-        return items.sorted { $0.slotID < $1.slotID }
+        updateCurrentProfiles(load(), currentIdentityKey: nil, currentFingerprint: fingerprint)
     }
 
     func nextAvailableSlotID() -> CodexSlotID {
@@ -125,21 +130,26 @@ final class CodexAccountProfileStore {
         preferredAutoSlots: [CodexSlotID] = [.a, .b]
     ) -> [CodexAccountProfile] {
         guard let authJSON else {
-            return updateCurrentProfiles([], currentFingerprint: nil)
+            return updateCurrentProfiles([], currentIdentityKey: nil, currentFingerprint: nil)
         }
 
         let trimmed = authJSON.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let payload = try? Self.parseAuthJSON(trimmed) else {
-            return updateCurrentProfiles([], currentFingerprint: nil)
+            return updateCurrentProfiles([], currentIdentityKey: nil, currentFingerprint: nil)
         }
 
         var items = load()
         let currentFingerprint = payload.credentialFingerprint.lowercased()
+        let currentIdentityKey = CodexIdentity.from(payload: payload).identityKey
         let ignoredFingerprints = loadIgnoredFingerprints()
 
         if ignoredFingerprints.contains(currentFingerprint) {
-            return updateCurrentProfiles(items, currentFingerprint: currentFingerprint)
+            return updateCurrentProfiles(
+                items,
+                currentIdentityKey: currentIdentityKey,
+                currentFingerprint: currentFingerprint
+            )
         }
 
         if let existing = matchingIndex(for: payload, in: items) {
@@ -148,20 +158,32 @@ final class CodexAccountProfileStore {
             updated.authJSON = trimmed
             updated.accountId = payload.accountId
             updated.accountEmail = payload.accountEmail
+            updated.accountSubject = payload.accountSubject
             updated.credentialFingerprint = payload.credentialFingerprint
+            let identity = CodexIdentity.from(payload: payload)
+            updated.tenantKey = identity.tenantKey
+            updated.identityKey = identity.identityKey
             if previous.authJSON.trimmingCharacters(in: .whitespacesAndNewlines) != trimmed
                 || previous.accountId != payload.accountId
                 || previous.accountEmail != payload.accountEmail
+                || previous.accountSubject != payload.accountSubject
+                || previous.tenantKey != identity.tenantKey
+                || previous.identityKey?.lowercased() != identity.identityKey
                 || previous.credentialFingerprint?.lowercased() != currentFingerprint {
                 updated.lastImportedAt = Date()
             }
             items[existing] = updated
-            return updateCurrentProfiles(items, currentFingerprint: currentFingerprint)
+            return updateCurrentProfiles(
+                items,
+                currentIdentityKey: currentIdentityKey,
+                currentFingerprint: currentFingerprint
+            )
         }
 
         let occupied = Set(items.map(\.slotID))
         let slotID = preferredAutoSlots.first(where: { !occupied.contains($0) })
             ?? CodexSlotID.nextAvailable(excluding: occupied)
+        let identity = CodexIdentity.from(payload: payload)
 
         items.append(
             CodexAccountProfile(
@@ -170,13 +192,20 @@ final class CodexAccountProfileStore {
                 authJSON: trimmed,
                 accountId: payload.accountId,
                 accountEmail: payload.accountEmail,
+                accountSubject: payload.accountSubject,
+                tenantKey: identity.tenantKey,
+                identityKey: identity.identityKey,
                 credentialFingerprint: payload.credentialFingerprint,
                 lastImportedAt: Date(),
                 isCurrentSystemAccount: true
             )
         )
 
-        return updateCurrentProfiles(items, currentFingerprint: currentFingerprint)
+        return updateCurrentProfiles(
+            items,
+            currentIdentityKey: currentIdentityKey,
+            currentFingerprint: currentFingerprint
+        )
     }
 
     static func makeProfile(
@@ -186,6 +215,7 @@ final class CodexAccountProfileStore {
         importedAt: Date = Date()
     ) throws -> CodexAccountProfile {
         let payload = try parseAuthJSON(authJSON)
+        let identity = CodexIdentity.from(payload: payload)
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return CodexAccountProfile(
             slotID: slotID,
@@ -193,6 +223,9 @@ final class CodexAccountProfileStore {
             authJSON: authJSON.trimmingCharacters(in: .whitespacesAndNewlines),
             accountId: payload.accountId,
             accountEmail: payload.accountEmail,
+            accountSubject: payload.accountSubject,
+            tenantKey: identity.tenantKey,
+            identityKey: identity.identityKey,
             credentialFingerprint: payload.credentialFingerprint,
             lastImportedAt: importedAt,
             isCurrentSystemAccount: false
@@ -215,17 +248,25 @@ final class CodexAccountProfileStore {
         let accountId = OfficialValueParser.string(tokens["account_id"] ?? tokens["accountId"])
         let refreshToken = OfficialValueParser.string(tokens["refresh_token"] ?? tokens["refreshToken"])
         let idToken = OfficialValueParser.string(tokens["id_token"] ?? tokens["idToken"])
-        let email = idToken.flatMap(decodeEmailFromJWT)
+        let email = idToken.flatMap(JWTInspector.email)
+        let subject = idToken.flatMap(JWTInspector.subject)
         let fingerprint = credentialFingerprint(for: accessToken) ?? credentialFingerprint(for: trimmed) ?? UUID().uuidString
 
-        return CodexParsedAuthPayload(
+        var payload = CodexParsedAuthPayload(
             accessToken: accessToken,
             refreshToken: refreshToken,
             accountId: accountId,
             idToken: idToken,
             accountEmail: email,
+            accountSubject: subject,
+            tenantKey: nil,
+            identityKey: nil,
             credentialFingerprint: fingerprint
         )
+        let identity = CodexIdentity.from(payload: payload)
+        payload.tenantKey = identity.tenantKey
+        payload.identityKey = identity.identityKey
+        return payload
     }
 
     static func credentialFingerprint(for raw: String) -> String? {
@@ -235,25 +276,15 @@ final class CodexAccountProfileStore {
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func decodeEmailFromJWT(_ token: String) -> String? {
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var payload = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = payload.count % 4
-        if remainder != 0 {
-            payload += String(repeating: "=", count: 4 - remainder)
-        }
-        guard let data = Data(base64Encoded: payload),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return OfficialValueParser.string(json["email"])
+    static func matchingIndex(
+        for snapshot: UsageSnapshot,
+        in profiles: [CodexAccountProfile]
+    ) -> Int? {
+        matchingIndex(for: probe(from: snapshot), in: profiles)
     }
 
     private func load() -> [CodexAccountProfile] {
-        loadFile().profiles
+        normalizeProfiles(loadFile().profiles)
     }
 
     private func loadIgnoredFingerprints() -> Set<String> {
@@ -289,22 +320,134 @@ final class CodexAccountProfileStore {
         try data.write(to: fileURL, options: .atomic)
     }
 
+    private func normalizeProfiles(_ profiles: [CodexAccountProfile]) -> [CodexAccountProfile] {
+        profiles.map { normalizedProfile($0, payload: nil) }
+    }
+
+    private func normalizedProfile(
+        _ profile: CodexAccountProfile,
+        payload: CodexParsedAuthPayload?
+    ) -> CodexAccountProfile {
+        var updated = profile
+        let parsedPayload = payload ?? (try? Self.parseAuthJSON(profile.authJSON))
+
+        if CodexIdentity.trimmed(updated.accountId) == nil {
+            updated.accountId = parsedPayload?.accountId
+        }
+        if CodexIdentity.trimmed(updated.accountEmail) == nil {
+            updated.accountEmail = parsedPayload?.accountEmail
+        }
+        if CodexIdentity.trimmed(updated.accountSubject) == nil {
+            updated.accountSubject = parsedPayload?.accountSubject
+        }
+        if CodexIdentity.trimmed(updated.credentialFingerprint) == nil {
+            updated.credentialFingerprint = parsedPayload?.credentialFingerprint
+        }
+
+        let identity = CodexIdentity.from(profile: updated)
+        updated.tenantKey = identity.tenantKey
+        updated.identityKey = identity.identityKey
+        return updated
+    }
+
     private func matchingIndex(
         for payload: CodexParsedAuthPayload,
         in profiles: [CodexAccountProfile]
     ) -> Int? {
-        let fingerprint = payload.credentialFingerprint.lowercased()
-        if let index = profiles.firstIndex(where: { $0.credentialFingerprint?.lowercased() == fingerprint }) {
+        Self.matchingIndex(for: Self.probe(from: payload), in: profiles)
+    }
+
+    private static func probe(from payload: CodexParsedAuthPayload) -> MatchingProbe {
+        let identity = CodexIdentity.from(payload: payload)
+        return MatchingProbe(
+            explicitSlotID: nil,
+            identityKey: identity.identityKey,
+            accountID: CodexIdentity.normalizedAccountID(payload.accountId),
+            subject: CodexIdentity.normalizedSubject(payload.accountSubject),
+            email: CodexIdentity.normalizedEmail(payload.accountEmail),
+            fingerprint: CodexIdentity.normalizedFingerprint(payload.credentialFingerprint)
+        )
+    }
+
+    private static func probe(from snapshot: UsageSnapshot) -> MatchingProbe {
+        let identity = CodexIdentity.from(snapshot: snapshot)
+        return MatchingProbe(
+            explicitSlotID: CodexAccountSlotStore.explicitSlotID(from: snapshot),
+            identityKey: identity.identityKey,
+            accountID: CodexIdentity.normalizedAccountID(CodexIdentity.teamID(from: snapshot)),
+            subject: CodexIdentity.normalizedSubject(snapshot.rawMeta["codex.subject"]),
+            email: CodexIdentity.normalizedEmail(snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"]),
+            fingerprint: CodexIdentity.normalizedFingerprint(snapshot.rawMeta["codex.credentialFingerprint"])
+        )
+    }
+
+    private static func profilePrincipal(_ profile: CodexAccountProfile) -> String? {
+        if let subject = CodexIdentity.normalizedSubject(profile.accountSubject) {
+            return subject
+        }
+        return CodexIdentity.normalizedEmail(profile.accountEmail)
+    }
+
+    private static func matchingIndex(
+        for probe: MatchingProbe,
+        in profiles: [CodexAccountProfile]
+    ) -> Int? {
+        if let explicitSlotID = probe.explicitSlotID,
+           let index = profiles.firstIndex(where: { $0.slotID == explicitSlotID }) {
             return index
         }
 
-        if let accountId = payload.accountId?.lowercased(),
-           let index = profiles.firstIndex(where: { $0.accountId?.lowercased() == accountId }) {
+        if let identityKey = CodexIdentity.normalizedIdentityKey(probe.identityKey),
+           identityKey != "unknown",
+           let index = profiles.firstIndex(where: {
+               CodexIdentity.normalizedIdentityKey($0.identityKey ?? CodexIdentity.from(profile: $0).identityKey) == identityKey
+           }) {
             return index
         }
 
-        if let email = payload.accountEmail?.lowercased(),
-           let index = profiles.firstIndex(where: { $0.accountEmail?.lowercased() == email }) {
+        if let accountID = probe.accountID,
+           let principal = probe.principal,
+           let index = profiles.firstIndex(where: {
+               CodexIdentity.normalizedAccountID($0.accountId) == accountID && profilePrincipal($0) == principal
+           }) {
+            return index
+        }
+
+        if let accountID = probe.accountID, probe.principal == nil {
+            let noPrincipalCandidates = profiles.indices.filter { index in
+                CodexIdentity.normalizedAccountID(profiles[index].accountId) == accountID
+                    && profilePrincipal(profiles[index]) == nil
+            }
+            if noPrincipalCandidates.count == 1 {
+                return noPrincipalCandidates[0]
+            }
+
+            let fallbackCandidates = profiles.indices.filter { index in
+                CodexIdentity.normalizedAccountID(profiles[index].accountId) == accountID
+            }
+            if fallbackCandidates.count == 1 {
+                return fallbackCandidates[0]
+            }
+        }
+
+        if let principal = probe.principal,
+           let index = profiles.firstIndex(where: {
+               profilePrincipal($0) == principal
+                   && !CodexIdentity.hasConflictingAccountID(probe.accountID, $0.accountId)
+           }) {
+            return index
+        }
+
+        if let fingerprint = probe.fingerprint,
+           let index = profiles.firstIndex(where: {
+               if let probePrincipal = probe.principal,
+                  let profilePrincipal = profilePrincipal($0),
+                  profilePrincipal != probePrincipal {
+                   return false
+               }
+               return CodexIdentity.normalizedFingerprint($0.credentialFingerprint) == fingerprint
+                   && !CodexIdentity.hasConflictingAccountID(probe.accountID, $0.accountId)
+           }) {
             return index
         }
 
@@ -313,19 +456,29 @@ final class CodexAccountProfileStore {
 
     private func updateCurrentProfiles(
         _ profiles: [CodexAccountProfile],
+        currentIdentityKey: String?,
         currentFingerprint: String?
     ) -> [CodexAccountProfile] {
-        var items = profiles
+        var items = normalizeProfiles(profiles)
         let ignoredFingerprints = loadIgnoredFingerprints()
         var changed = false
+        let normalizedIdentityKey = CodexIdentity.normalizedIdentityKey(currentIdentityKey)
         for index in items.indices {
-            let isCurrent = items[index].credentialFingerprint?.lowercased() == currentFingerprint && currentFingerprint != nil
+            let isCurrent: Bool
+            if let normalizedIdentityKey, normalizedIdentityKey != "unknown" {
+                let profileIdentity = CodexIdentity.normalizedIdentityKey(
+                    items[index].identityKey ?? CodexIdentity.from(profile: items[index]).identityKey
+                )
+                isCurrent = profileIdentity == normalizedIdentityKey
+            } else {
+                isCurrent = items[index].credentialFingerprint?.lowercased() == currentFingerprint && currentFingerprint != nil
+            }
             if items[index].isCurrentSystemAccount != isCurrent {
                 items[index].isCurrentSystemAccount = isCurrent
                 changed = true
             }
         }
-        if changed || profiles != load() {
+        if changed || items != load() {
             try? save(items, ignoredFingerprints: ignoredFingerprints)
         }
         return items.sorted { $0.slotID < $1.slotID }

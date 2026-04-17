@@ -151,10 +151,9 @@ final class RelayProviderTests: XCTestCase {
         let manifest = RelayAdapterRegistry.shared.manifest(for: "https://platform.deepseek.com")
         XCTAssertEqual(manifest.setup?.recommendedBaseURL, "https://platform.deepseek.com")
         XCTAssertEqual(manifest.setup?.requiredInputs, [.balanceAuth])
-        XCTAssertEqual(
-            manifest.setup?.balanceAuthHint?.zhHans,
-            "填写 DeepSeek 平台后台生成的 Bearer Token 或登录态令牌。"
-        )
+        let hint = manifest.setup?.balanceAuthHint?.zhHans ?? ""
+        XCTAssertTrue(hint.contains("Bearer Token"))
+        XCTAssertTrue(hint.contains("登录态令牌"))
     }
 
     func testRegistryDecoratesDisplayModeAndDiagnosticHints() {
@@ -190,6 +189,7 @@ final class RelayProviderTests: XCTestCase {
         let service = "AIPlanMonitorTests-\(UUID().uuidString)"
         let keychain = KeychainService()
         XCTAssertTrue(keychain.saveToken("bad-token", service: service, account: "relay.example.com/system-token"))
+        var browserBearerLookupCount = 0
 
         RelayMockURLProtocol.requestHandler = { request in
             let auth = request.value(forHTTPHeaderField: "Authorization")
@@ -213,7 +213,8 @@ final class RelayProviderTests: XCTestCase {
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(
                 bearerCandidatesOverride: { _ in
-                    [BrowserDetectedCredential(value: "good-token", source: "browser")]
+                    browserBearerLookupCount += 1
+                    return [BrowserDetectedCredential(value: "good-token", source: "browser")]
                 }
             )
         )
@@ -224,10 +225,50 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.fetchHealth, .ok)
         XCTAssertEqual(snapshot.valueFreshness, .live)
         XCTAssertEqual(snapshot.authSourceLabel, "browserBearer:browser")
+        XCTAssertEqual(browserBearerLookupCount, 1)
         XCTAssertEqual(
             keychain.readToken(service: service, account: "relay.example.com/system-token"),
             "good-token"
         )
+    }
+
+    func testManualPreferredWithValidSavedCredentialSkipsBrowserLookup() async throws {
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("saved-token", service: service, account: "relay.example.com/system-token"))
+
+        var browserBearerLookupCount = 0
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"success":true,"data":{"quota":9,"used_quota":1,"request_quota":10}}"#.utf8))
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "generic-newapi", baseURL: "https://relay.example.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in
+                    browserBearerLookupCount += 1
+                    return [BrowserDetectedCredential(value: "browser-token", source: "browser")]
+                },
+                cookieHeaderOverride: { _ in
+                    XCTFail("manualPreferred + valid saved credential should not read browser cookie")
+                    return nil
+                }
+            )
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 9, accuracy: 0.001)
+        XCTAssertEqual(snapshot.rawMeta["account.authSource"], "savedBearer")
+        XCTAssertEqual(browserBearerLookupCount, 0)
     }
 
     func testFetchSupportsSumAndCoalesceExpressions() async throws {

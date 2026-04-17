@@ -1,12 +1,21 @@
 import AppKit
 import SwiftUI
 
+private struct MenuCardsContentHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct MenuContentView: View {
     @Bindable var viewModel: AppViewModel
     @State private var now = Date()
     @State private var onboardingDiscoveryMessage: String?
     @State private var onboardingDiscoveryIsError = false
     @State private var onboardingDiscoveryInFlight = false
+    @State private var cardsContentHeight: CGFloat = 0
 
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -26,6 +35,10 @@ struct MenuContentView: View {
     private let headerActionSpacing: CGFloat = 10
     private let headerHeight: CGFloat = 20
     private let headerActionIconOpacity: Double = 0.62
+    // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动。
+    private let modelCardHeightEstimate: CGFloat = 86
+    private let maxVisibleModelCards: CGFloat = 5.5
+    private let cardsViewportCornerRadius: CGFloat = 12
 
     var body: some View {
         // menubar 主面板布局：顶部 header + 下方卡片列表。
@@ -38,14 +51,12 @@ struct MenuContentView: View {
         .padding(.bottom, 8)
         .padding(.horizontal, 8)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            SmoothRoundedRectangle(cornerRadius: 20, smoothing: 0.6)
                 // menubar 外层圆角背景。
                 .fill(panelBackground)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                // menubar 外层细描边。
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        .clipShape(
+            SmoothRoundedRectangle(cornerRadius: 20, smoothing: 0.6)
         )
         .environment(\.colorScheme, .dark)
         .onReceive(clock) { value in
@@ -85,31 +96,66 @@ struct MenuContentView: View {
     }
 
     private var cards: some View {
-        // 卡片流容器：按顺序渲染权限引导、更新提示、模型卡。
-        VStack(spacing: cardSpacing) {
-            if viewModel.shouldShowPermissionGuide {
-                permissionGuideCard
-            }
+        // 卡片流容器：内容不足按实际高度；超过上限时在区内滚动。
+        ScrollView {
+            VStack(spacing: cardSpacing) {
+                if viewModel.shouldShowPermissionGuide {
+                    permissionGuideCard
+                }
 
-            if let update = viewModel.availableUpdate {
-                appUpdateCard(update)
-            }
+                if let update = viewModel.availableUpdate {
+                    appUpdateCard(update)
+                }
 
-            if let codexProvider = codexProvider {
-                let slots = viewModel.codexSlotViewModels()
-                if slots.isEmpty {
-                    providerCard(codexProvider)
-                } else {
-                    ForEach(slots) { slot in
-                        codexSlotCard(slot, provider: codexProvider)
+                if let codexProvider = codexProvider {
+                    let slots = viewModel.codexSlotViewModels()
+                    if slots.isEmpty {
+                        providerCard(codexProvider)
+                    } else {
+                        ForEach(slots) { slot in
+                            codexSlotCard(slot, provider: codexProvider)
+                        }
                     }
                 }
-            }
 
-            ForEach(nonCodexProviders) { provider in
-                providerCard(provider)
+                if let claudeProvider = claudeProvider {
+                    let slots = viewModel.claudeSlotViewModels()
+                    if slots.isEmpty {
+                        providerCard(claudeProvider)
+                    } else {
+                        ForEach(slots) { slot in
+                            claudeSlotCard(slot, provider: claudeProvider)
+                        }
+                    }
+                }
+
+                ForEach(nonCodexClaudeProviders) { provider in
+                    providerCard(provider)
+                }
+            }
+            .padding(2)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: MenuCardsContentHeightPreferenceKey.self, value: proxy.size.height)
+                }
+            )
+        }
+        .scrollIndicators(.automatic)
+        .frame(height: cardsViewportHeight)
+        .clipShape(
+            SmoothRoundedRectangle(cornerRadius: cardsViewportCornerRadius, smoothing: 0.6)
+        )
+        .onPreferenceChange(MenuCardsContentHeightPreferenceKey.self) { height in
+            if abs(cardsContentHeight - height) > 0.5 {
+                cardsContentHeight = height
             }
         }
+    }
+
+    private var cardsViewportHeight: CGFloat {
+        let maxHeight = modelCardHeightEstimate * maxVisibleModelCards + cardSpacing * floor(maxVisibleModelCards)
+        let measured = cardsContentHeight > 0 ? cardsContentHeight : maxHeight
+        return min(maxHeight, measured)
     }
 
     private var headerUpdatedText: String {
@@ -216,10 +262,6 @@ struct MenuContentView: View {
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -395,13 +437,48 @@ struct MenuContentView: View {
         )
     }
 
+    private func claudeSlotCard(_ slot: ClaudeSlotViewModel, provider: ProviderDescriptor) -> some View {
+        let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
+        let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+        let showsSwitchAction = !slot.isActive && slot.canSwitch
+
+        return PercentageModelCard(
+            title: slot.title,
+            iconName: iconName(for: provider),
+            iconFallback: fallbackIcon(for: provider),
+            subtitle: officialAccountSubtitle(from: slot.snapshot),
+            status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
+            metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
+            errorText: nil,
+            backgroundColor: cardBackground,
+            isDisconnected: false,
+            leadingAccentColor: slot.isActive ? sufficientColor : nil,
+            actionLabel: showsSwitchAction ? viewModel.localizedText("切换", "Switch") : nil,
+            actionDisabled: slot.isSwitching,
+            action: showsSwitchAction ? {
+                Task {
+                    await viewModel.switchClaudeProfile(slotID: slot.slotID)
+                }
+            } : nil,
+            infoText: slot.switchMessage,
+            infoTextColor: slot.switchMessageIsError ? errorColor : sufficientColor
+        )
+    }
+
     private func officialAccountSubtitle(from snapshot: UsageSnapshot?) -> String? {
         guard viewModel.showOfficialAccountEmailInMenuBar else { return nil }
         guard let value = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
             return nil
         }
-        return value
+
+        guard let snapshot,
+              let teamID = CodexIdentity.teamID(from: snapshot),
+              !teamID.isEmpty else {
+            return value
+        }
+
+        return "\(value) · \(CodexIdentity.shortTeamID(teamID))"
     }
 
     private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
@@ -596,8 +673,15 @@ struct MenuContentView: View {
         displayProviders.first { $0.type == .codex && $0.family == .official }
     }
 
-    private var nonCodexProviders: [ProviderDescriptor] {
-        displayProviders.filter { !($0.type == .codex && $0.family == .official) }
+    private var claudeProvider: ProviderDescriptor? {
+        displayProviders.first { $0.type == .claude && $0.family == .official }
+    }
+
+    private var nonCodexClaudeProviders: [ProviderDescriptor] {
+        displayProviders.filter {
+            !($0.type == .codex && $0.family == .official)
+                && !($0.type == .claude && $0.family == .official)
+        }
     }
 
     private func providerRank(_ provider: ProviderDescriptor) -> Int {
@@ -714,7 +798,7 @@ struct MenuContentView: View {
         let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
         let providerName = provider.name.lowercased()
         let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") {
+        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
             return "menu_kimi_icon"
         }
         if relaySignals.contains("deepseek") {
@@ -1009,16 +1093,18 @@ private struct PercentageModelCard: View {
         )
         .overlay {
             if let leadingAccentColor {
-                // 左侧状态描边：保留左上/左下圆角端点，避免只剩中间直线。
-                SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
-                    .strokeBorder(leadingAccentColor, lineWidth: 1.5)
-                    .mask(
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: 12)
-                            Spacer(minLength: 0)
-                        }
-                    )
+                // 左侧状态条：距离卡片左边框 4px，上下固定间距 12px，高度自适应。
+                GeometryReader { proxy in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(leadingAccentColor)
+                        .frame(
+                            width: 2,
+                            height: max(0, proxy.size.height - 24)
+                        )
+                        .padding(.leading, 4)
+                        .padding(.vertical, 12)
+                }
+                .allowsHitTesting(false)
             }
         }
     }
@@ -1027,7 +1113,7 @@ private struct PercentageModelCard: View {
         if let highlightColor {
             return highlightColor
         }
-        return isDisconnected ? Color(hex: 0xD05757) : .clear
+        return Color(hex: 0xD05757)
     }
 
     private var hasBorder: Bool {
@@ -1216,7 +1302,7 @@ private struct AmountModelCard: View {
         if let highlightColor {
             return highlightColor
         }
-        return isDisconnected ? Color(hex: 0xD05757) : .clear
+        return Color(hex: 0xD05757)
     }
 
     private var hasBorder: Bool {

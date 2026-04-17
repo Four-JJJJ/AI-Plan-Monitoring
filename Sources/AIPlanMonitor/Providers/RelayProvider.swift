@@ -125,88 +125,130 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         tokenRequest: RelayTokenRequestManifest
     ) async throws -> TokenChannelResult {
         let host = baseURL.host?.lowercased() ?? ""
-        let primaryCandidates = resolveTokenCandidates(host: host, includeBrowserFallback: false)
-        let fallbackCandidates = resolveTokenCandidates(host: host, includeBrowserFallback: true)
-        let candidates = primaryCandidates + fallbackCandidates.filter { fallback in
-            !primaryCandidates.contains(where: { $0.token == fallback.token })
-        }
-
-        guard !candidates.isEmpty else {
-            throw relayTokenPreflightError(baseURL: baseURL, credentialMode: relayConfig.balanceCredentialMode ?? .manualPreferred)
+        let credentialMode = relayConfig.balanceCredentialMode ?? .manualPreferred
+        let primaryCandidates: [RelayRawTokenCandidate]
+        switch credentialMode {
+        case .manualPreferred:
+            primaryCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: true,
+                includeBrowserCredentials: false
+            )
+        case .browserPreferred, .browserOnly:
+            primaryCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: false,
+                includeBrowserCredentials: true
+            )
         }
 
         var lastError: ProviderError = .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
-        for candidate in candidates {
-            do {
-                let tokenUsage = try await request(
-                    url: relayURL(baseURL: baseURL, rawPath: tokenRequest.usagePath),
-                    bearerToken: candidate.token,
-                    type: OpenTokenUsageEnvelope.self
-                )
+        func attempt(_ candidates: [RelayRawTokenCandidate]) async throws -> TokenChannelResult? {
+            guard !candidates.isEmpty else { return nil }
+            for candidate in candidates {
+                do {
+                    let tokenUsage = try await request(
+                        url: relayURL(baseURL: baseURL, rawPath: tokenRequest.usagePath),
+                        bearerToken: candidate.token,
+                        type: OpenTokenUsageEnvelope.self
+                    )
 
-                let subscription = try? await request(
-                    url: relayURL(baseURL: baseURL, rawPath: tokenRequest.subscriptionPath ?? ""),
-                    bearerToken: candidate.token,
-                    type: OpenBillingSubscription.self
-                )
-                let usage = try? await request(
-                    url: relayURL(baseURL: baseURL, rawPath: tokenRequest.billingUsagePath ?? ""),
-                    bearerToken: candidate.token,
-                    type: OpenBillingUsage.self
-                )
+                    let subscription = try? await request(
+                        url: relayURL(baseURL: baseURL, rawPath: tokenRequest.subscriptionPath ?? ""),
+                        bearerToken: candidate.token,
+                        type: OpenBillingSubscription.self
+                    )
+                    let usage = try? await request(
+                        url: relayURL(baseURL: baseURL, rawPath: tokenRequest.billingUsagePath ?? ""),
+                        bearerToken: candidate.token,
+                        type: OpenBillingUsage.self
+                    )
 
-                _ = persistTokenCandidate(candidate.token, auth: descriptor.auth)
+                    _ = persistTokenCandidate(candidate.token, auth: descriptor.auth)
 
-                let unlimited = tokenUsage.data.unlimitedQuota
-                let remaining = unlimited ? nil : tokenUsage.data.totalAvailable
-                let used = tokenUsage.data.totalUsed
-                let softLimit = subscription?.softLimitUSD ?? tokenUsage.data.totalGranted
-                let hardLimit = subscription?.hardLimitUSD ?? softLimit
-                let limit = unlimited ? nil : max(tokenUsage.data.totalGranted, softLimit)
+                    let unlimited = tokenUsage.data.unlimitedQuota
+                    let remaining = unlimited ? nil : tokenUsage.data.totalAvailable
+                    let used = tokenUsage.data.totalUsed
+                    let softLimit = subscription?.softLimitUSD ?? tokenUsage.data.totalGranted
+                    let hardLimit = subscription?.hardLimitUSD ?? softLimit
+                    let limit = unlimited ? nil : max(tokenUsage.data.totalGranted, softLimit)
 
-                let note: String
-                if unlimited {
-                    if let usage {
-                        note = "Token unlimited | billing usage \(String(format: "%.2f", usage.totalUsage))"
-                    } else {
-                        note = "Token unlimited"
-                    }
-                } else {
-                    if let usage {
+                    let note: String
+                    if unlimited {
+                        if let usage {
+                            note = "Token unlimited | billing usage \(String(format: "%.2f", usage.totalUsage))"
+                        } else {
+                            note = "Token unlimited"
+                        }
+                    } else if let usage {
                         note = "Token remaining \(String(format: "%.2f", remaining ?? 0)) | billing usage \(String(format: "%.2f", usage.totalUsage))"
                     } else {
                         note = "Token remaining \(String(format: "%.2f", remaining ?? 0))"
                     }
-                }
 
-                var meta: [String: String] = [
-                    "tokenName": tokenUsage.data.name,
-                    "unlimitedQuota": String(unlimited),
-                    "softLimitUsd": String(softLimit),
-                    "hardLimitUsd": String(hardLimit),
-                    "authSource": candidate.source
-                ]
-                if let usage {
-                    meta["billingTotalUsage"] = String(usage.totalUsage)
-                }
+                    var meta: [String: String] = [
+                        "tokenName": tokenUsage.data.name,
+                        "unlimitedQuota": String(unlimited),
+                        "softLimitUsd": String(softLimit),
+                        "hardLimitUsd": String(hardLimit),
+                        "authSource": candidate.source
+                    ]
+                    if let usage {
+                        meta["billingTotalUsage"] = String(usage.totalUsage)
+                    }
 
-                return TokenChannelResult(
-                    remaining: remaining,
-                    used: used,
-                    limit: limit,
-                    unit: "quota",
-                    note: note,
-                    rawMeta: meta
-                )
-            } catch let error as ProviderError {
-                switch error {
-                case .unauthorized, .unauthorizedDetail, .invalidResponse:
-                    lastError = error
-                    continue
-                default:
-                    throw error
+                    return TokenChannelResult(
+                        remaining: remaining,
+                        used: used,
+                        limit: limit,
+                        unit: "quota",
+                        note: note,
+                        rawMeta: meta
+                    )
+                } catch let error as ProviderError {
+                    switch error {
+                    case .unauthorized, .unauthorizedDetail, .invalidResponse:
+                        lastError = error
+                        continue
+                    default:
+                        throw error
+                    }
                 }
             }
+            return nil
+        }
+
+        if let result = try await attempt(primaryCandidates) {
+            return result
+        }
+
+        let fallbackCandidates: [RelayRawTokenCandidate]
+        switch credentialMode {
+        case .manualPreferred:
+            fallbackCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: false,
+                includeBrowserCredentials: true
+            )
+        case .browserPreferred:
+            fallbackCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: true,
+                includeBrowserCredentials: false
+            )
+        case .browserOnly:
+            fallbackCandidates = []
+        }
+        let fallbackDeduped = fallbackCandidates.filter { fallback in
+            !primaryCandidates.contains(where: { $0.token == fallback.token })
+        }
+
+        guard !(primaryCandidates.isEmpty && fallbackDeduped.isEmpty) else {
+            throw relayTokenPreflightError(baseURL: baseURL, credentialMode: credentialMode)
+        }
+
+        if let result = try await attempt(fallbackDeduped) {
+            return result
         }
 
         throw relayFriendlyTokenError(lastError, baseURL: baseURL)
@@ -594,7 +636,11 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         )
     }
 
-    private func resolveTokenCandidates(host: String, includeBrowserFallback: Bool) -> [RelayRawTokenCandidate] {
+    private func resolveTokenCandidates(
+        host: String,
+        includeSavedCredentials: Bool,
+        includeBrowserCredentials: Bool
+    ) -> [RelayRawTokenCandidate] {
         var output: [RelayRawTokenCandidate] = []
 
         func append(token: String?, source: String) {
@@ -608,12 +654,13 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             output.append(RelayRawTokenCandidate(token: trimmed, source: source))
         }
 
-        if let service = descriptor.auth.keychainService,
+        if includeSavedCredentials,
+           let service = descriptor.auth.keychainService,
            let account = descriptor.auth.keychainAccount {
             append(token: keychain.readToken(service: service, account: account), source: "saved")
         }
 
-        if includeBrowserFallback || output.isEmpty {
+        if includeBrowserCredentials {
             for candidate in browserCredentialService.detectBearerTokenCandidates(host: host) {
                 append(token: candidate.value, source: candidate.source)
             }
@@ -783,9 +830,11 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         let credentialMode = relayConfig.balanceCredentialMode ?? .manualPreferred
         let requestForCandidates = requests.first ?? resolveBalanceRequest(manifest: manifest, relayConfig: relayConfig)
 
-        let primaryCandidates: [RelayCredentialCandidate]
-        let fallbackCandidates: [RelayCredentialCandidate]
+        if let requiredInputError = relayRequiredInputError(manifest: manifest, request: requestForCandidates) {
+            throw requiredInputError
+        }
 
+        let primaryCandidates: [RelayCredentialCandidate]
         switch credentialMode {
         case .manualPreferred:
             primaryCandidates = resolveBalanceCandidates(
@@ -798,19 +847,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 includeBrowserCredentials: false,
                 includeExpiredSentinel: true
             )
-            fallbackCandidates = resolveBalanceCandidates(
-                baseURL: baseURL,
-                manifest: manifest,
-                relayConfig: relayConfig,
-                request: requestForCandidates,
-                strategies: manifest.authStrategies,
-                includeSavedCredentials: true,
-                includeBrowserCredentials: true,
-                includeExpiredSentinel: false
-            ).filter { fallback in
-                !primaryCandidates.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source })
-            }
-        case .browserPreferred:
+        case .browserPreferred, .browserOnly:
             primaryCandidates = resolveBalanceCandidates(
                 baseURL: baseURL,
                 manifest: manifest,
@@ -821,6 +858,37 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 includeBrowserCredentials: true,
                 includeExpiredSentinel: false
             )
+        }
+
+        var firstFailure: ProviderError?
+        if !primaryCandidates.isEmpty {
+            do {
+                return try await attemptBalanceFetch(
+                    candidates: primaryCandidates,
+                    requests: requests,
+                    baseURL: baseURL,
+                    relayConfig: relayConfig,
+                    manifest: manifest
+                )
+            } catch let error as ProviderError {
+                firstFailure = error
+            }
+        }
+
+        let fallbackCandidates: [RelayCredentialCandidate]
+        switch credentialMode {
+        case .manualPreferred:
+            fallbackCandidates = resolveBalanceCandidates(
+                baseURL: baseURL,
+                manifest: manifest,
+                relayConfig: relayConfig,
+                request: requestForCandidates,
+                strategies: manifest.authStrategies,
+                includeSavedCredentials: true,
+                includeBrowserCredentials: true,
+                includeExpiredSentinel: false
+            )
+        case .browserPreferred:
             fallbackCandidates = resolveBalanceCandidates(
                 baseURL: baseURL,
                 manifest: manifest,
@@ -830,72 +898,66 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 includeSavedCredentials: true,
                 includeBrowserCredentials: false,
                 includeExpiredSentinel: true
-            ).filter { fallback in
-                !primaryCandidates.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source })
-            }
+            )
         case .browserOnly:
-            primaryCandidates = resolveBalanceCandidates(
+            fallbackCandidates = []
+        }
+        let fallbackDeduped = fallbackCandidates.filter { fallback in
+            !primaryCandidates.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source })
+        }
+        if !fallbackDeduped.isEmpty {
+            do {
+                return try await attemptBalanceFetch(
+                    candidates: fallbackDeduped,
+                    requests: requests,
+                    baseURL: baseURL,
+                    relayConfig: relayConfig,
+                    manifest: manifest
+                )
+            } catch let error as ProviderError {
+                throw relayFriendlyBalanceError(
+                    error,
+                    baseURL: baseURL,
+                    manifest: manifest,
+                    request: requestForCandidates,
+                    credentialMode: credentialMode
+                )
+            }
+        }
+
+        if primaryCandidates.isEmpty && fallbackDeduped.isEmpty {
+            if let preflightError = relayBalancePreflightError(
                 baseURL: baseURL,
                 manifest: manifest,
                 relayConfig: relayConfig,
                 request: requestForCandidates,
-                strategies: manifest.authStrategies,
-                includeSavedCredentials: false,
-                includeBrowserCredentials: true,
-                includeExpiredSentinel: false
-            )
-            fallbackCandidates = []
-        }
-        if let preflightError = relayBalancePreflightError(
-            baseURL: baseURL,
-            manifest: manifest,
-            relayConfig: relayConfig,
-            request: requestForCandidates,
-            credentialMode: credentialMode,
-            primaryCandidates: primaryCandidates,
-            fallbackCandidates: fallbackCandidates
-        ) {
-            throw preflightError
-        }
-        if !primaryCandidates.isEmpty,
-           let snapshot = try? await attemptBalanceFetch(
-            candidates: primaryCandidates,
-            requests: requests,
-            baseURL: baseURL,
-            relayConfig: relayConfig,
-            manifest: manifest
-           ) {
-            return snapshot
+                credentialMode: credentialMode,
+                primaryCandidates: primaryCandidates,
+                fallbackCandidates: fallbackDeduped,
+                inspectBrowserAvailability: credentialMode != .manualPreferred
+            ) {
+                throw preflightError
+            }
+            if manifest.id == "moonshot",
+               let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth),
+               looksLikeMoonshotNonAuthCookieHeader(savedRaw) {
+                throw ProviderError.unauthorizedDetail(
+                    "moonshot cookie appears incomplete; paste the full Cookie header from an authenticated platform request"
+                )
+            }
         }
 
-        let candidates = (primaryCandidates + fallbackCandidates).filter { candidate in
-            candidate.source != "savedBearerExpired" || (primaryCandidates + fallbackCandidates).count == 1
-        }
-        if candidates.isEmpty,
-           manifest.id == "moonshot",
-           let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth),
-           looksLikeMoonshotNonAuthCookieHeader(savedRaw) {
-            throw ProviderError.unauthorizedDetail(
-                "moonshot cookie appears incomplete; paste the full Cookie header from an authenticated platform request"
-            )
-        }
-        do {
-            return try await attemptBalanceFetch(
-                candidates: candidates,
-                requests: requests,
-                baseURL: baseURL,
-                relayConfig: relayConfig,
-                manifest: manifest
-            )
-        } catch let error as ProviderError {
+        if let firstFailure {
             throw relayFriendlyBalanceError(
-                error,
+                firstFailure,
                 baseURL: baseURL,
                 manifest: manifest,
                 request: requestForCandidates,
                 credentialMode: credentialMode
             )
         }
+
+        throw ProviderError.missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
     }
 
     private func resolveBalanceRequest(
@@ -1218,21 +1280,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         return KimiJWT.isExpired(token)
     }
 
-    private func relayBalancePreflightError(
-        baseURL: URL,
+    private func relayRequiredInputError(
         manifest: RelayAdapterManifest,
-        relayConfig: RelayProviderConfig,
-        request: ResolvedRelayRequest,
-        credentialMode: RelayCredentialMode,
-        primaryCandidates: [RelayCredentialCandidate],
-        fallbackCandidates: [RelayCredentialCandidate]
+        request: ResolvedRelayRequest
     ) -> ProviderError? {
-        let allCandidates = primaryCandidates + fallbackCandidates
-        let host = baseURL.host?.lowercased() ?? ""
-        let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth)
-        let browserCookie = browserCredentialService.detectCookieHeader(host: host)
-        let browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
-
         if request.userID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
            manifest.setup?.requiredInputs.contains(.userID) == true {
             if manifest.id == "minimax" {
@@ -1241,9 +1292,39 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             let fieldName = request.userIDHeader.caseInsensitiveCompare("New-Api-User") == .orderedSame ? "User ID" : request.userIDHeader
             return .unauthorizedDetail("\(manifest.displayName) needs \(fieldName) before it can query balance. Fill the User ID field in site settings and try again.")
         }
+        return nil
+    }
+
+    private func relayBalancePreflightError(
+        baseURL: URL,
+        manifest: RelayAdapterManifest,
+        relayConfig: RelayProviderConfig,
+        request: ResolvedRelayRequest,
+        credentialMode: RelayCredentialMode,
+        primaryCandidates: [RelayCredentialCandidate],
+        fallbackCandidates: [RelayCredentialCandidate],
+        inspectBrowserAvailability: Bool
+    ) -> ProviderError? {
+        let allCandidates = primaryCandidates + fallbackCandidates
+        let host = baseURL.host?.lowercased() ?? ""
+        let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth)
+
+        if let inputError = relayRequiredInputError(manifest: manifest, request: request) {
+            return inputError
+        }
 
         guard allCandidates.isEmpty else {
             return nil
+        }
+
+        let browserCookie: BrowserDetectedCredential?
+        let browserBearers: [BrowserDetectedCredential]
+        if inspectBrowserAvailability {
+            browserCookie = browserCredentialService.detectCookieHeader(host: host)
+            browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
+        } else {
+            browserCookie = nil
+            browserBearers = []
         }
 
         switch manifest.id {
@@ -1321,9 +1402,12 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         baseURL: URL,
         credentialMode: RelayCredentialMode
     ) -> ProviderError {
+        guard credentialMode != .manualPreferred else {
+            return .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
+        }
         let host = baseURL.host?.lowercased() ?? baseURL.absoluteString
         let browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
-        if credentialMode != .manualPreferred, browserBearers.isEmpty {
+        if browserBearers.isEmpty {
             return .unauthorizedDetail("No live browser bearer token was found for \(host). Log in in the browser first, or switch back to Manual First and paste a token.")
         }
         return .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)

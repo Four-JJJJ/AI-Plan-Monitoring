@@ -9,6 +9,11 @@ struct BrowserCookieHeader: Equatable {
     let source: String
 }
 
+protocol BrowserCookieDetecting {
+    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader?
+    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader?
+}
+
 struct ShellCommand {
     static func run(
         executable: String,
@@ -270,7 +275,7 @@ enum SQLiteShell {
     }
 }
 
-final class BrowserCookieService {
+final class BrowserCookieService: BrowserCookieDetecting {
     private let fileManager: FileManager
     private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
     private var safeStorageCache: [KimiBrowserKind: String] = [:]
@@ -662,6 +667,28 @@ final class BrowserCookieService {
         case .vivaldi:
             return "Auto:Vivaldi"
         }
+    }
+}
+
+actor WebOverlayRetryBackoff {
+    private var blockedUntil: [String: Date] = [:]
+
+    func shouldAttempt(for key: String, forceRefresh: Bool, now: Date = Date()) -> Bool {
+        if forceRefresh {
+            return true
+        }
+        guard let deadline = blockedUntil[key] else {
+            return true
+        }
+        return now >= deadline
+    }
+
+    func markFailure(for key: String, interval: TimeInterval, now: Date = Date()) {
+        blockedUntil[key] = now.addingTimeInterval(max(0, interval))
+    }
+
+    func clearFailure(for key: String) {
+        blockedUntil.removeValue(forKey: key)
     }
 }
 
