@@ -4,7 +4,7 @@ import XCTest
 final class CodexAccountSlotStoreTests: XCTestCase {
     func testAccountKeyPriority() {
         var snapshot = makeSnapshot(accountID: "acc-1", accountLabel: "a@test.com", subject: "sub-1")
-        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "account:acc-1")
+        XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "subject:sub-1")
 
         snapshot = makeSnapshot(accountID: nil, accountLabel: "a@test.com", subject: "sub-1", fingerprint: "abc12345")
         XCTAssertEqual(CodexAccountSlotStore.accountKey(from: snapshot), "fingerprint:abc12345")
@@ -29,15 +29,15 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         let store = makeStore(staleInterval: 10_000)
         let base = Date(timeIntervalSince1970: 1_000)
 
-        _ = store.upsertActive(snapshot: makeSnapshot(accountID: "a"), now: base)
-        _ = store.upsertActive(snapshot: makeSnapshot(accountID: "b"), now: base.addingTimeInterval(10))
-        let slots = store.upsertActive(snapshot: makeSnapshot(accountID: "c"), now: base.addingTimeInterval(20))
+        _ = store.upsertActive(snapshot: makeSnapshot(accountID: "a", subject: "sub-a"), now: base)
+        _ = store.upsertActive(snapshot: makeSnapshot(accountID: "b", subject: "sub-b"), now: base.addingTimeInterval(10))
+        let slots = store.upsertActive(snapshot: makeSnapshot(accountID: "c", subject: "sub-c"), now: base.addingTimeInterval(20))
 
         XCTAssertEqual(slots.count, 3)
         let keys = Set(slots.map(\.accountKey))
-        XCTAssertTrue(keys.contains("account:a"))
-        XCTAssertTrue(keys.contains("account:b"))
-        XCTAssertTrue(keys.contains("account:c"))
+        XCTAssertTrue(keys.contains("subject:sub-a"))
+        XCTAssertTrue(keys.contains("subject:sub-b"))
+        XCTAssertTrue(keys.contains("subject:sub-c"))
         XCTAssertEqual(Set(slots.map(\.slotID.rawValue)), ["A", "B", "C"])
     }
 
@@ -45,13 +45,13 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         let store = makeStore(staleInterval: 10_000)
         let base = Date(timeIntervalSince1970: 2_000)
 
-        let aSnap = makeSnapshot(accountID: "a", sessionReset: base.addingTimeInterval(1_800))
+        let aSnap = makeSnapshot(accountID: "a", subject: "sub-a", sessionReset: base.addingTimeInterval(1_800))
         _ = store.upsertActive(snapshot: aSnap, now: base)
-        let bSnap = makeSnapshot(accountID: "b", sessionReset: base.addingTimeInterval(3_600))
+        let bSnap = makeSnapshot(accountID: "b", subject: "sub-b", sessionReset: base.addingTimeInterval(3_600))
         let slots = store.upsertActive(snapshot: bSnap, now: base.addingTimeInterval(60))
 
         XCTAssertEqual(slots.count, 2)
-        let inactive = slots.first(where: { $0.accountKey == "account:a" })
+        let inactive = slots.first(where: { $0.accountKey == "subject:sub-a" })
         XCTAssertNotNil(inactive)
         XCTAssertEqual(inactive?.isActive, false)
         XCTAssertEqual(inactive?.lastSnapshot.quotaWindows.first?.resetAt, aSnap.quotaWindows.first?.resetAt)
@@ -128,6 +128,23 @@ final class CodexAccountSlotStoreTests: XCTestCase {
 
         XCTAssertEqual(slots.count, 1)
         XCTAssertEqual(slots.first?.slotID.rawValue, "D")
+    }
+
+    func testSharedAccountIDDoesNotMergeDifferentSubjects() throws {
+        let store = makeStore(staleInterval: 10_000)
+        let base = Date(timeIntervalSince1970: 3_950)
+
+        _ = store.upsertActive(
+            snapshot: makeSnapshot(accountID: "shared", accountLabel: "plus@example.com", subject: "sub-plus"),
+            now: base
+        )
+        let slots = store.upsertActive(
+            snapshot: makeSnapshot(accountID: "shared", accountLabel: "team@example.com", subject: "sub-team"),
+            now: base.addingTimeInterval(30)
+        )
+
+        XCTAssertEqual(slots.count, 2)
+        XCTAssertEqual(Set(slots.map(\.accountKey)), ["subject:sub-plus", "subject:sub-team"])
     }
 
     func testStaleSlotsAreHidden() throws {

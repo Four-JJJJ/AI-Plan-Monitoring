@@ -15,6 +15,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profile.displayName, "Main")
         XCTAssertEqual(profile.accountId, "acc-1")
         XCTAssertEqual(profile.accountEmail, "user@example.com")
+        XCTAssertEqual(profile.accountSubject, "sub-acc-1")
         XCTAssertNotNil(profile.credentialFingerprint)
     }
 
@@ -115,6 +116,20 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertTrue(profiles.first?.authJSON.contains("rotated-access-token") == true)
     }
 
+    func testCaptureCurrentAuthDoesNotMergeAccountsThatOnlyShareAccountID() {
+        let store = makeStore()
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(accountID: "shared-account", email: "plus@example.com", subject: "sub-plus")
+        )
+
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(accountID: "shared-account", email: "team@example.com", subject: "sub-team")
+        )
+
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(Set(profiles.compactMap(\.accountSubject)), ["sub-plus", "sub-team"])
+    }
+
     func testRemoveProfileDeletesSlot() {
         let store = makeStore()
         _ = store.captureCurrentAuthIfNeeded(
@@ -197,8 +212,14 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         return CodexAccountProfileStore(fileURL: path)
     }
 
-    private func sampleAuthJSON(accountID: String, email: String, accessToken: String? = nil) -> String {
-        let payload = Data(#"{"email":"\#(email)"}"#.utf8).base64EncodedString()
+    private func sampleAuthJSON(
+        accountID: String,
+        email: String,
+        accessToken: String? = nil,
+        subject: String? = nil
+    ) -> String {
+        let resolvedSubject = subject ?? "sub-\(accountID)"
+        let payload = Data(#"{"email":"\#(email)","sub":"\#(resolvedSubject)"}"#.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")

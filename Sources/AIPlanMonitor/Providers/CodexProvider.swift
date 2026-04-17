@@ -112,7 +112,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         if let subject = credentials.idToken.flatMap(JWTInspector.subject), !subject.isEmpty {
             snapshot.rawMeta["codex.subject"] = subject
         }
-        if let fingerprint = Self.credentialFingerprint(credentials.accessToken) {
+        if let fingerprint = Self.credentialFingerprint(credentials.refreshToken ?? credentials.accessToken) {
             snapshot.rawMeta["codex.credentialFingerprint"] = fingerprint
         }
 

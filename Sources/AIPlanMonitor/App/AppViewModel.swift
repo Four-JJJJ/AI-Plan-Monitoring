@@ -1443,7 +1443,7 @@ final class AppViewModel {
                 continue
             }
             let identityKey = profile.credentialFingerprint?.lowercased()
-                ?? profile.accountId?.lowercased()
+                ?? profile.accountSubject?.lowercased()
                 ?? profile.accountEmail?.lowercased()
                 ?? profile.slotID.rawValue.lowercased()
             if codexPrefetchAttemptedIdentity[profile.slotID] == identityKey {
@@ -1529,15 +1529,33 @@ final class AppViewModel {
     }
 
     private func placeholderCodexSlot(for profile: CodexAccountProfile) -> CodexAccountSlot {
-        CodexAccountSlot(
-            slotID: profile.slotID,
-            accountKey: profile.accountId?.lowercased()
-                ?? profile.credentialFingerprint?.lowercased()
-                ?? "profile:\(profile.slotID.rawValue.lowercased())",
-            displayName: profile.displayName,
-            lastSnapshot: placeholderCodexSnapshot(for: profile),
-            lastSeenAt: profile.lastImportedAt,
-            isActive: profile.isCurrentSystemAccount
+        let accountKey: String
+        if let fingerprint = profile.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !fingerprint.isEmpty {
+            accountKey = "fingerprint:\(fingerprint)"
+        } else if let subject = profile.accountSubject?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !subject.isEmpty {
+            accountKey = "subject:\(subject)"
+        } else if let email = profile.accountEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !email.isEmpty {
+            accountKey = "email:\(email)"
+        } else {
+            accountKey = "profile:\(profile.slotID.rawValue.lowercased())"
+        }
+
+        let slotID = profile.slotID
+        let displayName = profile.displayName
+        let lastSnapshot = placeholderCodexSnapshot(for: profile)
+        let lastSeenAt = profile.lastImportedAt
+        let isActive = profile.isCurrentSystemAccount
+
+        return CodexAccountSlot(
+            slotID: slotID,
+            accountKey: accountKey,
+            displayName: displayName,
+            lastSnapshot: lastSnapshot,
+            lastSeenAt: lastSeenAt,
+            isActive: isActive
         )
     }
 
@@ -1549,6 +1567,10 @@ final class AppViewModel {
         if let accountId = profile.accountId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !accountId.isEmpty {
             rawMeta["codex.accountId"] = accountId
+        }
+        if let subject = profile.accountSubject?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subject.isEmpty {
+            rawMeta["codex.subject"] = subject
         }
         if let fingerprint = profile.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
            !fingerprint.isEmpty {
@@ -1602,20 +1624,20 @@ final class AppViewModel {
 
     private func matchedCodexProfile(for snapshot: UsageSnapshot) -> CodexAccountProfile? {
         syncCodexProfilesCurrentState()
-        let accountID = snapshot.rawMeta["codex.accountId"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let email = (snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"])?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let subject = snapshot.rawMeta["codex.subject"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let fingerprint = snapshot.rawMeta["codex.credentialFingerprint"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         if let explicitSlotID = CodexAccountSlotStore.explicitSlotID(from: snapshot),
            let matched = codexProfiles.first(where: { $0.slotID == explicitSlotID }) {
             return matched
         }
-        if let accountID, !accountID.isEmpty,
-           let matched = codexProfiles.first(where: { $0.accountId?.caseInsensitiveCompare(accountID) == .orderedSame }) {
-            return matched
-        }
         if let fingerprint, !fingerprint.isEmpty,
            let matched = codexProfiles.first(where: { $0.credentialFingerprint?.lowercased() == fingerprint }) {
+            return matched
+        }
+        if let subject, !subject.isEmpty,
+           let matched = codexProfiles.first(where: { $0.accountSubject?.lowercased() == subject }) {
             return matched
         }
         if let email, !email.isEmpty,

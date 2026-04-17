@@ -419,6 +419,7 @@ struct CodexAccountProfile: Codable, Equatable, Identifiable {
     var authJSON: String
     var accountId: String?
     var accountEmail: String?
+    var accountSubject: String?
     var credentialFingerprint: String?
     var lastImportedAt: Date
     var isCurrentSystemAccount: Bool
