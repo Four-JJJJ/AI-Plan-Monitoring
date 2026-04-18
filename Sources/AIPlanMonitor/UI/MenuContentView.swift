@@ -107,30 +107,8 @@ struct MenuContentView: View {
                     appUpdateCard(update)
                 }
 
-                if let codexProvider = codexProvider {
-                    let slots = viewModel.codexSlotViewModels()
-                    if slots.isEmpty {
-                        providerCard(codexProvider)
-                    } else {
-                        ForEach(slots) { slot in
-                            codexSlotCard(slot, provider: codexProvider)
-                        }
-                    }
-                }
-
-                if let claudeProvider = claudeProvider {
-                    let slots = viewModel.claudeSlotViewModels()
-                    if slots.isEmpty {
-                        providerCard(claudeProvider)
-                    } else {
-                        ForEach(slots) { slot in
-                            claudeSlotCard(slot, provider: claudeProvider)
-                        }
-                    }
-                }
-
-                ForEach(nonCodexClaudeProviders) { provider in
-                    providerCard(provider)
+                ForEach(displayProviders) { provider in
+                    providerCards(for: provider)
                 }
             }
             .padding(2)
@@ -140,7 +118,7 @@ struct MenuContentView: View {
                 }
             )
         }
-        .scrollIndicators(.automatic)
+        .scrollIndicators(.never)
         .frame(height: cardsViewportHeight)
         .clipShape(
             SmoothRoundedRectangle(cornerRadius: cardsViewportCornerRadius, smoothing: 0.6)
@@ -364,7 +342,7 @@ struct MenuContentView: View {
     }
 
     @ViewBuilder
-    private func providerCard(_ provider: ProviderDescriptor) -> some View {
+    private func providerCard(_ provider: ProviderDescriptor, codexTeamAliases: [String: String] = [:]) -> some View {
         let snapshot = viewModel.snapshots[provider.id]
         let error = viewModel.errors[provider.id]
 
@@ -378,9 +356,14 @@ struct MenuContentView: View {
 
             PercentageModelCard(
                 title: displayName(for: provider),
+                planType: monitorPlanType(for: provider, snapshot: snapshot),
                 iconName: iconName(for: provider),
                 iconFallback: fallbackIcon(for: provider),
-                subtitle: officialAccountSubtitle(from: snapshot),
+                subtitle: officialAccountSubtitle(
+                    providerType: provider.type,
+                    snapshot: snapshot,
+                    codexTeamAliases: codexTeamAliases
+                ),
                 status: status,
                 metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: disconnected),
                 errorText: error,
@@ -408,7 +391,11 @@ struct MenuContentView: View {
         }
     }
 
-    private func codexSlotCard(_ slot: CodexSlotViewModel, provider: ProviderDescriptor) -> some View {
+    private func codexSlotCard(
+        _ slot: CodexSlotViewModel,
+        provider: ProviderDescriptor,
+        codexTeamAliases: [String: String]
+    ) -> some View {
         // Codex 多账号卡片样式（激活账号左侧绿条）。
         let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
         let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
@@ -416,15 +403,20 @@ struct MenuContentView: View {
 
         return PercentageModelCard(
             title: slot.title,
+            planType: monitorPlanType(for: provider, snapshot: slot.snapshot),
             iconName: "menu_codex_icon",
             iconFallback: "terminal.fill",
-            subtitle: officialAccountSubtitle(from: slot.snapshot),
+            subtitle: officialAccountSubtitle(
+                providerType: provider.type,
+                snapshot: slot.snapshot,
+                codexTeamAliases: codexTeamAliases
+            ),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
             metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
             errorText: nil,
             backgroundColor: cardBackground,
             isDisconnected: false,
-            leadingAccentColor: slot.isActive ? sufficientColor : nil,
+            leadingAccentColor: slot.isActive ? Color.white.opacity(0.80) : nil,
             actionLabel: showsSwitchAction ? viewModel.text(.codexSwitchAction) : nil,
             actionDisabled: slot.isSwitching,
             action: showsSwitchAction ? {
@@ -444,15 +436,16 @@ struct MenuContentView: View {
 
         return PercentageModelCard(
             title: slot.title,
+            planType: monitorPlanType(for: provider, snapshot: slot.snapshot),
             iconName: iconName(for: provider),
             iconFallback: fallbackIcon(for: provider),
-            subtitle: officialAccountSubtitle(from: slot.snapshot),
+            subtitle: officialAccountSubtitle(providerType: provider.type, snapshot: slot.snapshot),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
             metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
             errorText: nil,
             backgroundColor: cardBackground,
             isDisconnected: false,
-            leadingAccentColor: slot.isActive ? sufficientColor : nil,
+            leadingAccentColor: slot.isActive ? Color.white.opacity(0.80) : nil,
             actionLabel: showsSwitchAction ? viewModel.localizedText("切换", "Switch") : nil,
             actionDisabled: slot.isSwitching,
             action: showsSwitchAction ? {
@@ -465,20 +458,25 @@ struct MenuContentView: View {
         )
     }
 
-    private func officialAccountSubtitle(from snapshot: UsageSnapshot?) -> String? {
+    private func officialAccountSubtitle(
+        providerType: ProviderType,
+        snapshot: UsageSnapshot?,
+        codexTeamAliases: [String: String] = [:]
+    ) -> String? {
         guard viewModel.showOfficialAccountEmailInMenuBar else { return nil }
         guard let value = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
             return nil
         }
 
-        guard let snapshot,
-              let teamID = CodexIdentity.teamID(from: snapshot),
-              !teamID.isEmpty else {
+        guard providerType == .codex else {
             return value
         }
 
-        return "\(value) · \(CodexIdentity.shortTeamID(teamID))"
+        guard let teamAlias = codexTeamAlias(for: snapshot, aliases: codexTeamAliases) else {
+            return value
+        }
+        return "\(value) · \(teamAlias)"
     }
 
     private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
@@ -486,14 +484,7 @@ struct MenuContentView: View {
             let percent = disconnected ? nil : metric.displayPercent
             let displayPercent = percent.map { Int($0.rounded()) }
             let valueText = displayPercent.map { "\($0)%" } ?? "-"
-            let resetLabel: String
-            if disconnected {
-                resetLabel = "-"
-            } else if let resetAt = metric.resetAt {
-                resetLabel = resetText(to: resetAt)
-            } else {
-                resetLabel = "-"
-            }
+            let resetLabel = disconnected ? "-" : Self.countdownText(to: metric.resetAt, now: now)
             return PercentageMetricDisplay(
                 id: metric.id,
                 title: metric.title,
@@ -503,6 +494,14 @@ struct MenuContentView: View {
                 barColor: percentageBarColor(metric.healthPercent, displayPercent: Int(metric.healthPercent.rounded()))
             )
         }
+    }
+
+    private func monitorPlanType(for provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
+        PlanTypeDisplayFormatter.resolvedPlanType(
+            providerType: provider.type,
+            extrasPlanType: snapshot?.extras["planType"],
+            rawPlanType: snapshot?.rawMeta["planType"]
+        )
     }
 
     private func percentageStatus(metrics: [QuotaMetric], snapshot: UsageSnapshot?, disconnected: Bool) -> CardStatus {
@@ -650,80 +649,92 @@ struct MenuContentView: View {
     }
 
     private var displayProviders: [ProviderDescriptor] {
-        viewModel.config.providers
-            .filter(\.enabled)
-            .sorted { lhs, rhs in
-                let l = providerRank(lhs)
-                let r = providerRank(rhs)
-                if l != r { return l < r }
-                if lhs.family == .thirdParty && rhs.family == .thirdParty {
-                    let lHealth = relayHealthRank(lhs)
-                    let rHealth = relayHealthRank(rhs)
-                    if lHealth != rHealth { return lHealth < rHealth }
+        let enabledProviders = viewModel.config.providers.filter(\.enabled)
+        let officialProviders = enabledProviders.filter { $0.family == .official }
+        let thirdPartyProviders = enabledProviders.filter { $0.family == .thirdParty }
+        return officialProviders + thirdPartyProviders
+    }
 
-                    let lRemaining = viewModel.snapshots[lhs.id]?.remaining ?? -.greatestFiniteMagnitude
-                    let rRemaining = viewModel.snapshots[rhs.id]?.remaining ?? -.greatestFiniteMagnitude
-                    if lRemaining != rRemaining { return lRemaining > rRemaining }
+    @ViewBuilder
+    private func providerCards(for provider: ProviderDescriptor) -> some View {
+        if provider.family == .official && provider.type == .codex {
+            let slots = viewModel.codexSlotViewModels()
+            let codexTeamAliases = codexTeamAliasMap(from: slots.map(\.snapshot))
+            if slots.isEmpty {
+                providerCard(provider, codexTeamAliases: codexTeamAliases)
+            } else {
+                ForEach(slots) { slot in
+                    codexSlotCard(
+                        slot,
+                        provider: provider,
+                        codexTeamAliases: codexTeamAliases
+                    )
                 }
-                return lhs.id < rhs.id
             }
-    }
-
-    private var codexProvider: ProviderDescriptor? {
-        displayProviders.first { $0.type == .codex && $0.family == .official }
-    }
-
-    private var claudeProvider: ProviderDescriptor? {
-        displayProviders.first { $0.type == .claude && $0.family == .official }
-    }
-
-    private var nonCodexClaudeProviders: [ProviderDescriptor] {
-        displayProviders.filter {
-            !($0.type == .codex && $0.family == .official)
-                && !($0.type == .claude && $0.family == .official)
+        } else if provider.family == .official && provider.type == .claude {
+            let slots = viewModel.claudeSlotViewModels()
+            if slots.isEmpty {
+                providerCard(provider)
+            } else {
+                ForEach(slots) { slot in
+                    claudeSlotCard(slot, provider: provider)
+                }
+            }
+        } else {
+            providerCard(provider)
         }
     }
 
-    private func providerRank(_ provider: ProviderDescriptor) -> Int {
-        if provider.family == .official {
-            switch provider.type {
-            case .codex: return 0
-            case .claude: return 1
-            case .gemini: return 2
-            case .copilot: return 3
-            case .zai: return 4
-            case .cursor: return 5
-            case .windsurf: return 6
-            case .amp: return 7
-            case .jetbrains: return 8
-            case .kiro: return 9
-            case .kimi: return 10
-            case .relay, .open, .dragon: return 11
+    private func codexTeamAliasMap(from snapshots: [UsageSnapshot]) -> [String: String] {
+        var teamIDsByEmail: [String: Set<String>] = [:]
+        for snapshot in snapshots {
+            guard let key = codexTeamAliasKey(from: snapshot) else { continue }
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let email = parts[0]
+            let teamID = parts[1]
+            teamIDsByEmail[email, default: []].insert(teamID)
+        }
+
+        var aliases: [String: String] = [:]
+        for (email, teamIDs) in teamIDsByEmail {
+            let sortedTeamIDs = teamIDs.sorted()
+            guard sortedTeamIDs.count > 1 else { continue }
+            for (index, teamID) in sortedTeamIDs.enumerated() {
+                aliases["\(email)|\(teamID)"] = "Team \(codexTeamAliasToken(index: index))"
             }
         }
-        switch provider.type {
-        case .kimi: return 12
-        case .relay, .open, .dragon: return 13
-        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf: return 14
-        }
+        return aliases
     }
 
-    private func relayHealthRank(_ provider: ProviderDescriptor) -> Int {
-        let snapshot = viewModel.snapshots[provider.id]
-        switch (snapshot?.valueFreshness, snapshot?.fetchHealth) {
-        case (.live?, _):
-            return 0
-        case (.cachedFallback?, .authExpired?):
-            return 2
-        case (.cachedFallback?, _):
-            return 1
-        case (.empty?, .authExpired?):
-            return 3
-        case (.empty?, .endpointMisconfigured?), (.empty?, .unreachable?), (.empty?, .rateLimited?):
-            return 4
-        default:
-            return 2
+    private func codexTeamAlias(for snapshot: UsageSnapshot?, aliases: [String: String]) -> String? {
+        guard let key = codexTeamAliasKey(from: snapshot) else { return nil }
+        return aliases[key]
+    }
+
+    private func codexTeamAliasKey(from snapshot: UsageSnapshot?) -> String? {
+        guard let snapshot else { return nil }
+        guard let email = CodexIdentity.normalizedEmail(
+            snapshot.accountLabel ?? snapshot.rawMeta["codex.accountLabel"]
+        ) else {
+            return nil
         }
+        guard let teamID = CodexIdentity.normalizedAccountID(CodexIdentity.teamID(from: snapshot)) else {
+            return nil
+        }
+        return "\(email)|\(teamID)"
+    }
+
+    private func codexTeamAliasToken(index: Int) -> String {
+        var value = index
+        var token = ""
+        repeat {
+            let remainder = value % 26
+            let scalar = UnicodeScalar(65 + remainder)!
+            token = String(Character(scalar)) + token
+            value = value / 26 - 1
+        } while value >= 0
+        return token
     }
 
     private func displayName(for provider: ProviderDescriptor?) -> String {
@@ -987,14 +998,9 @@ struct MenuContentView: View {
         }
     }
 
-    private func resetText(to target: Date) -> String {
-        let interval = max(0, Int(target.timeIntervalSince(now)))
-        let hours = interval / 3_600
-        let minutes = (interval % 3_600) / 60
-        let seconds = interval % 60
-
-        // menubar 重置倒计时文案：严格按设计稿，统一显示 HH:MM:SS（无“重置/resets in”前后缀）。
-        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+    static func countdownText(to target: Date?, now: Date) -> String {
+        // menubar 倒计时文案统一走 CountdownFormatter，避免与设置页实现漂移。
+        CountdownFormatter.text(to: target, now: now, placeholder: "-")
     }
 
     private func clamp(_ value: Double) -> Double {
@@ -1004,6 +1010,7 @@ struct MenuContentView: View {
 
 private struct PercentageModelCard: View {
     let title: String
+    let planType: String?
     let iconName: String
     let iconFallback: String
     let subtitle: String?
@@ -1027,11 +1034,11 @@ private struct PercentageModelCard: View {
                 HStack(alignment: .center, spacing: 6) {
                     BundledIconView(name: iconName, fallback: iconFallback, size: 12, iconOpacity: 0.8)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.80))
-                            .lineSpacing(0)
-                            .lineLimit(1)
+                        ModelTitleWithPlanType(
+                            title: title,
+                            planType: planType,
+                            textColor: Color.white.opacity(0.80)
+                        )
                         if let subtitle, !subtitle.isEmpty {
                             Text(subtitle)
                                 .font(.system(size: 10, weight: .regular))
@@ -1118,6 +1125,46 @@ private struct PercentageModelCard: View {
 
     private var hasBorder: Bool {
         highlightColor != nil || isDisconnected
+    }
+}
+
+private struct ModelTitleWithPlanType: View {
+    let title: String
+    let planType: String?
+    let textColor: Color
+
+    private var planTypeGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color.white.opacity(0.80),
+                Color(red: 1.0, green: 0.819, blue: 0.225, opacity: 0.80)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(textColor)
+                .lineSpacing(0)
+                .lineLimit(1)
+
+            if let planType, !planType.isEmpty {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.white.opacity(0.40))
+                    .frame(width: 1, height: 8)
+
+                Text(planType)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(planTypeGradient)
+                    .lineSpacing(0)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+        }
     }
 }
 

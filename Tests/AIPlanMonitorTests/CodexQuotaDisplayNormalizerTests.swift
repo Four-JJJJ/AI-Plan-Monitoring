@@ -40,6 +40,25 @@ final class CodexQuotaDisplayNormalizerTests: XCTestCase {
         XCTAssertEqual(session.usedPercent, 0)
     }
 
+    func testInactiveExpiredWeeklyWindowRollsAcrossMultipleCycles() throws {
+        let base = Date(timeIntervalSince1970: 25_000)
+        let originalWeeklyReset = base.addingTimeInterval(-(15 * 24 * 60 * 60))
+        let snapshot = makeSnapshot(
+            sessionReset: base.addingTimeInterval(3_600),
+            weeklyReset: originalWeeklyReset,
+            sessionRemaining: 30,
+            sessionUsed: 70
+        )
+
+        let normalized = CodexQuotaDisplayNormalizer.normalize(snapshot: snapshot, isActive: false, now: base)
+
+        let weekly = try XCTUnwrap(normalized.quotaWindows.first(where: { $0.kind == .weekly }))
+        XCTAssertEqual(weekly.resetAt, originalWeeklyReset.addingTimeInterval(21 * 24 * 60 * 60))
+        XCTAssertEqual(weekly.remainingPercent, 100)
+        XCTAssertEqual(weekly.usedPercent, 0)
+        XCTAssertEqual(normalized.remaining, 30)
+    }
+
     func testActiveSnapshotIsNotMutated() {
         let base = Date(timeIntervalSince1970: 30_000)
         let snapshot = makeSnapshot(

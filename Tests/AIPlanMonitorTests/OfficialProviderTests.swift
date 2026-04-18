@@ -72,7 +72,46 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.count, 3)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .session })?.remainingPercent ?? -1, 75, accuracy: 0.001)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.remainingPercent ?? -1, 40, accuracy: 0.001)
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt,
+            Date(timeIntervalSince1970: 1_760_000_000)
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt,
+            Date(timeIntervalSince1970: 1_760_500_000)
+        )
         XCTAssertEqual(snapshot.extras["creditsBalance"], "42.50")
+    }
+
+    func testCodexAPIResponseAllowsMissingResetAt() throws {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "primary_window": { "used_percent": 25 },
+            "secondary_window": { "used_percent": 60 }
+          }
+        }
+        """
+
+        let response = HTTPURLResponse(
+            url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        let snapshot = try CodexProvider.parseUsageSnapshot(
+            data: Data(json.utf8),
+            response: response,
+            descriptor: ProviderDescriptor.defaultOfficialCodex(),
+            sourceLabel: "API",
+            accountLabel: nil
+        )
+
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
     }
 
     func testCodexForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
@@ -313,8 +352,56 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.count, 3)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .session })?.remainingPercent ?? -1, 70, accuracy: 0.001)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.remainingPercent ?? -1, 45, accuracy: 0.001)
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt,
+            ISO8601DateFormatter().date(from: "2026-04-11T10:00:00Z")
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt,
+            ISO8601DateFormatter().date(from: "2026-04-17T00:00:00Z")
+        )
         XCTAssertEqual(snapshot.extras["extraUsageCost"], "1200.00")
         XCTAssertEqual(snapshot.extras["extraUsageLimit"], "5000.00")
+    }
+
+    func testClaudeOAuthResponseParsesFractionalSecondResetDate() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00.123Z"],
+            "seven_day": ["utilization": 55, "resets_at": "2026-04-17T00:00:00Z"]
+        ]
+
+        let snapshot = try ClaudeProvider.parseClaudeSnapshot(
+            root: root,
+            descriptor: ProviderDescriptor.defaultOfficialClaude(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            planHint: "pro"
+        )
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let expected = try XCTUnwrap(fractionalFormatter.date(from: "2026-04-11T10:00:00.123Z"))
+        let actual = try XCTUnwrap(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertEqual(actual.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 0.001)
+    }
+
+    func testClaudeOAuthResponseAllowsMissingResetDate() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 30],
+            "seven_day": ["utilization": 55]
+        ]
+
+        let snapshot = try ClaudeProvider.parseClaudeSnapshot(
+            root: root,
+            descriptor: ProviderDescriptor.defaultOfficialClaude(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            planHint: "pro"
+        )
+
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
     }
 
     func testClaudeOAuthResponseWithoutPlanAndWithAllZeroUsageIsRejected() throws {
@@ -370,6 +457,12 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Flash" })?.remainingPercent ?? -1, 80, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "pro")
         XCTAssertEqual(snapshot.extras["project"], "demo-project")
+        XCTAssertEqual(snapshot.rawMeta["gemini.rawModel.count"], "2")
+        let rawModelIDs = snapshot.rawMeta
+            .filter { $0.key.hasSuffix(".id") }
+            .map(\.value)
+        XCTAssertTrue(rawModelIDs.contains("gemini-2.5-pro"))
+        XCTAssertTrue(rawModelIDs.contains("gemini-2.5-flash"))
     }
 
     func testGeminiQuotaResponseParsesBucketsShapeFromGeminiCLI() throws {
@@ -410,6 +503,12 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Flash" })?.remainingPercent ?? -1, 90, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "pro")
         XCTAssertEqual(snapshot.extras["project"], "demo-project")
+        XCTAssertEqual(snapshot.rawMeta["gemini.rawModel.count"], "2")
+        let rawModelIDs = snapshot.rawMeta
+            .filter { $0.key.hasSuffix(".id") }
+            .map(\.value)
+        XCTAssertTrue(rawModelIDs.contains("gemini-2.5-pro"))
+        XCTAssertTrue(rawModelIDs.contains("gemini-2.5-flash"))
     }
 
     func testGeminiClientSecretParserSupportsNewBundleConstants() {
@@ -467,6 +566,11 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .session })?.remainingPercent ?? -1, 60, accuracy: 0.001)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Overall" })?.remainingPercent ?? -1, 70, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "premium")
+        XCTAssertEqual(snapshot.rawMeta["kimi.rawModel.count"], "2")
+        let rawModelIDs = snapshot.rawMeta
+            .filter { $0.key.hasSuffix(".id") }
+            .map(\.value)
+        XCTAssertTrue(rawModelIDs.contains("5-hour"))
     }
 
     func testOfficialKimiResponseParsesResetTimeFromCamelCaseAndEpochMillis() throws {

@@ -242,12 +242,12 @@ staple_artifact() {
 
 prepare_install_guide() {
   cat > "$INSTALL_GUIDE_PATH" <<EOF
-AI Plan Monitor 安装说明
+${APP_NAME} 安装说明
 
-1. 将 “AI Plan Monitor.app” 拖到 “Applications” 文件夹。
-2. 第一次打开时，请前往“应用程序”文件夹，右键 AI Plan Monitor，选择“打开”。
+1. 将 “${APP_NAME}.app” 拖到 “Applications” 文件夹。
+2. 第一次打开时，请前往“应用程序”文件夹，右键 ${APP_NAME}，选择“打开”。
 3. 如果系统仍然拦截：
-   打开“系统设置” -> “隐私与安全性” -> 找到 AI Plan Monitor -> 点击“仍要打开”。
+   打开“系统设置” -> “隐私与安全性” -> 找到 ${APP_NAME} -> 点击“仍要打开”。
 
 说明：
 - 这是 GitHub 开源分发版本，可能会被 macOS Gatekeeper 首次拦截。
@@ -319,7 +319,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>AI Plan Monitor</string>
+  <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>AIPlanMonitor</string>
   <key>CFBundleIconFile</key>
@@ -343,7 +343,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>AI Plan Monitor</string>
+  <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

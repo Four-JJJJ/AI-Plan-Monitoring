@@ -1,7 +1,5 @@
 import Foundation
 import CommonCrypto
-import LocalAuthentication
-import Security
 
 struct KimiDetectedToken: Equatable {
     let token: String
@@ -543,7 +541,8 @@ final class KimiBrowserCookieService {
 
         let labels = safeStorageLabels(for: browser)
         for label in labels {
-            if let password = findGenericPassword(service: label.service, account: label.account), !password.isEmpty {
+            if let password = SecurityCredentialReader.readGenericPassword(service: label.service, account: label.account),
+               !password.isEmpty {
                 safeStorageCache[browser] = password
                 return password
             }
@@ -586,30 +585,6 @@ final class KimiBrowserCookieService {
         case .safari:
             return []
         }
-    }
-
-    private func findGenericPassword(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true,
-            kSecUseAuthenticationContext as String: nonInteractiveContext(),
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func nonInteractiveContext() -> LAContext {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        return context
     }
 
     private func pbkdf2SHA1(password: String, salt: String, rounds: Int, keyByteCount: Int) -> Data? {

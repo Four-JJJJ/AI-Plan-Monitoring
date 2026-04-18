@@ -13,10 +13,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(viewModel: AppViewModel) {
+        let targetContentSize = NSSize(width: 800, height: 671)
         if window == nil {
             // 窗口基础尺寸：对应设置页整体画布宽高（与 Figma 画板尺寸对齐）。
             let panel = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 800, height: 671),
+                contentRect: NSRect(origin: .zero, size: targetContentSize),
                 styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -47,9 +48,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            // 固定窗口大小，防止拉伸破坏设计稿比例。
-            panel.minSize = NSSize(width: 800, height: 671)
-            panel.maxSize = NSSize(width: 800, height: 671)
+            // 固定“内容区”为 800x671（min/max 需使用 frameRect 尺寸）。
+            let fixedFrameSize = panel.frameRect(
+                forContentRect: NSRect(origin: .zero, size: targetContentSize)
+            ).size
+            panel.minSize = fixedFrameSize
+            panel.maxSize = fixedFrameSize
+            panel.setContentSize(targetContentSize)
             panel.center()
             window = panel
         }
@@ -58,8 +63,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             SettingsView(viewModel: viewModel, onDone: { [weak self] in
                 self?.window?.orderOut(nil)
             })
-            // SwiftUI 内容区尺寸：与 NSWindow 固定尺寸保持一致。
-            .frame(width: 800, height: 671)
+            // SwiftUI 内容区尺寸：与目标 contentRect 保持一致。
+            .frame(width: targetContentSize.width, height: targetContentSize.height)
         )
 
         if let hostingController {
@@ -69,6 +74,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             hostingController = controller
             window?.contentViewController = controller
         }
+        window?.setContentSize(targetContentSize)
         ensureSingleBorderContentAppearance()
 
         NSApp.activate(ignoringOtherApps: true)

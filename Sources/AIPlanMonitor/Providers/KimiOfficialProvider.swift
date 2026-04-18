@@ -253,6 +253,7 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
         let accountLabel = OfficialValueParser.string((root["user"] as? [String: Any])?["email"])
 
         var windows: [UsageQuotaWindow] = []
+        var rawModelEntries: [KimiRawModelEntry] = []
         if let limits = root["limits"] as? [Any] {
             for (index, value) in limits.enumerated() {
                 guard let item = value as? [String: Any],
@@ -260,6 +261,9 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
                     continue
                 }
                 windows.append(window)
+                if let rawEntry = parseRawModelEntryFromLimit(item: item, index: index) {
+                    rawModelEntries.append(rawEntry)
+                }
             }
         }
 
@@ -272,6 +276,9 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
                 idSuffix: index == 0 ? "overall" : "overall-\(index)"
             ) {
                 windows.append(customWindow)
+            }
+            if let rawEntry = parseRawModelEntryFromUsage(usage: usage, index: index) {
+                rawModelEntries.append(rawEntry)
             }
             if extras["overallUsed"] == nil,
                let used = OfficialValueParser.double(
@@ -315,6 +322,7 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
         let note = windows
             .map { "\($0.title) \(Int($0.remainingPercent.rounded()))%" }
             .joined(separator: " | ")
+        let rawMeta = buildRawModelMeta(entries: rawModelEntries)
 
         return UsageSnapshot(
             source: descriptor.id,
@@ -329,7 +337,7 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
             sourceLabel: sourceLabel,
             accountLabel: accountLabel,
             extras: extras,
-            rawMeta: [:]
+            rawMeta: rawMeta
         )
     }
 
@@ -440,6 +448,137 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
             ),
             kind: kind
         )
+    }
+
+    private static func parseRawModelEntryFromLimit(item: [String: Any], index: Int) -> KimiRawModelEntry? {
+        let usage = (item["usage"] as? [String: Any]) ?? (item["detail"] as? [String: Any]) ?? item
+        guard let remaining = OfficialValueParser.double(usage["remaining_amount"] ?? usage["remaining"] ?? usage["available"]),
+              let limit = OfficialValueParser.double(usage["quota_amount"] ?? usage["limit"] ?? usage["total"]) else {
+            return nil
+        }
+        let resolvedTitle = OfficialValueParser.string(item["title"] ?? item["name"]) ?? "Window \(index + 1)"
+        let modelID = OfficialValueParser.string(
+            item["model_id"]
+                ?? item["modelId"]
+                ?? usage["model_id"]
+                ?? usage["modelId"]
+                ?? item["name"]
+                ?? item["title"]
+        ) ?? resolvedTitle
+        let remainingPercent = percent(remaining: remaining, limit: limit)
+        let resetAt = parseResetAt(
+            usage["resets_at"],
+            usage["reset_at"],
+            usage["resetAt"],
+            usage["reset_time"],
+            usage["resetTime"],
+            usage["next_reset_at"],
+            usage["nextResetAt"],
+            item["resets_at"],
+            item["reset_at"],
+            item["resetAt"],
+            item["next_reset_at"],
+            item["nextResetAt"]
+        )
+        return KimiRawModelEntry(
+            modelID: modelID,
+            title: resolvedTitle,
+            remainingPercent: remainingPercent,
+            usedPercent: max(0, 100 - remainingPercent),
+            resetAt: resetAt
+        )
+    }
+
+    private static func parseRawModelEntryFromUsage(usage: [String: Any], index: Int) -> KimiRawModelEntry? {
+        let remaining = OfficialValueParser.double(
+            usage["remaining_amount"]
+            ?? usage["remainingAmount"]
+            ?? usage["remaining"]
+            ?? usage["available_amount"]
+            ?? usage["availableAmount"]
+            ?? usage["available"]
+        )
+        let used = OfficialValueParser.double(
+            usage["used_amount"]
+            ?? usage["usedAmount"]
+            ?? usage["used"]
+            ?? usage["consumed_amount"]
+            ?? usage["consumedAmount"]
+            ?? usage["consumed"]
+            ?? usage["spent"]
+        )
+        guard let limit = OfficialValueParser.double(
+            usage["quota_amount"]
+            ?? usage["quotaAmount"]
+            ?? usage["monthly_limit"]
+            ?? usage["total_limit"]
+            ?? usage["limit"]
+            ?? usage["total"]
+        ) else {
+            return nil
+        }
+        guard let resolvedRemaining = remaining ?? used.map({ max(0, limit - $0) }) else {
+            return nil
+        }
+        let title = OfficialValueParser.string(usage["title"] ?? usage["name"]) ?? "Overall \(index + 1)"
+        let modelID = OfficialValueParser.string(
+            usage["model_id"]
+                ?? usage["modelId"]
+                ?? usage["quota_id"]
+                ?? usage["quotaId"]
+                ?? usage["name"]
+                ?? usage["title"]
+        ) ?? title
+        let remainingPercent = percent(remaining: resolvedRemaining, limit: limit)
+        let resetAt = parseResetAt(
+            usage["resets_at"],
+            usage["reset_at"],
+            usage["resetAt"],
+            usage["reset_time"],
+            usage["resetTime"],
+            usage["next_reset_at"],
+            usage["nextResetAt"],
+            usage["next_cycle_at"],
+            usage["nextCycleAt"],
+            usage["quota_reset_at"],
+            usage["quotaResetAt"]
+        )
+        return KimiRawModelEntry(
+            modelID: modelID,
+            title: title,
+            remainingPercent: remainingPercent,
+            usedPercent: max(0, 100 - remainingPercent),
+            resetAt: resetAt
+        )
+    }
+
+    private static func buildRawModelMeta(entries: [KimiRawModelEntry]) -> [String: String] {
+        var output: [String: String] = [:]
+        let formatter = ISO8601DateFormatter()
+        var dedupedBySignature: [String: KimiRawModelEntry] = [:]
+        for entry in entries {
+            let signature = "\(entry.modelID)|\(entry.title)|\(String(format: "%.4f", entry.remainingPercent))"
+            dedupedBySignature[signature] = entry
+        }
+        let sorted = dedupedBySignature.values.sorted { lhs, rhs in
+            if lhs.modelID == rhs.modelID {
+                return lhs.title < rhs.title
+            }
+            return lhs.modelID < rhs.modelID
+        }
+
+        output["kimi.rawModel.count"] = String(sorted.count)
+        for (index, entry) in sorted.enumerated() {
+            let prefix = "kimi.rawModel.\(index)"
+            output["\(prefix).id"] = entry.modelID
+            output["\(prefix).title"] = entry.title
+            output["\(prefix).remainingPercent"] = String(format: "%.2f", entry.remainingPercent)
+            output["\(prefix).usedPercent"] = String(format: "%.2f", entry.usedPercent)
+            if let resetAt = entry.resetAt {
+                output["\(prefix).resetAt"] = formatter.string(from: resetAt)
+            }
+        }
+        return output
     }
 
     private static func aggregateUsageCandidates(from root: [String: Any]) -> [[String: Any]] {
@@ -590,6 +729,14 @@ private struct KimiOfficialCredentials {
     var refreshToken: String?
     var expiresAt: Date?
     var filePath: String
+}
+
+private struct KimiRawModelEntry {
+    let modelID: String
+    let title: String
+    let remainingPercent: Double
+    let usedPercent: Double
+    let resetAt: Date?
 }
 
 private actor KimiOfficialSnapshotCache {

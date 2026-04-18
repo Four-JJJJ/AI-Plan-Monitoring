@@ -526,6 +526,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
         if let projectLabel, !projectLabel.isEmpty {
             extras["project"] = projectLabel
         }
+        let rawMeta = buildRawModelMeta(entries: quotas)
 
         return UsageSnapshot(
             source: descriptor.id,
@@ -540,7 +541,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
             sourceLabel: sourceLabel,
             accountLabel: accountLabel,
             extras: extras,
-            rawMeta: [:]
+            rawMeta: rawMeta
         )
     }
 
@@ -600,16 +601,25 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
 
     private static func parseQuotaEntry(_ value: Any) -> GeminiQuotaEntry? {
         guard let item = value as? [String: Any] else { return nil }
-        let title = OfficialValueParser.string(
+        let rawTitle = OfficialValueParser.string(
             item["displayName"] ??
                 item["modelName"] ??
                 item["modelId"] ??
                 item["model_id"] ??
                 item["quotaId"] ??
                 item["name"] ??
+                item["title"] ??
                 item["id"]
         ) ?? "Quota"
-        let lower = title.lowercased()
+        let modelID = OfficialValueParser.string(
+            item["modelId"] ??
+                item["model_id"] ??
+                item["quotaId"] ??
+                item["id"] ??
+                item["name"]
+        ) ?? rawTitle
+
+        let lower = rawTitle.lowercased()
         let groupKey: String
         let normalizedTitle: String
         let sortRank: Int
@@ -622,8 +632,8 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
             normalizedTitle = "Pro"
             sortRank = 0
         } else {
-            groupKey = "other-\(title.replacingOccurrences(of: " ", with: "-").lowercased())"
-            normalizedTitle = title
+            groupKey = "other-\(rawTitle.replacingOccurrences(of: " ", with: "-").lowercased())"
+            normalizedTitle = rawTitle
             sortRank = 2
         }
 
@@ -644,6 +654,8 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
 
         guard let usedPercent else { return nil }
         return GeminiQuotaEntry(
+            modelID: modelID,
+            rawTitle: rawTitle,
             title: normalizedTitle,
             groupKey: groupKey,
             usedPercent: min(100, max(0, usedPercent)),
@@ -723,6 +735,29 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
         }
         return "Plan \(plan) | \(details)"
     }
+
+    private static func buildRawModelMeta(entries: [GeminiQuotaEntry]) -> [String: String] {
+        var output: [String: String] = [:]
+        let formatter = ISO8601DateFormatter()
+        let sorted = entries.sorted { lhs, rhs in
+            if lhs.modelID == rhs.modelID {
+                return lhs.rawTitle < rhs.rawTitle
+            }
+            return lhs.modelID < rhs.modelID
+        }
+        output["gemini.rawModel.count"] = String(sorted.count)
+        for (index, entry) in sorted.enumerated() {
+            let prefix = "gemini.rawModel.\(index)"
+            output["\(prefix).id"] = entry.modelID
+            output["\(prefix).title"] = entry.rawTitle
+            output["\(prefix).remainingPercent"] = String(format: "%.2f", entry.remainingPercent)
+            output["\(prefix).usedPercent"] = String(format: "%.2f", entry.usedPercent)
+            if let resetAt = entry.resetAt {
+                output["\(prefix).resetAt"] = formatter.string(from: resetAt)
+            }
+        }
+        return output
+    }
 }
 
 private struct GeminiSettings {
@@ -759,6 +794,8 @@ private struct GeminiCredentials {
 }
 
 private struct GeminiQuotaEntry {
+    let modelID: String
+    let rawTitle: String
     let title: String
     let groupKey: String
     let usedPercent: Double
