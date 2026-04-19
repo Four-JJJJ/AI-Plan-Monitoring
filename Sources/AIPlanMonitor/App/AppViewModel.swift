@@ -134,7 +134,10 @@ final class AppViewModel {
                 let latest = try await self.appUpdateService.fetchLatestRelease()
                 self.lastCheckedLatestVersion = latest.latestVersion
                 self.updateCheckErrorMessage = nil
-                if Self.isVersion(latest.latestVersion, newerThan: self.currentAppVersion) {
+                let effectiveInstalledVersion = Self.detectNewestInstalledAppVersion(
+                    fallbackVersion: self.currentAppVersion
+                )
+                if Self.isVersion(latest.latestVersion, newerThan: effectiveInstalledVersion) {
                     self.availableUpdate = latest
                 } else {
                     self.availableUpdate = nil
@@ -1761,6 +1764,63 @@ final class AppViewModel {
             return value
         }
         return "0.0.0"
+    }
+
+    private static func detectNewestInstalledAppVersion(fallbackVersion: String) -> String {
+        var newest = fallbackVersion
+        for bundleURL in candidateInstalledAppBundleURLs() {
+            guard let version = bundleVersion(at: bundleURL) else { continue }
+            if isVersion(version, newerThan: newest) {
+                newest = version
+            }
+        }
+        return newest
+    }
+
+    private static func candidateInstalledAppBundleURLs() -> [URL] {
+        let fileManager = FileManager.default
+        var urls: [URL] = []
+
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            urls.append(Bundle.main.bundleURL.standardizedFileURL)
+        }
+
+        let appBundleName = "AI Plan Monitor.app"
+        let systemApplications = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        urls.append(systemApplications.appendingPathComponent(appBundleName).standardizedFileURL)
+        urls.append(
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true)
+                .appendingPathComponent(appBundleName)
+                .standardizedFileURL
+        )
+
+        var deduped: [URL] = []
+        var seen: Set<String> = []
+        for url in urls {
+            let key = url.path
+            if seen.insert(key).inserted {
+                deduped.append(url)
+            }
+        }
+        return deduped
+    }
+
+    private static func bundleVersion(at bundleURL: URL) -> String? {
+        guard FileManager.default.fileExists(atPath: bundleURL.path),
+              let bundle = Bundle(url: bundleURL) else {
+            return nil
+        }
+
+        if let value = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if let value = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 
     private static func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {

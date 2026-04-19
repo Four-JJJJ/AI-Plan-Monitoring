@@ -32,9 +32,10 @@ struct MenuContentView: View {
     private let errorColor = Color(hex: 0xD05757)
     // 顶部操作按钮尺寸与间距（Figma: 16x16，间距 12）。
     private let headerActionIconSize: CGFloat = 16
-    private let headerActionSpacing: CGFloat = 10
-    private let headerHeight: CGFloat = 20
-    private let headerActionIconOpacity: Double = 0.62
+    private let headerActionSpacing: CGFloat = 12
+    private let headerHeight: CGFloat = 16
+    private let headerActionIconOpacity: Double = 0.4
+    private let updateHintColor = Color(hex: 0x69BD65)
     // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动。
     private let modelCardHeightEstimate: CGFloat = 86
     private let maxVisibleModelCards: CGFloat = 5.5
@@ -68,15 +69,19 @@ struct MenuContentView: View {
     }
 
     private var header: some View {
-        // 顶部工具条：更新时间 + 刷新/设置/退出三个图标按钮。
+        // 顶部工具条：更新时间 + 新版本入口 + 刷新/设置/退出三个图标按钮。
         HStack(spacing: 12) {
             Text(headerUpdatedText)
-                .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.35))
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.30))
                 .lineSpacing(0)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
+
+            if let update = viewModel.availableUpdate {
+                headerUpdateButton(update)
+            }
 
             HStack(spacing: headerActionSpacing) {
                 headerIconButton(iconName: "refresh_icon", fallback: "arrow.clockwise") {
@@ -101,10 +106,6 @@ struct MenuContentView: View {
             VStack(spacing: cardSpacing) {
                 if viewModel.shouldShowPermissionGuide {
                     permissionGuideCard
-                }
-
-                if let update = viewModel.availableUpdate {
-                    appUpdateCard(update)
                 }
 
                 ForEach(displayProviders) { provider in
@@ -155,6 +156,36 @@ struct MenuContentView: View {
         }
         .buttonStyle(.plain)
         .frame(width: headerActionIconSize, height: headerActionIconSize)
+    }
+
+    private func headerUpdateButton(_ update: AppUpdateInfo) -> some View {
+        Button {
+            viewModel.openLatestReleaseDownload()
+        } label: {
+            HStack(spacing: 4) {
+                BundledIconView(
+                    name: "settings_download_icon",
+                    fallback: "arrow.down",
+                    size: headerActionIconSize,
+                    tint: updateHintColor
+                )
+                Text(headerUpdateTitle)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(updateHintColor)
+                    .lineSpacing(0)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            viewModel.language == .zhHans
+                ? "发现新版本 \(update.latestVersion)，点击下载最新安装包"
+                : "New version \(update.latestVersion) available, download latest installer"
+        )
+    }
+
+    private var headerUpdateTitle: String {
+        viewModel.language == .zhHans ? "新版本" : "New"
     }
 
     private var permissionGuideCard: some View {
@@ -240,37 +271,6 @@ struct MenuContentView: View {
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(cardBackground)
-        )
-    }
-
-    private func appUpdateCard(_ update: AppUpdateInfo) -> some View {
-        // 应用更新提示卡样式（绿色高亮）。
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(viewModel.text(.updateAvailableTitle))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x51DB42))
-                Spacer(minLength: 8)
-                Button(viewModel.text(.updateDownloadAction)) {
-                    viewModel.openLatestReleaseDownload()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-
-            Text(String(format: viewModel.text(.updateAvailableBody), update.latestVersion, viewModel.currentAppVersion))
-                .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.78))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(hex: 0x51DB42).opacity(0.14))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(hex: 0x51DB42).opacity(0.5), lineWidth: 1)
         )
     }
 

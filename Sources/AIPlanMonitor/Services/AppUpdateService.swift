@@ -7,8 +7,8 @@ struct AppUpdateInfo: Equatable {
 }
 
 actor AppUpdateService {
-    static let repositoryURL = URL(string: "https://github.com/Four-JJJJ/AI-Plan-Monitoring")!
-    static let releasesURL = URL(string: "https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest")!
+    static let repositoryURL = URL(string: "https://github.com/Four-JJJJ/AI-Plan-Monitor")!
+    static let releasesURL = URL(string: "https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest")!
 
     private struct GitHubRelease: Decodable {
         var tagName: String
@@ -37,7 +37,7 @@ actor AppUpdateService {
 
     init(
         session: URLSession = .shared,
-        latestReleaseURL: URL = URL(string: "https://api.github.com/repos/Four-JJJJ/AI-Plan-Monitoring/releases/latest")!
+        latestReleaseURL: URL = URL(string: "https://api.github.com/repos/Four-JJJJ/AI-Plan-Monitor/releases/latest")!
     ) {
         self.session = session
         self.latestReleaseURL = latestReleaseURL
