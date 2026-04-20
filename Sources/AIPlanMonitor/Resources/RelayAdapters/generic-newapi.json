@@ -4,18 +4,18 @@
   "match": {
     "hostPatterns": ["*"],
     "defaultDisplayName": "Generic New API",
-    "defaultTokenChannelEnabled": true,
-    "defaultBalanceChannelEnabled": false
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
   },
   "setup": {
-    "requiredInputs": ["displayName", "baseURL", "quotaAuth"],
-    "quotaAuthHint": {
-      "zhHans": "填写站点提供的 API Key 或 sk- Token，支持 `sk-...` 和 `Bearer sk-...` 两种格式。",
-      "en": "Enter the site's API key or sk token. Both `sk-...` and `Bearer sk-...` are supported."
-    },
+    "requiredInputs": ["displayName", "baseURL", "balanceAuth", "userID"],
     "balanceAuthHint": {
-      "zhHans": "如果你开启账户余额通道，这里通常粘贴请求头中的 Authorization 值；少数站点需要完整 Cookie。",
-      "en": "If account balance is enabled, this usually uses the Authorization value from request headers; some sites require the full Cookie instead."
+      "zhHans": "填写后台 Access Token，支持直接粘贴 `Bearer ...` 或纯 token。",
+      "en": "Enter the dashboard access token. Both `Bearer ...` and the raw token are accepted."
+    },
+    "userIDHint": {
+      "zhHans": "填写请求头 `New-Api-User` 对应的 userId。",
+      "en": "Enter the userId used for the `New-Api-User` request header."
     }
   },
   "authStrategies": [
@@ -40,7 +40,8 @@
     "success": "success",
     "remaining": "data.quota",
     "used": "data.used_quota",
-    "limit": "data.request_quota",
-    "unit": "quota"
+    "limit": "add(data.quota,data.used_quota)",
+    "unit": "USD",
+    "accountLabel": "coalesce(data.group,\"默认套餐\")"
   }
 }

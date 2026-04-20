@@ -1515,6 +1515,17 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        if trimmed.hasPrefix("div("), trimmed.hasSuffix(")") {
+            let arguments = splitArguments(String(trimmed.dropFirst(4).dropLast()))
+            guard arguments.count == 2,
+                  let numerator = numericValue(for: arguments[0], in: root),
+                  let denominator = numericValue(for: arguments[1], in: root),
+                  denominator != 0 else {
+                return nil
+            }
+            return numerator / denominator
+        }
+
         if trimmed.hasPrefix("sum("), trimmed.hasSuffix(")") {
             let inner = String(trimmed.dropFirst(4).dropLast())
             let numbers = values(at: inner, in: root).compactMap(coerceDouble)

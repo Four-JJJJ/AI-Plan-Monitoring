@@ -1276,8 +1276,8 @@ final class AppViewModel {
             ? templateExtract.success
             : trimmedOrNil(successJSONPath)
         let resolvedUnit = useTemplateDefaults
-            ? (templateExtract.unit ?? "quota")
-            : nonEmptyOrDefault(unit, fallback: "quota")
+            ? (templateExtract.unit ?? "USD")
+            : nonEmptyOrDefault(unit, fallback: "USD")
 
         relayConfig.manualOverrides = RelayManualOverride(
             authHeader: resolvedAuthHeader,
