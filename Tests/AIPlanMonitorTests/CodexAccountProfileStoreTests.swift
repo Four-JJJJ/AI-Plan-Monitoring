@@ -64,6 +64,32 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertTrue(profiles.first?.isCurrentSystemAccount == true)
     }
 
+    func testCaptureCurrentAuthWithNilInputKeepsSavedProfiles() {
+        let store = makeStore()
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(accountID: "acc-auto-a", email: "auto-a@example.com")
+        )
+
+        let profiles = store.captureCurrentAuthIfNeeded(authJSON: nil)
+
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.accountId, "acc-auto-a")
+        XCTAssertFalse(profiles.first?.isCurrentSystemAccount ?? true)
+    }
+
+    func testCaptureCurrentAuthWithInvalidInputKeepsSavedProfiles() {
+        let store = makeStore()
+        _ = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(accountID: "acc-auto-a", email: "auto-a@example.com")
+        )
+
+        let profiles = store.captureCurrentAuthIfNeeded(authJSON: "not-valid-json")
+
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.accountId, "acc-auto-a")
+        XCTAssertFalse(profiles.first?.isCurrentSystemAccount ?? true)
+    }
+
     func testCaptureCurrentAuthStoresSecondDistinctAccountIntoSlotB() {
         let store = makeStore()
 
@@ -296,6 +322,26 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         let profiles = store.captureCurrentAuthIfNeeded(authJSON: authJSON)
 
         XCTAssertTrue(profiles.isEmpty)
+    }
+
+    func testManualSaveThenFailedSyncThenNewLoginPreservesExistingProfiles() throws {
+        let store = makeStore()
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Manual A",
+            authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com"),
+            currentFingerprint: nil
+        )
+
+        _ = store.captureCurrentAuthIfNeeded(authJSON: "not-valid-json")
+        let profiles = store.captureCurrentAuthIfNeeded(
+            authJSON: sampleAuthJSON(accountID: "acc-b", email: "b@example.com")
+        )
+
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(Set(profiles.compactMap(\.accountId)), ["acc-a", "acc-b"])
+        XCTAssertTrue(profiles.first(where: { $0.accountId == "acc-b" })?.isCurrentSystemAccount ?? false)
+        XCTAssertFalse(profiles.first(where: { $0.accountId == "acc-a" })?.isCurrentSystemAccount ?? true)
     }
 
     private func makeStore() -> CodexAccountProfileStore {

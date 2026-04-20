@@ -206,14 +206,17 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func resolveAuthPaths() -> [String] {
-        let home = NSHomeDirectory()
-        let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidates = [
-            codexHome.map { "\($0)/auth.json" },
-            "\(home)/.config/codex/auth.json",
-            "\(home)/.codex/auth.json",
-        ].compactMap { $0 }
-        return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
+        Self.resolvedAuthPaths(
+            homeDirectory: NSHomeDirectory(),
+            environment: ProcessInfo.processInfo.environment
+        )
+    }
+
+    static func resolvedAuthPaths(homeDirectory: String, environment: [String: String]) -> [String] {
+        CodexAuthPathResolver.resolveAuthPaths(
+            homeDirectory: homeDirectory,
+            environment: environment
+        )
     }
 
     private func needsRefresh(lastRefresh: Date?) -> Bool {

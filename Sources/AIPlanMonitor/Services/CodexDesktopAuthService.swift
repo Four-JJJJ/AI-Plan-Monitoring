@@ -46,14 +46,10 @@ final class CodexDesktopAuthService {
     }
 
     func resolvedAuthPaths() -> [String] {
-        let home = homeDirectory()
-        let codexHome = environment()["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidates = [
-            codexHome.map { "\($0)/auth.json" },
-            "\(home)/.config/codex/auth.json",
-            "\(home)/.codex/auth.json"
-        ].compactMap { $0 }
-        return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
+        CodexAuthPathResolver.resolveAuthPaths(
+            homeDirectory: homeDirectory(),
+            environment: environment()
+        )
     }
 
     func currentAuthJSON() -> String? {

@@ -129,17 +129,18 @@ final class CodexAccountProfileStore {
         authJSON: String?,
         preferredAutoSlots: [CodexSlotID] = [.a, .b]
     ) -> [CodexAccountProfile] {
+        let existingProfiles = load()
         guard let authJSON else {
-            return updateCurrentProfiles([], currentIdentityKey: nil, currentFingerprint: nil)
+            return updateCurrentProfiles(existingProfiles, currentIdentityKey: nil, currentFingerprint: nil)
         }
 
         let trimmed = authJSON.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let payload = try? Self.parseAuthJSON(trimmed) else {
-            return updateCurrentProfiles([], currentIdentityKey: nil, currentFingerprint: nil)
+            return updateCurrentProfiles(existingProfiles, currentIdentityKey: nil, currentFingerprint: nil)
         }
 
-        var items = load()
+        var items = existingProfiles
         let currentFingerprint = payload.credentialFingerprint.lowercased()
         let currentIdentityKey = CodexIdentity.from(payload: payload).identityKey
         let ignoredFingerprints = loadIgnoredFingerprints()
