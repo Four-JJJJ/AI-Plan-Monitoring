@@ -36,6 +36,7 @@ struct MenuContentView: View {
     private let headerHeight: CGFloat = 16
     private let headerActionIconOpacity: Double = 0.4
     private let updateHintColor = Color(hex: 0x69BD65)
+    private let updateErrorColor = Color(hex: 0xD05757)
     // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动。
     private let modelCardHeightEstimate: CGFloat = 86
     private let maxVisibleModelCards: CGFloat = 5.5
@@ -159,42 +160,70 @@ struct MenuContentView: View {
     }
 
     private var shouldShowUpdateButton: Bool {
-        viewModel.availableUpdate != nil
-            || viewModel.updateDownloadInFlight
-            || viewModel.updateInstallationInFlight
-            || viewModel.updatePreparedVersion != nil
-            || viewModel.updateInstallErrorMessage != nil
+        if case .idle = viewModel.menuUpdateDisplayState.kind {
+            return false
+        }
+        return true
+    }
+
+    private var headerUpdateTint: Color {
+        switch viewModel.menuUpdateDisplayState.tone {
+        case .neutral, .positive:
+            return updateHintColor
+        case .negative:
+            return updateErrorColor
+        }
     }
 
     private var headerUpdateButton: some View {
-        Button {
-            viewModel.openLatestReleaseDownload()
-        } label: {
-            HStack(spacing: 4) {
-                BundledIconView(
-                    name: "settings_download_icon",
-                    fallback: "arrow.down",
-                    size: headerActionIconSize,
-                    tint: updateHintColor
-                )
+        let state = viewModel.menuUpdateDisplayState
+
+        return HStack(spacing: 4) {
+            BundledIconView(
+                name: "settings_download_icon",
+                fallback: "arrow.down",
+                size: headerActionIconSize,
+                tint: headerUpdateTint
+            )
+            if case .updateAvailable = state.kind {
+                Button {
+                    viewModel.performMenuUpdateAction()
+                } label: {
+                    Text(headerUpdateTitle)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(headerUpdateTint)
+                        .lineSpacing(0)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(!state.isRetryEnabled)
+            } else {
                 Text(headerUpdateTitle)
                     .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(updateHintColor)
+                    .foregroundStyle(headerUpdateTint)
                     .lineSpacing(0)
                     .lineLimit(1)
             }
+
+            if let retryTitle = state.retryTitle {
+                Button {
+                    viewModel.performMenuUpdateAction()
+                } label: {
+                    Text(retryTitle)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(updateErrorColor)
+                        .lineSpacing(0)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(!state.isRetryEnabled)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!viewModel.isUpdateActionEnabled)
-        .accessibilityLabel(
-            viewModel.language == .zhHans
-                ? "应用更新操作：\(headerUpdateTitle)"
-                : "App update action: \(headerUpdateTitle)"
-        )
+        .accessibilityLabel(viewModel.language == .zhHans ? "应用更新状态：\(headerUpdateTitle)" : "App update status: \(headerUpdateTitle)")
     }
 
     private var headerUpdateTitle: String {
-        viewModel.updateActionTitle
+        viewModel.menuUpdateDisplayState.statusText ?? ""
     }
 
     private var permissionGuideCard: some View {

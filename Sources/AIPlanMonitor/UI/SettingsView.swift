@@ -120,6 +120,10 @@ struct SettingsView: View {
     private let settingsBodyColor = Color.white.opacity(0.80)
     // 次级提示色（55% 白）。
     private let settingsHintColor = Color.white.opacity(0.55)
+    // 更弱提示色（40% 白），用于“检查失败”等弱错误提示。
+    private let settingsMutedHintColor = Color.white.opacity(0.40)
+    private let settingsUpdatePositiveColor = Color(hex: 0x69BD64)
+    private let settingsUpdateNegativeColor = Color(hex: 0xD05757)
     // 输入框填充色（white_15）。
     private let settingsInputFillColor = Color.white.opacity(0.15)
     // 输入框占位色（white_30）。
@@ -569,12 +573,29 @@ struct SettingsView: View {
 
     private var settingsTopMetaBar: some View {
         HStack(spacing: 12) {
+            if let statusText = viewModel.settingsUpdateDisplayState.statusText {
+                settingsTopUpdateStatusSlot(statusText: statusText)
+                    .layoutPriority(3)
+            }
+
             settingsTopMetaItem(
                 text: currentVersionTitle,
                 iconName: "settings_version_icon",
                 fallbackIcon: "chevron.left.forwardslash.chevron.right",
                 textColor: settingsHintColor
             )
+
+            Button {
+                viewModel.checkForAppUpdate(force: true)
+            } label: {
+                Text(viewModel.localizedText("检查更新", "Check for Updates"))
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.updateCheckInFlight || viewModel.updateDownloadInFlight || viewModel.updateInstallBufferingInFlight || viewModel.updateInstallationInFlight)
+            .layoutPriority(1)
 
             Button {
                 viewModel.openRepositoryPage()
@@ -587,6 +608,76 @@ struct SettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+            .layoutPriority(1)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsTopUpdateStatusSlot(statusText: String) -> some View {
+        let state = viewModel.settingsUpdateDisplayState
+        let statusTone: AppViewModel.UpdateDisplayTone = {
+            if case .checkFailed = state.kind {
+                return .neutral
+            }
+            return state.tone
+        }()
+        let isUpdateAvailable: Bool = {
+            if case .updateAvailable = state.kind {
+                return true
+            }
+            return false
+        }()
+
+        HStack(spacing: 6) {
+            settingsTopMetaIcon(
+                name: "settings_download_icon",
+                fallbackIcon: "arrow.down",
+                tint: settingsTopUpdateStatusColor(for: statusTone),
+                appliesTintToBundledImage: true
+            )
+            if isUpdateAvailable {
+                Button {
+                    viewModel.openLatestReleaseDownload()
+                } label: {
+                    Text(statusText)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(settingsTopUpdateStatusColor(for: statusTone))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .buttonStyle(.plain)
+                .disabled(!viewModel.isUpdateActionEnabled)
+            } else {
+                Text(statusText)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsTopUpdateStatusColor(for: statusTone))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if let retryTitle = state.retryTitle {
+                Button {
+                    viewModel.openLatestReleaseDownload()
+                } label: {
+                    Text(retryTitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(settingsTopUpdateStatusColor(for: .negative))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(!state.isRetryEnabled)
+            }
+        }
+    }
+
+    private func settingsTopUpdateStatusColor(for tone: AppViewModel.UpdateDisplayTone) -> Color {
+        switch tone {
+        case .neutral:
+            return settingsMutedHintColor
+        case .positive:
+            return settingsUpdatePositiveColor
+        case .negative:
+            return settingsUpdateNegativeColor
         }
     }
 
@@ -608,13 +699,29 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func settingsTopMetaIcon(name: String, fallbackIcon: String, tint: Color) -> some View {
+    private func settingsTopMetaIcon(
+        name: String,
+        fallbackIcon: String,
+        tint: Color,
+        appliesTintToBundledImage: Bool = false
+    ) -> some View {
         if let image = bundledImage(named: name) {
-            // 图标按原始宽高比缩放，避免不同视觉比例被拉伸。
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 11, height: 11)
+            if appliesTintToBundledImage {
+                // 图标按原始宽高比缩放，避免不同视觉比例被拉伸。
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 11, height: 11)
+                    .foregroundStyle(tint)
+            } else {
+                // 图标按原始宽高比缩放，避免不同视觉比例被拉伸。
+                Image(nsImage: image)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 11, height: 11)
+            }
         } else {
             Image(systemName: fallbackIcon)
                 .font(.system(size: 10, weight: .regular))
@@ -1065,11 +1172,6 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 24)
 
-            versionUpdateSection
-
-            Spacer()
-                .frame(height: 24)
-
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
                     Text(settingsLaunchTitle)
@@ -1110,70 +1212,6 @@ struct SettingsView: View {
 
             permissionsSection
         }
-    }
-
-    private var versionUpdateSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Text(viewModel.localizedText("版本更新", "App Updates"))
-                    .font(settingsLabelFont)
-                    .foregroundStyle(settingsBodyColor)
-
-                Spacer(minLength: 0)
-
-                Text(currentVersionTitle)
-                    .font(settingsHintFont)
-                    .foregroundStyle(settingsHintColor)
-
-                settingsActionButton(
-                    viewModel.localizedText("检查更新", "Check for Updates")
-                ) {
-                    viewModel.checkForAppUpdate(force: true)
-                }
-                .disabled(viewModel.updateCheckInFlight || viewModel.updateDownloadInFlight || viewModel.updateInstallationInFlight)
-
-                if viewModel.availableUpdate != nil
-                    || viewModel.updatePreparedVersion != nil
-                    || viewModel.updateDownloadInFlight
-                    || viewModel.updateInstallationInFlight {
-                    settingsActionButton(
-                        viewModel.updateActionTitle,
-                        prominent: true
-                    ) {
-                        viewModel.openLatestReleaseDownload()
-                    }
-                    .disabled(!viewModel.isUpdateActionEnabled)
-                }
-            }
-            .frame(minHeight: 24)
-
-            Text(versionUpdateHintText)
-                .font(settingsHintFont)
-                .foregroundStyle(versionUpdateHintColor)
-                .padding(.leading, 60)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var versionUpdateHintText: String {
-        if viewModel.updateCheckInFlight {
-            return viewModel.localizedText("正在检查最新版本…", "Checking for the latest version…")
-        }
-        return viewModel.updateStatusSummary
-            ?? viewModel.localizedText(
-                "点击“检查更新”后，再由你决定是否安装新版本。",
-                "Check for updates first, then choose whether to install the new version."
-            )
-    }
-
-    private var versionUpdateHintColor: Color {
-        if viewModel.updateInstallErrorMessage != nil {
-            return Color(hex: 0xD05757)
-        }
-        if viewModel.availableUpdate != nil || viewModel.updatePreparedVersion != nil {
-            return Color(hex: 0x69BD64)
-        }
-        return settingsHintColor
     }
 
     private var statusBarMultiUsageSection: some View {

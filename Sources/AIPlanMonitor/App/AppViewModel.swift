@@ -8,7 +8,7 @@ import UserNotifications
 final class AppViewModel {
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
-    private let appUpdateService = AppUpdateService()
+    private let appUpdateService: any AppUpdateServicing
     private let codexSlotStore = CodexAccountSlotStore()
     private let codexProfileStore = CodexAccountProfileStore()
     private let codexProfileSnapshotService = CodexProfileSnapshotService()
@@ -46,6 +46,7 @@ final class AppViewModel {
     private(set) var lastCheckedLatestVersion: String?
     private(set) var updateCheckErrorMessage: String?
     private(set) var updateDownloadInFlight = false
+    private(set) var updateInstallBufferingInFlight = false
     private(set) var updateInstallationInFlight = false
     private(set) var updatePreparedVersion: String?
     private(set) var updateInstallErrorMessage: String?
@@ -66,9 +67,20 @@ final class AppViewModel {
     private var notificationPermissionPollingTask: Task<Void, Never>?
     private var preparedUpdate: PreparedAppUpdate?
     private var updateFlowVersionInFlight: String?
+    private var updateInstallBufferTask: Task<Void, Never>?
+    private let updateInstallBufferDelaySeconds: TimeInterval
+    private var updateCheckStatusClearTask: Task<Void, Never>?
+    private let updateCheckStatusClearDelaySeconds: TimeInterval
     @ObservationIgnored private var localSessionMonitorTask: Task<Void, Never>?
 
-    init() {
+    init(
+        appUpdateService: any AppUpdateServicing = AppUpdateService(),
+        updateInstallBufferDelaySeconds: TimeInterval = 5,
+        updateCheckStatusClearDelaySeconds: TimeInterval = 10
+    ) {
+        self.appUpdateService = appUpdateService
+        self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
+        self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
         var loadedConfig = (try? configStore.load()) ?? .default
         if loadedConfig.simplifiedRelayConfig == false {
             loadedConfig.simplifiedRelayConfig = true
@@ -98,6 +110,31 @@ final class AppViewModel {
         syncClaudeProfilesCurrentState()
         refreshPermissionStatuses(force: true)
     }
+
+#if DEBUG
+    init(
+        testingConfig: AppConfig = .default,
+        testingCurrentAppVersion: String = "0.0.0",
+        appUpdateService: any AppUpdateServicing,
+        updateInstallBufferDelaySeconds: TimeInterval = 5,
+        updateCheckStatusClearDelaySeconds: TimeInterval = 10
+    ) {
+        self.appUpdateService = appUpdateService
+        self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
+        self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
+        self.config = testingConfig.migratedWithSiteDefaults()
+        self.currentAppVersion = testingCurrentAppVersion
+        self.providerFactory = ProviderFactory(keychain: keychain)
+        self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
+            signalSource: localSessionSignalMonitor
+        )
+        self.codexSlots = []
+        self.claudeSlots = []
+        self.codexProfiles = []
+        self.claudeProfiles = []
+        normalizeStatusBarSelections()
+    }
+#endif
 
     func start() {
         guard !hasStarted else { return }
@@ -139,6 +176,7 @@ final class AppViewModel {
             return
         }
 
+        cancelUpdateCheckStatusClear()
         updateCheckInFlight = true
         updateCheckErrorMessage = nil
         Task { [weak self] in
@@ -157,18 +195,19 @@ final class AppViewModel {
                 )
                 if Self.isVersion(latest.latestVersion, newerThan: effectiveInstalledVersion) {
                     self.availableUpdate = latest
+                    self.lastCheckedLatestVersion = nil
                     if self.updatePreparedVersion != latest.latestVersion {
-                        self.preparedUpdate = nil
-                        self.updatePreparedVersion = nil
+                        self.clearPreparedUpdateState()
                     }
                 } else {
                     self.availableUpdate = nil
-                    self.preparedUpdate = nil
-                    self.updatePreparedVersion = nil
-                    self.updateFlowVersionInFlight = nil
+                    self.clearPreparedUpdateState()
+                    self.scheduleUpdateCheckStatusClear()
                 }
             } catch {
                 self.updateCheckErrorMessage = error.localizedDescription
+                self.lastCheckedLatestVersion = nil
+                self.scheduleUpdateCheckStatusClear()
             }
         }
     }
@@ -178,34 +217,12 @@ final class AppViewModel {
     }
 
     func openLatestReleaseDownload() {
-        if updateDownloadInFlight || updateInstallationInFlight {
-            return
-        }
+        performUpdateAction(allowCheckForUpdateFallback: true)
+    }
 
-        if let preparedUpdate {
-            updateInstallErrorMessage = nil
-            updateInstallationInFlight = true
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await self.appUpdateService.installPreparedUpdate(preparedUpdate)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        NSApplication.shared.terminate(nil)
-                    }
-                } catch {
-                    self.updateInstallationInFlight = false
-                    self.updateInstallErrorMessage = error.localizedDescription
-                }
-            }
-            return
-        }
-
-        if let availableUpdate {
-            beginUpdatePreparation(with: availableUpdate)
-            return
-        }
-
-        checkForAppUpdate(force: true)
+    func performMenuUpdateAction() {
+        guard availableUpdate != nil || preparedUpdate != nil else { return }
+        performUpdateAction(allowCheckForUpdateFallback: false)
     }
 
     var language: AppLanguage {
@@ -426,12 +443,166 @@ final class AppViewModel {
         config.language == .zhHans ? zhHans : en
     }
 
-    var updateActionTitle: String {
-        if updateInstallationInFlight {
-            return localizedText("正在安装", "Installing")
+    enum UpdateDisplayTone: Equatable {
+        case neutral
+        case positive
+        case negative
+    }
+
+    struct SettingsUpdateDisplayState: Equatable {
+        enum Kind: Equatable {
+            case idle
+            case checkFailed
+            case upToDate
+            case updateAvailable(version: String)
+            case downloading
+            case installBuffering
+            case failed
+        }
+
+        var kind: Kind
+        var statusText: String?
+        var tone: UpdateDisplayTone
+        var retryTitle: String?
+        var isRetryEnabled: Bool
+    }
+
+    struct MenuUpdateDisplayState: Equatable {
+        enum Kind: Equatable {
+            case idle
+            case updateAvailable(version: String)
+            case downloading
+            case installBuffering
+            case failed
+        }
+
+        var kind: Kind
+        var statusText: String?
+        var tone: UpdateDisplayTone
+        var retryTitle: String?
+        var isRetryEnabled: Bool
+    }
+
+    private var canRetryUpdateAction: Bool {
+        isUpdateActionEnabled && (availableUpdate != nil || preparedUpdate != nil)
+    }
+
+    var settingsUpdateDisplayState: SettingsUpdateDisplayState {
+        if updateInstallErrorMessage != nil {
+            return SettingsUpdateDisplayState(
+                kind: .failed,
+                statusText: localizedText("安装失败", "Install Failed"),
+                tone: .negative,
+                retryTitle: canRetryUpdateAction ? localizedText("重试", "Retry") : nil,
+                isRetryEnabled: canRetryUpdateAction
+            )
+        }
+        if updateCheckErrorMessage != nil {
+            return SettingsUpdateDisplayState(
+                kind: .checkFailed,
+                statusText: localizedText("检查失败", "Check Failed"),
+                tone: .negative,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        if updateInstallBufferingInFlight || updateInstallationInFlight {
+            return SettingsUpdateDisplayState(
+                kind: .installBuffering,
+                statusText: localizedText("即将安装", "Installing soon"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
         }
         if updateDownloadInFlight {
-            return localizedText("准备更新中", "Preparing Update")
+            return SettingsUpdateDisplayState(
+                kind: .downloading,
+                statusText: localizedText("下载中", "Downloading"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        if let update = availableUpdate {
+            return SettingsUpdateDisplayState(
+                kind: .updateAvailable(version: update.latestVersion),
+                statusText: localizedText("新版本 \(update.latestVersion)", "New \(update.latestVersion)"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: isUpdateActionEnabled
+            )
+        }
+        if lastCheckedLatestVersion != nil {
+            return SettingsUpdateDisplayState(
+                kind: .upToDate,
+                statusText: localizedText("已经是最新版本", "Up to Date"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        return SettingsUpdateDisplayState(
+            kind: .idle,
+            statusText: nil,
+            tone: .neutral,
+            retryTitle: nil,
+            isRetryEnabled: false
+        )
+    }
+
+    var menuUpdateDisplayState: MenuUpdateDisplayState {
+        if updateInstallErrorMessage != nil {
+            return MenuUpdateDisplayState(
+                kind: .failed,
+                statusText: localizedText("安装失败", "Install Failed"),
+                tone: .negative,
+                retryTitle: canRetryUpdateAction ? localizedText("重试", "Retry") : nil,
+                isRetryEnabled: canRetryUpdateAction
+            )
+        }
+        if updateInstallBufferingInFlight || updateInstallationInFlight {
+            return MenuUpdateDisplayState(
+                kind: .installBuffering,
+                statusText: localizedText("即将安装", "Installing soon"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        if updateDownloadInFlight {
+            return MenuUpdateDisplayState(
+                kind: .downloading,
+                statusText: localizedText("下载中", "Downloading"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        if let update = availableUpdate {
+            return MenuUpdateDisplayState(
+                kind: .updateAvailable(version: update.latestVersion),
+                statusText: localizedText("新版本 \(update.latestVersion)", "New \(update.latestVersion)"),
+                tone: .positive,
+                retryTitle: nil,
+                isRetryEnabled: isUpdateActionEnabled
+            )
+        }
+        return MenuUpdateDisplayState(
+            kind: .idle,
+            statusText: nil,
+            tone: .neutral,
+            retryTitle: nil,
+            isRetryEnabled: false
+        )
+    }
+
+    var updateActionTitle: String {
+        if updateInstallBufferingInFlight || updateInstallationInFlight {
+            return localizedText("即将安装", "Installing soon")
+        }
+        if updateDownloadInFlight {
+            return localizedText("下载中", "Downloading")
         }
         if updatePreparedVersion != nil {
             return localizedText("安装更新", "Install Update")
@@ -446,14 +617,14 @@ final class AppViewModel {
         if let message = updateInstallErrorMessage, !message.isEmpty {
             return "\(localizedText("更新失败", "Update failed")): \(message)"
         }
-        if let version = updatePreparedVersion {
-            return localizedText("新版本 \(version) 已准备完成，点击即可安装。", "Version \(version) is ready to install.")
-        }
         if updateDownloadInFlight {
-            return localizedText("正在下载并准备更新…", "Downloading and preparing the update…")
+            return localizedText("下载中…", "Downloading…")
         }
-        if updateInstallationInFlight {
-            return localizedText("正在安装更新并重启应用…", "Installing the update and restarting the app…")
+        if updateInstallBufferingInFlight || updateInstallationInFlight {
+            return localizedText("即将安装", "Installing soon")
+        }
+        if let version = updatePreparedVersion {
+            return localizedText("新版本 \(version) 已准备完成。", "Version \(version) is ready.")
         }
         if let update = availableUpdate {
             return localizedText(
@@ -468,7 +639,7 @@ final class AppViewModel {
     }
 
     var isUpdateActionEnabled: Bool {
-        !(updateDownloadInFlight || updateInstallationInFlight)
+        !(updateDownloadInFlight || updateInstallBufferingInFlight || updateInstallationInFlight)
     }
 
     func aggregateStatusTitle(_ status: AggregateStatus) -> String {
@@ -482,18 +653,127 @@ final class AppViewModel {
         }
     }
 
+    private func performUpdateAction(allowCheckForUpdateFallback: Bool) {
+        if updateDownloadInFlight || updateInstallBufferingInFlight || updateInstallationInFlight {
+            return
+        }
+
+        if let preparedUpdate {
+            beginUpdateInstallBuffering(for: preparedUpdate)
+            return
+        }
+
+        if let availableUpdate {
+            beginUpdatePreparation(with: availableUpdate)
+            return
+        }
+
+        guard allowCheckForUpdateFallback else { return }
+        checkForAppUpdate(force: true)
+    }
+
+    private func clearPreparedUpdateState() {
+        preparedUpdate = nil
+        updatePreparedVersion = nil
+        updateFlowVersionInFlight = nil
+        cancelUpdateInstallBuffering()
+    }
+
+    private func cancelUpdateInstallBuffering() {
+        updateInstallBufferTask?.cancel()
+        updateInstallBufferTask = nil
+        updateInstallBufferingInFlight = false
+    }
+
+    private func cancelUpdateCheckStatusClear() {
+        updateCheckStatusClearTask?.cancel()
+        updateCheckStatusClearTask = nil
+    }
+
+    private func scheduleUpdateCheckStatusClear() {
+        cancelUpdateCheckStatusClear()
+        let delaySeconds = max(0, updateCheckStatusClearDelaySeconds)
+        updateCheckStatusClearTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self.updateCheckErrorMessage = nil
+            self.lastCheckedLatestVersion = nil
+            self.updateCheckStatusClearTask = nil
+        }
+    }
+
+    private func beginUpdateInstallBuffering(for prepared: PreparedAppUpdate) {
+        guard !updateDownloadInFlight, !updateInstallationInFlight else { return }
+
+        updateInstallErrorMessage = nil
+        cancelUpdateInstallBuffering()
+        updateInstallBufferingInFlight = true
+
+        let expectedVersion = prepared.version
+        updateInstallBufferTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(self.updateInstallBufferDelaySeconds * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self.startPreparedUpdateInstallationIfNeeded(expectedVersion: expectedVersion)
+        }
+    }
+
+    private func startPreparedUpdateInstallationIfNeeded(expectedVersion: String) {
+        updateInstallBufferTask = nil
+        guard updateInstallBufferingInFlight,
+              !updateDownloadInFlight,
+              !updateInstallationInFlight,
+              let preparedUpdate,
+              preparedUpdate.version == expectedVersion else {
+            updateInstallBufferingInFlight = false
+            return
+        }
+
+        updateInstallBufferingInFlight = false
+        updateInstallErrorMessage = nil
+        updateInstallationInFlight = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.appUpdateService.installPreparedUpdate(
+                    preparedUpdate,
+                    over: Bundle.main.bundleURL
+                )
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    NSApplication.shared.terminate(nil)
+                }
+            } catch {
+                self.updateInstallationInFlight = false
+                self.updateInstallErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func beginUpdatePreparation(with update: AppUpdateInfo) {
-        if updateDownloadInFlight || updateInstallationInFlight {
+        if updateDownloadInFlight || updateInstallBufferingInFlight || updateInstallationInFlight {
             return
         }
         if updatePreparedVersion == update.latestVersion {
-            openLatestReleaseDownload()
+            if let preparedUpdate, preparedUpdate.version == update.latestVersion {
+                beginUpdateInstallBuffering(for: preparedUpdate)
+            }
             return
         }
         if updateFlowVersionInFlight == update.latestVersion {
             return
         }
 
+        cancelUpdateInstallBuffering()
         updateFlowVersionInFlight = update.latestVersion
         updateDownloadInFlight = true
         updateInstallErrorMessage = nil
@@ -507,6 +787,7 @@ final class AppViewModel {
                 self.updatePreparedVersion = prepared.version
                 self.updateDownloadInFlight = false
                 self.updateFlowVersionInFlight = nil
+                self.beginUpdateInstallBuffering(for: prepared)
             } catch {
                 self.updateDownloadInFlight = false
                 self.updateFlowVersionInFlight = nil

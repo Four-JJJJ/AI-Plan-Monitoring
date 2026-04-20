@@ -27,6 +27,12 @@ struct PreparedAppUpdate {
     var workingDirectoryURL: URL
 }
 
+protocol AppUpdateServicing: Actor {
+    func fetchLatestRelease() async throws -> AppUpdateInfo
+    func prepareUpdate(_ update: AppUpdateInfo) async throws -> PreparedAppUpdate
+    func installPreparedUpdate(_ prepared: PreparedAppUpdate, over currentAppURL: URL) throws
+}
+
 enum AppUpdateError: LocalizedError {
     case invalidMetadata
     case missingZipAsset
@@ -350,3 +356,5 @@ actor AppUpdateService {
         return "'\(escaped)'"
     }
 }
+
+extension AppUpdateService: AppUpdateServicing {}
