@@ -93,7 +93,6 @@ final class AppViewModel {
         hasStarted = true
         refreshPermissionStatuses(force: true)
         restartPolling()
-        checkForAppUpdate(force: true)
     }
 
     func restartPolling() {
@@ -145,7 +144,10 @@ final class AppViewModel {
                 )
                 if Self.isVersion(latest.latestVersion, newerThan: effectiveInstalledVersion) {
                     self.availableUpdate = latest
-                    self.beginAutomaticUpdateIfNeeded(with: latest)
+                    if self.updatePreparedVersion != latest.latestVersion {
+                        self.preparedUpdate = nil
+                        self.updatePreparedVersion = nil
+                    }
                 } else {
                     self.availableUpdate = nil
                     self.preparedUpdate = nil
@@ -186,11 +188,11 @@ final class AppViewModel {
         }
 
         if let availableUpdate {
-            beginAutomaticUpdateIfNeeded(with: availableUpdate, force: true)
+            beginUpdatePreparation(with: availableUpdate)
             return
         }
 
-        NSWorkspace.shared.open(AppUpdateService.releasesURL)
+        checkForAppUpdate(force: true)
     }
 
     var language: AppLanguage {
@@ -311,13 +313,13 @@ final class AppViewModel {
             return localizedText("正在安装", "Installing")
         }
         if updateDownloadInFlight {
-            return localizedText("正在更新", "Updating")
+            return localizedText("准备更新中", "Preparing Update")
         }
         if updatePreparedVersion != nil {
             return localizedText("安装更新", "Install Update")
         }
         if availableUpdate != nil {
-            return localizedText("立即更新", "Update Now")
+            return localizedText("安装更新", "Install Update")
         }
         return localizedText("检查更新", "Check for Updates")
     }
@@ -330,15 +332,15 @@ final class AppViewModel {
             return localizedText("新版本 \(version) 已准备完成，点击即可安装。", "Version \(version) is ready to install.")
         }
         if updateDownloadInFlight {
-            return localizedText("正在后台下载并准备安装更新…", "Downloading and preparing the update…")
+            return localizedText("正在下载并准备更新…", "Downloading and preparing the update…")
         }
         if updateInstallationInFlight {
             return localizedText("正在安装更新并重启应用…", "Installing the update and restarting the app…")
         }
         if let update = availableUpdate {
             return localizedText(
-                "发现新版本 \(update.latestVersion)，将自动下载并准备安装。",
-                "Version \(update.latestVersion) is available and will be prepared automatically."
+                "发现新版本 \(update.latestVersion)，点击“安装更新”开始更新。",
+                "Version \(update.latestVersion) is available. Click Install Update to continue."
             )
         }
         if let latest = lastCheckedLatestVersion {
@@ -362,17 +364,16 @@ final class AppViewModel {
         }
     }
 
-    private func beginAutomaticUpdateIfNeeded(with update: AppUpdateInfo, force: Bool = false) {
-        if !force {
-            if updateDownloadInFlight || updateInstallationInFlight {
-                return
-            }
-            if updatePreparedVersion == update.latestVersion {
-                return
-            }
-            if updateFlowVersionInFlight == update.latestVersion {
-                return
-            }
+    private func beginUpdatePreparation(with update: AppUpdateInfo) {
+        if updateDownloadInFlight || updateInstallationInFlight {
+            return
+        }
+        if updatePreparedVersion == update.latestVersion {
+            openLatestReleaseDownload()
+            return
+        }
+        if updateFlowVersionInFlight == update.latestVersion {
+            return
         }
 
         updateFlowVersionInFlight = update.latestVersion
@@ -388,7 +389,6 @@ final class AppViewModel {
                 self.updatePreparedVersion = prepared.version
                 self.updateDownloadInFlight = false
                 self.updateFlowVersionInFlight = nil
-                self.openLatestReleaseDownload()
             } catch {
                 self.updateDownloadInFlight = false
                 self.updateFlowVersionInFlight = nil

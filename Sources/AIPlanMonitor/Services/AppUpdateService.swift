@@ -339,6 +339,7 @@ actor AppUpdateService {
         fi
 
         /usr/bin/open "$TARGET_APP"
+        rm -rf "$BACKUP_APP"
         rm -rf "$WORKING_DIR"
         exit 0
         """

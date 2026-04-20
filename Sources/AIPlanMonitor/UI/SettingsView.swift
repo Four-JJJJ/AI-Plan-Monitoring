@@ -261,7 +261,6 @@ struct SettingsView: View {
             syncSelection()
             resetProviderReorderState()
             viewModel.refreshPermissionStatusesNow()
-            viewModel.checkForAppUpdate()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             viewModel.refreshPermissionStatusesNow()
