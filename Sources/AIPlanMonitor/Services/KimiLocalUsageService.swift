@@ -167,7 +167,7 @@ final class KimiLocalUsageService {
 
     private func scanJSONLLines(
         atPath path: String,
-        maxLineBytes: Int = 512 * 1024,
+        maxLineBytes: Int = RuntimeDiagnosticsLimits.jsonlMaxLineBytes,
         onLine: (String) -> Void
     ) {
         guard let handle = FileHandle(forReadingAtPath: path) else {
@@ -179,6 +179,7 @@ final class KimiLocalUsageService {
 
         let newline = Data([0x0A])
         var buffer = Data()
+        var droppingOversizedLine = false
 
         while true {
             let chunk = try? handle.read(upToCount: 64 * 1024)
@@ -186,14 +187,25 @@ final class KimiLocalUsageService {
                 break
             }
             if chunk.isEmpty {
-                if !buffer.isEmpty, buffer.count <= maxLineBytes,
+                if !droppingOversizedLine,
+                   !buffer.isEmpty,
+                   buffer.count <= maxLineBytes,
                    let line = String(data: buffer, encoding: .utf8) {
                     onLine(line)
                 }
                 break
             }
 
-            buffer.append(chunk)
+            if droppingOversizedLine {
+                guard let range = chunk.range(of: newline) else {
+                    continue
+                }
+                droppingOversizedLine = false
+                buffer = Data(chunk.suffix(from: range.upperBound))
+            } else {
+                buffer.append(chunk)
+            }
+
             while let range = buffer.range(of: newline) {
                 let lineData = buffer.subdata(in: 0..<range.lowerBound)
                 buffer.removeSubrange(0..<range.upperBound)
@@ -203,6 +215,11 @@ final class KimiLocalUsageService {
                     continue
                 }
                 onLine(line)
+            }
+
+            if buffer.count > maxLineBytes {
+                buffer.removeAll(keepingCapacity: false)
+                droppingOversizedLine = true
             }
         }
     }

@@ -4074,6 +4074,29 @@ struct SettingsView: View {
         return !FileManager.default.fileExists(atPath: projectsPath)
     }
 
+    private func pruneLocalUsageTrendCaches(now: Date = Date()) {
+        _ = RuntimeBoundedState.pruneLocalUsageTrendCaches(
+            summaries: &localUsageTrendSummaries,
+            errors: &localUsageTrendErrors,
+            queryLastRefreshedAt: &localUsageTrendQueryLastRefreshedAt,
+            loadingQueryKeys: &localUsageTrendLoadingQueryKeys,
+            now: now
+        )
+    }
+
+    private func storeLocalUsageTrendSummary(_ summary: LocalUsageSummary, for queryKey: String, refreshedAt: Date = Date()) {
+        localUsageTrendSummaries[queryKey] = RuntimeBoundedState.slimmedLocalUsageSummaryForCache(summary)
+        localUsageTrendErrors.removeValue(forKey: queryKey)
+        localUsageTrendQueryLastRefreshedAt[queryKey] = refreshedAt
+        pruneLocalUsageTrendCaches(now: refreshedAt)
+    }
+
+    private func storeLocalUsageTrendError(_ message: String, for queryKey: String, refreshedAt: Date = Date()) {
+        localUsageTrendErrors[queryKey] = message
+        localUsageTrendQueryLastRefreshedAt[queryKey] = refreshedAt
+        pruneLocalUsageTrendCaches(now: refreshedAt)
+    }
+
     private func refreshLocalUsageTrendIfNeeded(
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
@@ -4102,6 +4125,7 @@ struct SettingsView: View {
         )
 
         guard provider.type != .gemini else { return }
+        pruneLocalUsageTrendCaches()
         guard !localUsageTrendLoadingQueryKeys.contains(queryKey) else { return }
 
         let now = Date()
@@ -4148,11 +4172,10 @@ struct SettingsView: View {
             }.value
 
             localUsageTrendLoadingQueryKeys.remove(queryKey)
-            localUsageTrendQueryLastRefreshedAt[queryKey] = Date()
+            let refreshedAt = Date()
             switch result {
             case .success(let summary):
-                localUsageTrendSummaries[queryKey] = summary
-                localUsageTrendErrors.removeValue(forKey: queryKey)
+                storeLocalUsageTrendSummary(summary, for: queryKey, refreshedAt: refreshedAt)
                 if providerType == .codex,
                    scopeForRequest == .currentAccount,
                    summary.last30Days.responses == 0 {
@@ -4161,7 +4184,7 @@ struct SettingsView: View {
                     )
                 }
             case .failure(let error):
-                localUsageTrendErrors[queryKey] = error.localizedDescription
+                storeLocalUsageTrendError(error.localizedDescription, for: queryKey, refreshedAt: refreshedAt)
             }
         }
     }
@@ -4178,6 +4201,7 @@ struct SettingsView: View {
         guard !localUsageTrendLoadingQueryKeys.contains(allAccountsKey) else { return }
 
         let now = Date()
+        pruneLocalUsageTrendCaches(now: now)
         if let lastRefreshedAt = localUsageTrendQueryLastRefreshedAt[allAccountsKey],
            now.timeIntervalSince(lastRefreshedAt) < localUsageTrendRefreshTTL,
            localUsageTrendSummaries[allAccountsKey] != nil {
@@ -4199,13 +4223,12 @@ struct SettingsView: View {
             }.value
 
             localUsageTrendLoadingQueryKeys.remove(allAccountsKey)
-            localUsageTrendQueryLastRefreshedAt[allAccountsKey] = Date()
+            let refreshedAt = Date()
             switch result {
             case .success(let summary):
-                localUsageTrendSummaries[allAccountsKey] = summary
-                localUsageTrendErrors.removeValue(forKey: allAccountsKey)
+                storeLocalUsageTrendSummary(summary, for: allAccountsKey, refreshedAt: refreshedAt)
             case .failure(let error):
-                localUsageTrendErrors[allAccountsKey] = error.localizedDescription
+                storeLocalUsageTrendError(error.localizedDescription, for: allAccountsKey, refreshedAt: refreshedAt)
             }
         }
     }

@@ -35,6 +35,12 @@ struct ClaudeParsedCredentialsPayload {
     var credentialFingerprint: String
 }
 
+struct ClaudeAutoCaptureCompactionResult {
+    var profiles: [ClaudeAccountProfile]
+    var removedSlotIDs: [CodexSlotID]
+    var didCompact: Bool
+}
+
 final class ClaudeAccountProfileStore {
     private struct ProfileFile: Codable {
         var profiles: [ClaudeAccountProfile]
@@ -155,20 +161,69 @@ final class ClaudeAccountProfileStore {
     @discardableResult
     func updateCurrentFingerprint(_ fingerprint: String?) -> [ClaudeAccountProfile] {
         var items = load()
-        let normalizedCurrentFingerprint = fingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        var changed = false
-        for index in items.indices {
-            let isCurrent = items[index].credentialFingerprint?.lowercased() == normalizedCurrentFingerprint
-                && normalizedCurrentFingerprint != nil
-            if items[index].isCurrentSystemAccount != isCurrent {
-                items[index].isCurrentSystemAccount = isCurrent
-                changed = true
-            }
-        }
+        let normalizedCurrentFingerprint = Self.normalizedFingerprint(fingerprint)
+        let changed = applyCurrentFingerprint(normalizedCurrentFingerprint, to: &items)
         if changed {
             try? save(items, ignoredFingerprints: loadIgnoredFingerprints())
         }
         return items.sorted { $0.slotID < $1.slotID }
+    }
+
+    @discardableResult
+    func compactAutoCapturedProfiles(
+        defaultConfigDir: String?,
+        currentFingerprint: String?
+    ) -> ClaudeAutoCaptureCompactionResult {
+        var items = load()
+        let ignoredFingerprints = loadIgnoredFingerprints()
+        let normalizedDefaultConfigDir = Self.normalizedConfigDirectory(defaultConfigDir)
+        let normalizedCurrentFingerprint = Self.normalizedFingerprint(currentFingerprint)
+
+        var groupedIndices: [String: [Int]] = [:]
+        groupedIndices.reserveCapacity(items.count)
+        for (index, profile) in items.enumerated() {
+            guard let key = Self.autoCaptureMergeKey(
+                for: profile,
+                defaultConfigDir: normalizedDefaultConfigDir
+            ) else {
+                continue
+            }
+            groupedIndices[key, default: []].append(index)
+        }
+
+        var removeIndices: Set<Int> = []
+        var removedSlotIDs: [CodexSlotID] = []
+        for indices in groupedIndices.values where indices.count > 1 {
+            guard let keepIndex = Self.preferredCompactionIndex(
+                from: indices,
+                profiles: items,
+                currentFingerprint: normalizedCurrentFingerprint
+            ) else {
+                continue
+            }
+            for index in indices where index != keepIndex {
+                removeIndices.insert(index)
+                removedSlotIDs.append(items[index].slotID)
+            }
+        }
+
+        if !removeIndices.isEmpty {
+            for index in removeIndices.sorted(by: >) {
+                items.remove(at: index)
+            }
+        }
+
+        let currentChanged = applyCurrentFingerprint(normalizedCurrentFingerprint, to: &items)
+        let didCompact = !removeIndices.isEmpty || currentChanged
+        if didCompact {
+            try? save(items, ignoredFingerprints: ignoredFingerprints)
+        }
+
+        return ClaudeAutoCaptureCompactionResult(
+            profiles: items.sorted { $0.slotID < $1.slotID },
+            removedSlotIDs: removedSlotIDs.sorted(),
+            didCompact: didCompact
+        )
     }
 
     @discardableResult
@@ -188,26 +243,75 @@ final class ClaudeAccountProfileStore {
         }
 
         var items = load()
-        let currentFingerprint = payload.credentialFingerprint.lowercased()
+        let currentFingerprint = Self.normalizedFingerprint(payload.credentialFingerprint)
         let ignoredFingerprints = loadIgnoredFingerprints()
-        if ignoredFingerprints.contains(currentFingerprint) {
-            return updateCurrentFingerprint(currentFingerprint)
+        if let currentFingerprint, ignoredFingerprints.contains(currentFingerprint) {
+            let changed = applyCurrentFingerprint(currentFingerprint, to: &items)
+            if changed {
+                try? save(items, ignoredFingerprints: ignoredFingerprints)
+            }
+            return items.sorted { $0.slotID < $1.slotID }
         }
 
         let normalizedConfigDir = Self.normalizedConfigDirectory(defaultConfigDir) ?? Self.defaultClaudeConfigDirectory()
-        if let existing = Self.matchingIndex(for: payload, in: items) {
+        if let existing = Self.autoCaptureMatchingIndex(
+            for: payload,
+            defaultConfigDir: normalizedConfigDir,
+            in: items
+        ) {
             var profile = items[existing]
-            if profile.source == .configDir {
-                profile.configDir = normalizedConfigDir
+            let normalizedPayloadAccountID = Self.normalizedAccountID(payload.accountId)
+            let normalizedPayloadEmail = Self.normalizedEmail(payload.accountEmail)
+            let normalizedPayloadFingerprint = Self.normalizedFingerprint(payload.credentialFingerprint)
+            let normalizedProfileAccountID = Self.normalizedAccountID(profile.accountId)
+            let normalizedProfileEmail = Self.normalizedEmail(profile.accountEmail)
+            let normalizedProfileFingerprint = Self.normalizedFingerprint(profile.credentialFingerprint)
+            let normalizedProfileCredentials = profile.credentialsJSON?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var profileChanged = false
+
+            if profile.source != .configDir {
+                profile.source = .configDir
+                profileChanged = true
             }
-            profile.credentialsJSON = trimmed
-            profile.accountId = payload.accountId
-            profile.accountEmail = payload.accountEmail
-            profile.credentialFingerprint = payload.credentialFingerprint
-            profile.lastImportedAt = Date()
-            items[existing] = normalizedProfile(profile)
-            try? save(items, ignoredFingerprints: ignoredFingerprints)
-            return updateCurrentFingerprint(currentFingerprint)
+            if profile.source == .configDir {
+                let currentConfigDir = Self.normalizedConfigDirectory(profile.configDir)
+                if currentConfigDir != normalizedConfigDir {
+                    profile.configDir = normalizedConfigDir
+                    profileChanged = true
+                }
+            }
+
+            if normalizedProfileCredentials != trimmed {
+                profile.credentialsJSON = trimmed
+                profileChanged = true
+            }
+            if normalizedProfileAccountID != normalizedPayloadAccountID {
+                profile.accountId = payload.accountId
+                profileChanged = true
+            }
+            if normalizedProfileEmail != normalizedPayloadEmail {
+                profile.accountEmail = payload.accountEmail
+                profileChanged = true
+            }
+            if normalizedProfileFingerprint != normalizedPayloadFingerprint {
+                profile.credentialFingerprint = payload.credentialFingerprint
+                profileChanged = true
+            }
+            if profileChanged {
+                profile.lastImportedAt = Date()
+            }
+
+            profile = normalizedProfile(profile)
+            if items[existing] != profile {
+                items[existing] = profile
+                profileChanged = true
+            }
+
+            let currentChanged = applyCurrentFingerprint(currentFingerprint, to: &items)
+            if profileChanged || currentChanged {
+                try? save(items, ignoredFingerprints: ignoredFingerprints)
+            }
+            return items.sorted { $0.slotID < $1.slotID }
         }
 
         let occupied = Set(items.map(\.slotID))
@@ -228,8 +332,9 @@ final class ClaudeAccountProfileStore {
                 isCurrentSystemAccount: true
             )
         )
+        _ = applyCurrentFingerprint(currentFingerprint, to: &items)
         try? save(items, ignoredFingerprints: ignoredFingerprints)
-        return updateCurrentFingerprint(currentFingerprint)
+        return items.sorted { $0.slotID < $1.slotID }
     }
 
     func reset() {
@@ -437,6 +542,14 @@ final class ClaudeAccountProfileStore {
         return value.lowercased()
     }
 
+    private static func normalizedAccountID(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        return value.lowercased()
+    }
+
     private static func matchingIndex(
         for payload: ClaudeParsedCredentialsPayload,
         in profiles: [ClaudeAccountProfile]
@@ -451,6 +564,131 @@ final class ClaudeAccountProfileStore {
         }
 
         return nil
+    }
+
+    private static func autoCaptureMatchingIndex(
+        for payload: ClaudeParsedCredentialsPayload,
+        defaultConfigDir: String?,
+        in profiles: [ClaudeAccountProfile]
+    ) -> Int? {
+        if let accountID = normalizedAccountID(payload.accountId) {
+            let candidates = profiles.indices.filter { index in
+                normalizedAccountID(profiles[index].accountId) == accountID
+            }
+            if let preferred = preferredAutoCaptureIndex(from: candidates, profiles: profiles) {
+                return preferred
+            }
+        }
+
+        if let email = normalizedEmail(payload.accountEmail) {
+            let normalizedConfigDir = normalizedConfigDirectory(defaultConfigDir)
+            let exactConfigCandidates = profiles.indices.filter { index in
+                guard normalizedEmail(profiles[index].accountEmail) == email else {
+                    return false
+                }
+                return normalizedConfigDirectory(profiles[index].configDir) == normalizedConfigDir
+            }
+            if let preferred = preferredAutoCaptureIndex(from: exactConfigCandidates, profiles: profiles) {
+                return preferred
+            }
+
+            let emailCandidates = profiles.indices.filter { index in
+                normalizedEmail(profiles[index].accountEmail) == email
+            }
+            if emailCandidates.count == 1 {
+                return emailCandidates[0]
+            }
+        }
+
+        if let fingerprint = normalizedFingerprint(payload.credentialFingerprint) {
+            let candidates = profiles.indices.filter { index in
+                normalizedFingerprint(profiles[index].credentialFingerprint) == fingerprint
+            }
+            if let preferred = preferredAutoCaptureIndex(from: candidates, profiles: profiles) {
+                return preferred
+            }
+        }
+
+        return nil
+    }
+
+    private static func preferredAutoCaptureIndex(
+        from candidates: [Int],
+        profiles: [ClaudeAccountProfile]
+    ) -> Int? {
+        guard !candidates.isEmpty else { return nil }
+        return candidates.sorted { lhs, rhs in
+            let left = profiles[lhs]
+            let right = profiles[rhs]
+            if left.source != right.source {
+                return left.source == .configDir
+            }
+            if left.lastImportedAt != right.lastImportedAt {
+                return left.lastImportedAt > right.lastImportedAt
+            }
+            return left.slotID < right.slotID
+        }
+        .first
+    }
+
+    private static func autoCaptureMergeKey(
+        for profile: ClaudeAccountProfile,
+        defaultConfigDir: String?
+    ) -> String? {
+        guard profile.source == .configDir else {
+            return nil
+        }
+        if let accountID = normalizedAccountID(profile.accountId) {
+            return "account:\(accountID)"
+        }
+        guard let email = normalizedEmail(profile.accountEmail) else {
+            return nil
+        }
+        let normalizedConfig = normalizedConfigDirectory(profile.configDir)
+            ?? normalizedConfigDirectory(defaultConfigDir)
+            ?? "default"
+        return "email:\(email)|config:\(normalizedConfig)"
+    }
+
+    private static func preferredCompactionIndex(
+        from indices: [Int],
+        profiles: [ClaudeAccountProfile],
+        currentFingerprint: String?
+    ) -> Int? {
+        guard !indices.isEmpty else { return nil }
+        let normalizedCurrentFingerprint = normalizedFingerprint(currentFingerprint)
+        let currentCandidates: [Int]
+        if let normalizedCurrentFingerprint {
+            currentCandidates = indices.filter { index in
+                normalizedFingerprint(profiles[index].credentialFingerprint) == normalizedCurrentFingerprint
+            }
+        } else {
+            currentCandidates = []
+        }
+        let effectiveCandidates = currentCandidates.isEmpty ? indices : currentCandidates
+        return effectiveCandidates.sorted { lhs, rhs in
+            let left = profiles[lhs]
+            let right = profiles[rhs]
+            if left.lastImportedAt != right.lastImportedAt {
+                return left.lastImportedAt > right.lastImportedAt
+            }
+            return left.slotID < right.slotID
+        }
+        .first
+    }
+
+    private func applyCurrentFingerprint(_ fingerprint: String?, to items: inout [ClaudeAccountProfile]) -> Bool {
+        let normalizedCurrentFingerprint = Self.normalizedFingerprint(fingerprint)
+        var changed = false
+        for index in items.indices {
+            let isCurrent = Self.normalizedFingerprint(items[index].credentialFingerprint) == normalizedCurrentFingerprint
+                && normalizedCurrentFingerprint != nil
+            if items[index].isCurrentSystemAccount != isCurrent {
+                items[index].isCurrentSystemAccount = isCurrent
+                changed = true
+            }
+        }
+        return changed
     }
 
     private func normalizedProfile(_ profile: ClaudeAccountProfile) -> ClaudeAccountProfile {

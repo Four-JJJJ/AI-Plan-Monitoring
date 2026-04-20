@@ -60,6 +60,7 @@ final class AppViewModel {
     private var claudeSwitchingSlots: Set<CodexSlotID> = []
     private var claudePrefetchInFlightSlots: Set<CodexSlotID> = []
     private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
+    private var didRunClaudeAutoCaptureCompaction = false
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
     private var hasStarted = false
@@ -107,7 +108,7 @@ final class AppViewModel {
             try? configStore.save(self.config)
         }
         syncCodexProfilesCurrentState()
-        syncClaudeProfilesCurrentState()
+        bootstrapClaudeProfileState()
         refreshPermissionStatuses(force: true)
     }
 
@@ -441,6 +442,22 @@ final class AppViewModel {
 
     func localizedText(_ zhHans: String, _ en: String) -> String {
         config.language == .zhHans ? zhHans : en
+    }
+
+    func runtimeMemoryDiagnostics() -> RuntimeMemoryDiagnostics {
+        RuntimeMemoryDiagnostics(
+            residentSizeBytes: RuntimeMemoryProbe.residentSizeBytes(),
+            snapshotCount: snapshots.count,
+            codexProfileCount: codexProfiles.count,
+            codexSlotCount: codexSlots.count,
+            claudeProfileCount: claudeProfiles.count,
+            claudeSlotCount: claudeSlots.count,
+            codexPrefetchAttemptedIdentityCount: codexPrefetchAttemptedIdentity.count,
+            codexPrefetchInFlightCount: codexPrefetchInFlightSlots.count,
+            claudePrefetchAttemptedIdentityCount: claudePrefetchAttemptedIdentity.count,
+            claudePrefetchInFlightCount: claudePrefetchInFlightSlots.count,
+            pollTaskCount: pollTasks.count
+        )
     }
 
     enum UpdateDisplayTone: Equatable {
@@ -1051,6 +1068,7 @@ final class AppViewModel {
         claudeSwitchingSlots.removeAll()
         claudePrefetchInFlightSlots.removeAll()
         claudePrefetchAttemptedIdentity.removeAll()
+        didRunClaudeAutoCaptureCompaction = false
         claudeSwitchFeedback.removeAll()
         snapshots.removeAll()
         errors.removeAll()
@@ -1071,6 +1089,8 @@ final class AppViewModel {
         codexProfiles = []
         claudeSlots = []
         claudeProfiles = []
+        syncCodexProfilesCurrentState()
+        bootstrapClaudeProfileState()
         notificationAuthorizationStatus = .notDetermined
         secureStorageReady = false
         fullDiskAccessGranted = false
@@ -1098,13 +1118,13 @@ final class AppViewModel {
                 if descriptor.type == .codex {
                     let snapshot = markCodexSnapshotActive(fetched)
                     codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
-                    snapshots[descriptor.id] = snapshot
+                    snapshots[descriptor.id] = boundedSnapshot(snapshot)
                 } else if descriptor.type == .claude {
                     let snapshot = markClaudeSnapshotActive(fetched)
                     claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
-                    snapshots[descriptor.id] = snapshot
+                    snapshots[descriptor.id] = boundedSnapshot(snapshot)
                 } else {
-                    snapshots[descriptor.id] = fetched
+                    snapshots[descriptor.id] = boundedSnapshot(fetched)
                 }
 
                 errors.removeValue(forKey: descriptor.id)
@@ -1165,7 +1185,7 @@ final class AppViewModel {
                 let fetched = try await provider.fetch(forceRefresh: true)
                 let snapshot = markCodexSnapshotActive(fetched, preferredSlotID: slotID)
                 codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
-                snapshots[descriptor.id] = snapshot
+                snapshots[descriptor.id] = boundedSnapshot(snapshot)
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
@@ -1243,7 +1263,7 @@ final class AppViewModel {
                 let fetched = try await provider.fetch(forceRefresh: true)
                 let snapshot = markClaudeSnapshotActive(fetched, preferredSlotID: slotID)
                 claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
-                snapshots[descriptor.id] = snapshot
+                snapshots[descriptor.id] = boundedSnapshot(snapshot)
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
@@ -1733,7 +1753,7 @@ final class AppViewModel {
         let provider = providerFactory.makeProvider(for: descriptor)
         do {
             let snapshot = try await provider.fetch(forceRefresh: true)
-            snapshots[descriptor.id] = snapshot
+            snapshots[descriptor.id] = boundedSnapshot(snapshot)
             errors.removeValue(forKey: descriptor.id)
             lastUpdatedAt = Date()
             return RelayDiagnosticResult(
@@ -1808,6 +1828,8 @@ final class AppViewModel {
         normalizeStatusBarSelections()
         try? configStore.save(config)
         restartPolling()
+        syncClaudeProfilesCurrentState()
+        triggerClaudeProfileSnapshotPrefetchIfNeeded()
     }
 
     private func normalizeStatusBarSelections() {
@@ -1960,12 +1982,6 @@ final class AppViewModel {
         if isClaudeOfficial {
             syncClaudeProfilesCurrentState()
         }
-        defer {
-            if isClaudeOfficial {
-                syncClaudeProfilesCurrentState()
-                triggerClaudeProfileSnapshotPrefetchIfNeeded()
-            }
-        }
         let provider = providerFactory.makeProvider(for: descriptor)
 
         do {
@@ -1980,7 +1996,7 @@ final class AppViewModel {
             } else {
                 snapshot = fetched
             }
-            snapshots[descriptor.id] = snapshot
+            snapshots[descriptor.id] = boundedSnapshot(snapshot)
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
             lastUpdatedAt = Date()
@@ -2001,8 +2017,11 @@ final class AppViewModel {
                 previous.valueFreshness = .cachedFallback
                 previous.updatedAt = Date()
                 previous.diagnosticCode = "rate-limited"
-                previous.note = "\(previous.note) | rate limited, showing cached value"
-                snapshots[descriptor.id] = previous
+                previous.note = RuntimeBoundedState.appendSnapshotNote(
+                    existing: previous.note,
+                    appending: "rate limited, showing cached value"
+                )
+                snapshots[descriptor.id] = boundedSnapshot(previous)
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
@@ -2018,24 +2037,29 @@ final class AppViewModel {
                     previous.valueFreshness = .cachedFallback
                     previous.updatedAt = Date()
                     previous.diagnosticCode = diagnosticCode(for: health)
-                    previous.note = "\(previous.note) | \(error.localizedDescription)"
-                    snapshots[descriptor.id] = previous
+                    previous.note = RuntimeBoundedState.appendSnapshotNote(
+                        existing: previous.note,
+                        appending: error.localizedDescription
+                    )
+                    snapshots[descriptor.id] = boundedSnapshot(previous)
                 } else {
-                    snapshots[descriptor.id] = UsageSnapshot(
-                        source: descriptor.id,
-                        status: .error,
-                        fetchHealth: health,
+                    snapshots[descriptor.id] = boundedSnapshot(
+                        UsageSnapshot(
+                            source: descriptor.id,
+                            status: .error,
+                            fetchHealth: health,
                         valueFreshness: .empty,
                         remaining: nil,
                         used: nil,
                         limit: nil,
                         unit: descriptor.relayViewConfig?.accountBalance?.unit ?? "quota",
                         updatedAt: Date(),
-                        note: error.localizedDescription,
-                        sourceLabel: "Third-Party",
-                        accountLabel: nil,
-                        authSourceLabel: nil,
-                        diagnosticCode: diagnosticCode(for: health)
+                            note: error.localizedDescription,
+                            sourceLabel: "Third-Party",
+                            accountLabel: nil,
+                            authSourceLabel: nil,
+                            diagnosticCode: diagnosticCode(for: health)
+                        )
                     )
                 }
             }
@@ -2255,6 +2279,12 @@ final class AppViewModel {
     private func nonEmptyOrDefault(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    private func boundedSnapshot(_ snapshot: UsageSnapshot) -> UsageSnapshot {
+        var copy = snapshot
+        copy.note = RuntimeBoundedState.boundedSnapshotNote(copy.note)
+        return copy
     }
 
     private func markCodexSnapshotActive(
@@ -2625,11 +2655,34 @@ final class AppViewModel {
         return copy
     }
 
-    private func syncClaudeProfilesCurrentState() {
+    private func bootstrapClaudeProfileState() {
+        if !didRunClaudeAutoCaptureCompaction {
+            didRunClaudeAutoCaptureCompaction = true
+            let compactionResult = claudeProfileStore.compactAutoCapturedProfiles(
+                defaultConfigDir: claudeDesktopAuthService.currentSystemConfigDirectory(),
+                currentFingerprint: claudeDesktopAuthService.currentCredentialFingerprint()
+            )
+            claudeProfiles = compactionResult.profiles
+            removeClaudeSlotState(slotIDs: compactionResult.removedSlotIDs)
+        }
+        syncClaudeProfilesCurrentState(triggerPrefetchOnChange: true)
+    }
+
+    private func syncClaudeProfilesCurrentState(triggerPrefetchOnChange: Bool = true) {
+        let previousProfileSetIdentity = claudeProfileSetIdentity(claudeProfiles)
         claudeProfiles = claudeProfileStore.captureCurrentCredentialsIfNeeded(
             credentialsJSON: claudeDesktopAuthService.currentCredentialsJSON(),
             defaultConfigDir: claudeDesktopAuthService.currentSystemConfigDirectory()
         )
+
+        let visibleSlotIDs = Set(claudeProfiles.map(\.slotID))
+        claudePrefetchAttemptedIdentity = claudePrefetchAttemptedIdentity.filter { visibleSlotIDs.contains($0.key) }
+        claudePrefetchInFlightSlots = claudePrefetchInFlightSlots.intersection(visibleSlotIDs)
+
+        if triggerPrefetchOnChange,
+           previousProfileSetIdentity != claudeProfileSetIdentity(claudeProfiles) {
+            triggerClaudeProfileSnapshotPrefetchIfNeeded()
+        }
     }
 
     private func claudeMenuTitle(for slotID: CodexSlotID) -> String {
@@ -2651,25 +2704,29 @@ final class AppViewModel {
             }
             .first?.slotID
         let activeRuntimeSlotIDs = Set(claudeSlots.filter(\.isActive).map(\.slotID))
+        let schedulingBudget = max(
+            0,
+            RuntimeDiagnosticsLimits.claudePrefetchMaxConcurrent - claudePrefetchInFlightSlots.count
+        )
+        let candidates = ClaudePrefetchPlanner.selectCandidates(
+            profiles: claudeProfiles,
+            preferredActiveSlotID: preferredActiveSlotID,
+            activeRuntimeSlotIDs: activeRuntimeSlotIDs,
+            inFlightSlots: claudePrefetchInFlightSlots,
+            attemptedIdentity: claudePrefetchAttemptedIdentity,
+            maxNewTasks: schedulingBudget
+        )
+        guard !candidates.isEmpty else {
+            return
+        }
+        let profilesBySlotID = Dictionary(uniqueKeysWithValues: claudeProfiles.map { ($0.slotID, $0) })
 
-        for profile in claudeProfiles {
-            let isActiveProfile: Bool
-            if let preferredActiveSlotID {
-                isActiveProfile = profile.slotID == preferredActiveSlotID
-            } else {
-                isActiveProfile = activeRuntimeSlotIDs.contains(profile.slotID)
-            }
-            if isActiveProfile {
+        for candidate in candidates {
+            guard let profile = profilesBySlotID[candidate.slotID] else {
                 continue
             }
-            if claudePrefetchInFlightSlots.contains(profile.slotID) {
-                continue
-            }
-            let identityKey = profile.credentialFingerprint?.lowercased()
-                ?? profile.accountEmail?.lowercased()
-                ?? profile.slotID.rawValue.lowercased()
-            claudePrefetchAttemptedIdentity[profile.slotID] = identityKey
-            claudePrefetchInFlightSlots.insert(profile.slotID)
+            claudePrefetchAttemptedIdentity[candidate.slotID] = candidate.identityKey
+            claudePrefetchInFlightSlots.insert(candidate.slotID)
 
             Task { [weak self] in
                 guard let self else { return }
@@ -2687,13 +2744,15 @@ final class AppViewModel {
                         slotID: profile.slotID,
                         credentialsJSON: refreshed
                     )
-                    self.syncClaudeProfilesCurrentState()
+                    self.syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
                 }
 
-                let snapshot = self.markClaudeSnapshotActive(
-                    result.snapshot,
-                    preferredSlotID: profile.slotID,
-                    isActive: false
+                let snapshot = self.boundedSnapshot(
+                    self.markClaudeSnapshotActive(
+                        result.snapshot,
+                        preferredSlotID: profile.slotID,
+                        isActive: false
+                    )
                 )
                 self.claudeSlots = self.claudeSlotStore.upsertInactive(
                     snapshot: snapshot,
@@ -2701,6 +2760,25 @@ final class AppViewModel {
                 )
             }
         }
+    }
+
+    private func removeClaudeSlotState(slotIDs: [CodexSlotID]) {
+        guard !slotIDs.isEmpty else { return }
+        let uniqueSlotIDs = Array(Set(slotIDs)).sorted()
+        for slotID in uniqueSlotIDs {
+            claudeSlots = claudeSlotStore.remove(slotID: slotID)
+            claudePrefetchAttemptedIdentity.removeValue(forKey: slotID)
+            claudePrefetchInFlightSlots.remove(slotID)
+            claudeSwitchFeedback.removeValue(forKey: slotID)
+        }
+    }
+
+    private func claudeProfileSetIdentity(_ profiles: [ClaudeAccountProfile]) -> [String] {
+        profiles
+            .map { profile in
+                "\(profile.slotID.rawValue)|\(ClaudePrefetchPlanner.identityKey(for: profile))"
+            }
+            .sorted()
     }
 
     private func mergedClaudeSlotsForMenu() -> [ClaudeAccountSlot] {

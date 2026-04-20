@@ -203,6 +203,93 @@ final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.latestClaudeCompletionAt(), try fixedDate("2026-04-20T10:06:00Z"))
     }
 
+    func testClaudeSignalRespectsMaxTrackedFilesByModificationTime() throws {
+        let projectsRoot = temporaryDirectory.appendingPathComponent("projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
+
+        try writeJSONL(
+            root: projectsRoot,
+            relativePath: "workspace-a/session-a.jsonl",
+            lines: [
+                jsonLine([
+                    "type": "assistant",
+                    "timestamp": "2026-04-20T10:10:00Z",
+                    "message": [
+                        "id": "m-old",
+                        "usage": [
+                            "input_tokens": 10,
+                            "output_tokens": 5
+                        ]
+                    ]
+                ])
+            ]
+        )
+        try writeJSONL(
+            root: projectsRoot,
+            relativePath: "workspace-b/session-b.jsonl",
+            lines: [
+                jsonLine([
+                    "type": "assistant",
+                    "timestamp": "2026-04-20T10:00:00Z",
+                    "message": [
+                        "id": "m-new",
+                        "usage": [
+                            "input_tokens": 2,
+                            "output_tokens": 1
+                        ]
+                    ]
+                ])
+            ]
+        )
+
+        let olderFile = projectsRoot.appendingPathComponent("workspace-a/session-a.jsonl")
+        let newerFile = projectsRoot.appendingPathComponent("workspace-b/session-b.jsonl")
+        try setModificationDate(try fixedDate("2026-04-20T10:01:00Z"), forFile: olderFile.path)
+        try setModificationDate(try fixedDate("2026-04-20T10:02:00Z"), forFile: newerFile.path)
+
+        let monitor = LocalSessionCompletionSignalMonitor(
+            codexLogsPath: temporaryDirectory.appendingPathComponent("missing.sqlite").path,
+            claudeProjectsRoot: projectsRoot.path,
+            claudeRecentFileWindow: 30 * 24 * 60 * 60,
+            claudeMaxTrackedFiles: 1
+        )
+
+        XCTAssertEqual(monitor.latestClaudeCompletionAt(), try fixedDate("2026-04-20T10:00:00Z"))
+    }
+
+    func testClaudeSignalSkipsOversizedJSONLLineAndContinuesParsing() throws {
+        let projectsRoot = temporaryDirectory.appendingPathComponent("projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
+
+        let oversizedLine = String(repeating: "x", count: RuntimeDiagnosticsLimits.jsonlMaxLineBytes + 8_192)
+        try writeJSONL(
+            root: projectsRoot,
+            relativePath: "workspace-c/session-c.jsonl",
+            lines: [
+                oversizedLine,
+                jsonLine([
+                    "type": "assistant",
+                    "timestamp": "2026-04-20T10:12:00Z",
+                    "message": [
+                        "id": "m-valid",
+                        "usage": [
+                            "input_tokens": 4,
+                            "output_tokens": 3
+                        ]
+                    ]
+                ])
+            ]
+        )
+
+        let monitor = LocalSessionCompletionSignalMonitor(
+            codexLogsPath: temporaryDirectory.appendingPathComponent("missing.sqlite").path,
+            claudeProjectsRoot: projectsRoot.path,
+            claudeRecentFileWindow: 30 * 24 * 60 * 60
+        )
+
+        XCTAssertEqual(monitor.latestClaudeCompletionAt(), try fixedDate("2026-04-20T10:12:00Z"))
+    }
+
     private func createLogsTable(at path: String) throws {
         let sql = "CREATE TABLE IF NOT EXISTS logs (ts REAL, feedback_log_body TEXT);"
         try runSQLite(databasePath: path, sql: sql)
@@ -233,6 +320,10 @@ final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let payload = lines.joined(separator: "\n") + "\n"
         try payload.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    private func setModificationDate(_ date: Date, forFile path: String) throws {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
     }
 
     private func jsonLine(_ payload: [String: Any]) -> String {

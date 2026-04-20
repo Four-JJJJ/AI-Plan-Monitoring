@@ -23,6 +23,7 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
     private let claudeProjectsRoot: String
     private let claudeRecentFileWindow: TimeInterval
     private let claudeEnumerationInterval: TimeInterval
+    private let claudeMaxTrackedFiles: Int
     private var claudeFileStates: [String: ClaudeFileState] = [:]
     private var lastCodexLogsModifiedAtRef: TimeInterval?
     private var cachedCodexLatestCompletionAt: Date?
@@ -35,6 +36,7 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
         claudeProjectsRoot: String? = nil,
         claudeRecentFileWindow: TimeInterval = 3 * 24 * 60 * 60,
         claudeEnumerationInterval: TimeInterval = 60,
+        claudeMaxTrackedFiles: Int = RuntimeDiagnosticsLimits.claudeSignalMaxTrackedFiles,
         nowProvider: @escaping () -> Date = Date.init
     ) {
         self.fileManager = fileManager
@@ -43,6 +45,7 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
         self.claudeProjectsRoot = claudeProjectsRoot ?? "\(NSHomeDirectory())/.claude/projects"
         self.claudeRecentFileWindow = max(60, claudeRecentFileWindow)
         self.claudeEnumerationInterval = max(5, claudeEnumerationInterval)
+        self.claudeMaxTrackedFiles = max(1, claudeMaxTrackedFiles)
     }
 
     func latestCodexCompletionAt() -> Date? {
@@ -141,7 +144,6 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             return cachedClaudeLatestCompletionAt
         }
 
-        var visiblePaths: Set<String> = []
         var candidates: [ClaudeCandidateFile] = []
         candidates.reserveCapacity(128)
 
@@ -157,7 +159,6 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             }
 
             let path = fileURL.path
-            visiblePaths.insert(path)
             candidates.append(
                 ClaudeCandidateFile(
                     path: path,
@@ -166,7 +167,17 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             )
         }
 
-        for candidate in candidates {
+        let trackedCandidates = candidates
+            .sorted { lhs, rhs in
+                if lhs.modifiedAtRef != rhs.modifiedAtRef {
+                    return lhs.modifiedAtRef > rhs.modifiedAtRef
+                }
+                return lhs.path < rhs.path
+            }
+            .prefix(claudeMaxTrackedFiles)
+        let visiblePaths = Set(trackedCandidates.map(\.path))
+
+        for candidate in trackedCandidates {
             if let cached = claudeFileStates[candidate.path],
                cached.modifiedAtRef == candidate.modifiedAtRef {
                 continue
@@ -222,7 +233,7 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
 
     private static func scanJSONLLines(
         atPath path: String,
-        maxLineBytes: Int = 512 * 1024,
+        maxLineBytes: Int = RuntimeDiagnosticsLimits.jsonlMaxLineBytes,
         onLine: (String) -> Void
     ) {
         guard let handle = FileHandle(forReadingAtPath: path) else {
@@ -234,6 +245,7 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
 
         let newline = Data([0x0A])
         var buffer = Data()
+        var droppingOversizedLine = false
 
         while true {
             let chunk = try? handle.read(upToCount: 64 * 1024)
@@ -241,7 +253,8 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
                 break
             }
             if chunk.isEmpty {
-                if !buffer.isEmpty,
+                if !droppingOversizedLine,
+                   !buffer.isEmpty,
                    buffer.count <= maxLineBytes,
                    let line = String(data: buffer, encoding: .utf8) {
                     onLine(line)
@@ -249,7 +262,16 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
                 break
             }
 
-            buffer.append(chunk)
+            if droppingOversizedLine {
+                guard let range = chunk.range(of: newline) else {
+                    continue
+                }
+                droppingOversizedLine = false
+                buffer = Data(chunk.suffix(from: range.upperBound))
+            } else {
+                buffer.append(chunk)
+            }
+
             while let range = buffer.range(of: newline) {
                 let lineData = buffer.subdata(in: 0..<range.lowerBound)
                 buffer.removeSubrange(0..<range.upperBound)
@@ -260,6 +282,11 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
                     continue
                 }
                 onLine(line)
+            }
+
+            if buffer.count > maxLineBytes {
+                buffer.removeAll(keepingCapacity: false)
+                droppingOversizedLine = true
             }
         }
     }

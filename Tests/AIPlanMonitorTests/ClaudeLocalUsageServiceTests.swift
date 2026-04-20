@@ -177,6 +177,41 @@ final class ClaudeLocalUsageServiceTests: XCTestCase {
         XCTAssertEqual(fallbackSummary.today.responses, 1)
     }
 
+    func testFetchSummarySkipsOversizedLineAndKeepsFollowingEvents() throws {
+        let now = try fixedDate("2026-04-18T12:00:00Z")
+        let oversizedLine = String(repeating: "x", count: RuntimeDiagnosticsLimits.jsonlMaxLineBytes + 16_384)
+        try writeProjectFile(
+            root: defaultProjectsRoot,
+            relativePath: "workspace-oversized/session.jsonl",
+            lines: [
+                oversizedLine,
+                assistantLine(
+                    timestamp: "2026-04-18T10:30:00Z",
+                    sessionID: "oversized-session",
+                    uuid: "oversized-line-ok",
+                    messageID: "oversized-msg-1",
+                    model: "claude-sonnet-4-6",
+                    input: 6,
+                    output: 4,
+                    cacheCreation: 1,
+                    cacheRead: 1
+                )
+            ]
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = ClaudeLocalUsageService(
+            calendar: calendar,
+            nowProvider: { now },
+            defaultClaudeRootPath: defaultProjectsRoot.path
+        )
+
+        let summary = try service.fetchSummary(scope: .allAccounts)
+        XCTAssertEqual(summary.today.totalTokens, 12)
+        XCTAssertEqual(summary.today.responses, 1)
+    }
+
     private func writeProjectFile(root: URL, relativePath: String, lines: [String]) throws {
         let fileURL = root.appendingPathComponent(relativePath)
         try FileManager.default.createDirectory(

@@ -183,6 +183,91 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profiles.first(where: \.isCurrentSystemAccount)?.slotID.rawValue, "C")
     }
 
+    func testCaptureCurrentCredentialsSameAccountDifferentAccessTokenDoesNotCreateNewProfile() throws {
+        let store = makeStore()
+        let configDir = makeConfigDirectory(
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-same",
+                email: "same@example.com",
+                accessToken: "access-token-v1"
+            )
+        )
+
+        let firstProfiles = store.captureCurrentCredentialsIfNeeded(
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-same",
+                email: "same@example.com",
+                accessToken: "access-token-v1"
+            ),
+            defaultConfigDir: configDir
+        )
+        XCTAssertEqual(firstProfiles.count, 1)
+
+        let secondJSON = sampleCredentialsJSON(
+            accountID: "acc-same",
+            email: "same@example.com",
+            accessToken: "access-token-v2"
+        )
+        let secondProfiles = store.captureCurrentCredentialsIfNeeded(
+            credentialsJSON: secondJSON,
+            defaultConfigDir: configDir
+        )
+
+        XCTAssertEqual(secondProfiles.count, 1)
+        XCTAssertEqual(secondProfiles.first?.slotID, firstProfiles.first?.slotID)
+        XCTAssertEqual(secondProfiles.first?.accountId, "acc-same")
+        XCTAssertEqual(
+            secondProfiles.first?.credentialFingerprint,
+            try ClaudeAccountProfileStore.parseCredentialsJSON(secondJSON).credentialFingerprint
+        )
+    }
+
+    func testCompactAutoCapturedProfilesMergesSameAccountAndReturnsRemovedSlots() throws {
+        let store = makeStore()
+        let credentialsA = sampleCredentialsJSON(
+            accountID: "acc-compact",
+            email: "compact@example.com",
+            accessToken: "compact-token-a"
+        )
+        let credentialsB = sampleCredentialsJSON(
+            accountID: "acc-compact",
+            email: "compact@example.com",
+            accessToken: "compact-token-b"
+        )
+        let configDirA = makeConfigDirectory(credentialsJSON: credentialsA)
+        let configDirB = makeConfigDirectory(credentialsJSON: credentialsB)
+        let fingerprintB = try ClaudeAccountProfileStore.parseCredentialsJSON(credentialsB).credentialFingerprint
+
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "A",
+            source: .configDir,
+            configDir: configDirA,
+            credentialsJSON: nil,
+            currentFingerprint: nil
+        )
+        _ = try store.saveProfile(
+            slotID: .b,
+            displayName: "B",
+            source: .configDir,
+            configDir: configDirB,
+            credentialsJSON: nil,
+            currentFingerprint: nil
+        )
+
+        let result = store.compactAutoCapturedProfiles(
+            defaultConfigDir: configDirA,
+            currentFingerprint: fingerprintB
+        )
+
+        XCTAssertTrue(result.didCompact)
+        XCTAssertEqual(result.profiles.count, 1)
+        XCTAssertEqual(result.profiles.first?.slotID, .b)
+        XCTAssertEqual(result.profiles.first?.accountId, "acc-compact")
+        XCTAssertEqual(result.removedSlotIDs, [.a])
+        XCTAssertTrue(result.profiles.first?.isCurrentSystemAccount == true)
+    }
+
     func testRemovedCurrentFingerprintIsNotAutoCapturedAgainImmediately() throws {
         let store = makeStore()
         let credentialsJSON = sampleCredentialsJSON(
