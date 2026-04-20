@@ -7238,7 +7238,7 @@ struct SettingsView: View {
         vm.setLanguage(.zhHans)
         return vm
     }())
-    .frame(width: 800, height: 671)
+    .frame(width: 960, height: 670)
     .preferredColorScheme(.dark)
 }
 

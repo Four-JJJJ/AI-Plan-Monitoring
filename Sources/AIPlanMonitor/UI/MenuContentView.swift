@@ -48,7 +48,7 @@ struct MenuContentView: View {
             header
             cards
         }
-        .frame(width: 316)
+        .frame(width: 360)
         .padding(.top, 14)
         .padding(.bottom, 8)
         .padding(.horizontal, 8)
