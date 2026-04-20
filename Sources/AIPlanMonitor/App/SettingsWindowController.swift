@@ -13,7 +13,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(viewModel: AppViewModel) {
-        let targetContentSize = NSSize(width: 960, height: 671)
+        let targetContentSize = NSSize(width: 960, height: 670)
         if window == nil {
             // 窗口基础尺寸：对应设置页整体画布宽高（与 Figma 画板尺寸对齐）。
             let panel = NSWindow(
@@ -48,7 +48,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            // 固定“内容区”为 960x671（min/max 需使用 frameRect 尺寸）。
+            // 固定“内容区”为 960x670（min/max 需使用 frameRect 尺寸）。
             let fixedFrameSize = panel.frameRect(
                 forContentRect: NSRect(origin: .zero, size: targetContentSize)
             ).size
