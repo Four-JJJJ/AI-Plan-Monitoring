@@ -664,6 +664,9 @@ extension ProviderDescriptor {
                 } else {
                     relay.adapterID = originalAdapterID ?? manifest.id
                 }
+                if relay.adapterID == "generic-newapi" {
+                    relay.manualOverrides = Self.migrateGenericNewAPIDefaultOverride(relay.manualOverrides)
+                }
                 relay.balanceAuth = relay.balanceAuth.withFallback(
                     service: copy.auth.keychainService ?? KeychainService.defaultServiceName,
                     account: Self.defaultRelayBalanceAccount(
@@ -1043,20 +1046,66 @@ extension ProviderDescriptor {
         let accountLabel = normalized(override.accountLabelExpression)
         let staticHeadersEmpty = override.staticHeaders?.isEmpty ?? true
 
+        let isRemainingDefault = remaining.isEmpty || remaining == "data.quota" || remaining == "div(data.quota,50000)"
+        let isUsedDefault = used.isEmpty || used == "data.used_quota" || used == "div(data.used_quota,50000)"
+        let isLimitDefault = limit.isEmpty || limit == "data.request_quota" || limit == "add(data.quota,data.used_quota)" || limit == "div(add(data.quota,data.used_quota),50000)"
+        let isUnitDefault = unit.isEmpty || unit == "quota" || unit == "usd"
+
         return (method.isEmpty || method == "get") &&
             (authHeader.isEmpty || authHeader == "authorization") &&
             (authScheme.isEmpty || authScheme == "bearer") &&
             (endpoint.isEmpty || endpoint == "/api/user/self") &&
-            (remaining.isEmpty || remaining == "data.quota") &&
-            (used.isEmpty || used == "data.used_quota") &&
-            (limit.isEmpty || limit == "data.request_quota") &&
+            isRemainingDefault &&
+            isUsedDefault &&
+            isLimitDefault &&
             (success.isEmpty || success == "success") &&
-            (unit.isEmpty || unit == "quota") &&
+            isUnitDefault &&
             (userIDHeader.isEmpty || userIDHeader == "new-api-user") &&
             userID.isEmpty &&
             body.isEmpty &&
             accountLabel.isEmpty &&
             staticHeadersEmpty
+    }
+
+    private static func migrateGenericNewAPIDefaultOverride(_ override: RelayManualOverride?) -> RelayManualOverride? {
+        guard var override else { return nil }
+
+        func normalized(_ value: String?) -> String {
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        }
+
+        let method = normalized(override.requestMethod)
+        let authHeader = normalized(override.authHeader)
+        let authScheme = normalized(override.authScheme)
+        let endpoint = normalized(override.endpointPath)
+        let success = normalized(override.successExpression)
+        let userIDHeader = normalized(override.userIDHeader)
+        let remaining = normalized(override.remainingExpression)
+        let used = normalized(override.usedExpression)
+        let limit = normalized(override.limitExpression)
+        let unit = normalized(override.unitExpression)
+        let staticHeadersEmpty = override.staticHeaders?.isEmpty ?? true
+
+        let matchesLegacyGenericNewAPI =
+            (method.isEmpty || method == "get") &&
+            (authHeader.isEmpty || authHeader == "authorization") &&
+            (authScheme.isEmpty || authScheme == "bearer") &&
+            (endpoint.isEmpty || endpoint == "/api/user/self") &&
+            (success.isEmpty || success == "success") &&
+            (userIDHeader.isEmpty || userIDHeader == "new-api-user") &&
+            staticHeadersEmpty &&
+            (remaining.isEmpty || remaining == "data.quota") &&
+            (used.isEmpty || used == "data.used_quota") &&
+            (limit.isEmpty || limit == "data.request_quota" || limit == "add(data.quota,data.used_quota)") &&
+            (unit.isEmpty || unit == "usd" || unit == "quota")
+
+        guard matchesLegacyGenericNewAPI else { return override }
+
+        override.remainingExpression = "div(data.quota,50000)"
+        override.usedExpression = "div(data.used_quota,50000)"
+        override.limitExpression = "div(add(data.quota,data.used_quota),50000)"
+        override.unitExpression = "USD"
+        return override
     }
 
     var relayManifest: RelayAdapterManifest? {

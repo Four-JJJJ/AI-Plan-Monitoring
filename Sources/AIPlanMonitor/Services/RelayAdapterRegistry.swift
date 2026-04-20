@@ -159,18 +159,18 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         match: RelayAdapterMatch(
             hostPatterns: ["*"],
             defaultDisplayName: "Generic New API",
-            defaultTokenChannelEnabled: true,
-            defaultBalanceChannelEnabled: false
+            defaultTokenChannelEnabled: false,
+            defaultBalanceChannelEnabled: true
         ),
         setup: RelaySetupManifest(
-            requiredInputs: [.displayName, .baseURL, .quotaAuth],
-            quotaAuthHint: .init(
-                zhHans: "填写站点提供的 API Key 或 sk- Token，支持直接粘贴 `sk-...` 或 `Bearer sk-...`。",
-                en: "Enter the site's API key or sk token. Both `sk-...` and `Bearer sk-...` are accepted."
-            ),
+            requiredInputs: [.displayName, .baseURL, .balanceAuth, .userID],
             balanceAuthHint: .init(
-                zhHans: "如果站点余额接口需要单独认证，可以把后台 access token 或完整 Cookie 填在这里。",
-                en: "If the balance endpoint uses separate auth, paste the dashboard access token or full Cookie here."
+                zhHans: "填写后台 Access Token，支持直接粘贴 `Bearer ...` 或纯 token。",
+                en: "Enter the dashboard access token. Both `Bearer ...` and the raw token are accepted."
+            ),
+            userIDHint: .init(
+                zhHans: "填写请求头 `New-Api-User` 对应的 userId。",
+                en: "Enter the userId used for the `New-Api-User` request header."
             )
         ),
         authStrategies: [
@@ -192,10 +192,11 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         tokenRequest: RelayTokenRequestManifest(),
         extract: RelayExtractManifest(
             success: "success",
-            remaining: "data.quota",
-            used: "data.used_quota",
-            limit: "data.request_quota",
-            unit: "quota"
+            remaining: "div(data.quota,50000)",
+            used: "div(data.used_quota,50000)",
+            limit: "div(add(data.quota,data.used_quota),50000)",
+            unit: "USD",
+            accountLabel: "coalesce(data.group,\"默认套餐\")"
         ),
         postprocessID: nil
     )

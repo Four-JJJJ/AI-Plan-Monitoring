@@ -5590,17 +5590,27 @@ struct SettingsView: View {
         let quotaFieldTitle = relayCredentialFieldName(isAccount: false, templateKind: quotaCredentialTemplate.kind)
         let balanceFieldTitle = relayCredentialFieldName(isAccount: true, templateKind: balanceCredentialTemplate.kind)
         let quotaPlaceholder = quotaCredentialTemplate.placeholder
-        let balancePlaceholder = balanceCredentialTemplate.placeholder
+        let balancePlaceholder: String = {
+            if selectedTemplate.id == "generic-newapi", viewModel.language == .zhHans {
+                return "粘帖Access Token"
+            }
+            return balanceCredentialTemplate.placeholder
+        }()
         let quotaHintLines = relayCredentialHintLines(
             for: provider,
             template: quotaCredentialTemplate,
             setupHint: relaySetupHint(for: selectedTemplate, field: .quotaAuth)
         )
-        let balanceHintLines = relayCredentialHintLines(
-            for: provider,
-            template: balanceCredentialTemplate,
-            setupHint: relaySetupHint(for: selectedTemplate, field: .balanceAuth)
-        )
+        let balanceHintLines: [String] = {
+            if selectedTemplate.id == "generic-newapi", viewModel.language == .zhHans {
+                return ["这里填写Access Token通过个人设置-安全设置-系统访问令牌, 生成令牌"]
+            }
+            return relayCredentialHintLines(
+                for: provider,
+                template: balanceCredentialTemplate,
+                setupHint: relaySetupHint(for: selectedTemplate, field: .balanceAuth)
+            )
+        }()
         let credentialModeBinding = Binding<RelayCredentialMode>(
             get: {
                 relayCredentialModeInputs[provider.id]
