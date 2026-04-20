@@ -42,6 +42,67 @@ final class AppConfigTests: XCTestCase {
         )
     }
 
+    func testDecodeOfficialConfigDefaultsPlanTypeDisplayEnabled() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "providers":[
+            {
+              "id":"codex-official",
+              "name":"Official Codex",
+              "family":"official",
+              "type":"codex",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://chatgpt.com",
+              "officialConfig":{
+                "sourceMode":"auto",
+                "webMode":"autoImport",
+                "manualCookieAccount":"official/codex/cookie-header",
+                "autoDiscoveryEnabled":true,
+                "quotaDisplayMode":"remaining"
+              }
+            }
+          ]
+        }
+        """#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(config.providers.first?.officialConfig?.showPlanTypeInMenuBar, true)
+    }
+
+    func testDecodeOfficialConfigPlanTypeDisplayWhenPresent() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "providers":[
+            {
+              "id":"codex-official",
+              "name":"Official Codex",
+              "family":"official",
+              "type":"codex",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://chatgpt.com",
+              "officialConfig":{
+                "sourceMode":"auto",
+                "webMode":"autoImport",
+                "manualCookieAccount":"official/codex/cookie-header",
+                "autoDiscoveryEnabled":true,
+                "quotaDisplayMode":"remaining",
+                "showPlanTypeInMenuBar":false
+              }
+            }
+          ]
+        }
+        """#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(config.providers.first?.officialConfig?.showPlanTypeInMenuBar, false)
+    }
+
     func testDecodeMissingStatusBarProviderFallsBackToDefault() throws {
         let json = #"""
         {
@@ -129,5 +190,49 @@ final class AppConfigTests: XCTestCase {
         """#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         XCTAssertEqual(config.statusBarDisplayStyle, .barNamePercent)
+    }
+
+    func testMigrationPromotesLegacyDefaultPollIntervalForCodexAndClaude() {
+        var codex = ProviderDescriptor.defaultOfficialCodex()
+        codex.pollIntervalSec = 60
+        var claude = ProviderDescriptor.defaultOfficialClaude()
+        claude.pollIntervalSec = 60
+
+        let config = AppConfig(language: .zhHans, providers: [codex, claude])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertEqual(
+            migrated.providers.first(where: { $0.id == "codex-official" })?.pollIntervalSec,
+            120
+        )
+        XCTAssertEqual(
+            migrated.providers.first(where: { $0.id == "claude-official" })?.pollIntervalSec,
+            120
+        )
+    }
+
+    func testMigrationDoesNotRewriteCustomOrNonTargetPollIntervals() {
+        var codex = ProviderDescriptor.defaultOfficialCodex()
+        codex.pollIntervalSec = 90
+        var claude = ProviderDescriptor.defaultOfficialClaude()
+        claude.pollIntervalSec = 180
+        var gemini = ProviderDescriptor.defaultOfficialGemini()
+        gemini.pollIntervalSec = 60
+
+        let config = AppConfig(language: .zhHans, providers: [codex, claude, gemini])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertEqual(
+            migrated.providers.first(where: { $0.id == "codex-official" })?.pollIntervalSec,
+            90
+        )
+        XCTAssertEqual(
+            migrated.providers.first(where: { $0.id == "claude-official" })?.pollIntervalSec,
+            180
+        )
+        XCTAssertEqual(
+            migrated.providers.first(where: { $0.id == "gemini-official" })?.pollIntervalSec,
+            60
+        )
     }
 }

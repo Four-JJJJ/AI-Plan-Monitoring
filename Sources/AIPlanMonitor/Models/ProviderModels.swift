@@ -86,19 +86,22 @@ struct OfficialProviderConfig: Codable, Equatable {
     var manualCookieAccount: String?
     var autoDiscoveryEnabled: Bool
     var quotaDisplayMode: OfficialQuotaDisplayMode
+    var showPlanTypeInMenuBar: Bool
 
     init(
         sourceMode: OfficialSourceMode = .auto,
         webMode: OfficialWebMode = .disabled,
         manualCookieAccount: String? = nil,
         autoDiscoveryEnabled: Bool = true,
-        quotaDisplayMode: OfficialQuotaDisplayMode = .remaining
+        quotaDisplayMode: OfficialQuotaDisplayMode = .remaining,
+        showPlanTypeInMenuBar: Bool = true
     ) {
         self.sourceMode = sourceMode
         self.webMode = webMode
         self.manualCookieAccount = manualCookieAccount
         self.autoDiscoveryEnabled = autoDiscoveryEnabled
         self.quotaDisplayMode = quotaDisplayMode
+        self.showPlanTypeInMenuBar = showPlanTypeInMenuBar
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -107,6 +110,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         case manualCookieAccount
         case autoDiscoveryEnabled
         case quotaDisplayMode
+        case showPlanTypeInMenuBar
     }
 
     init(from decoder: Decoder) throws {
@@ -116,6 +120,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.manualCookieAccount = try container.decodeIfPresent(String.self, forKey: .manualCookieAccount)
         self.autoDiscoveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoDiscoveryEnabled) ?? true
         self.quotaDisplayMode = try container.decodeIfPresent(OfficialQuotaDisplayMode.self, forKey: .quotaDisplayMode) ?? .remaining
+        self.showPlanTypeInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showPlanTypeInMenuBar) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -125,6 +130,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         try container.encodeIfPresent(manualCookieAccount, forKey: .manualCookieAccount)
         try container.encode(autoDiscoveryEnabled, forKey: .autoDiscoveryEnabled)
         try container.encode(quotaDisplayMode, forKey: .quotaDisplayMode)
+        try container.encode(showPlanTypeInMenuBar, forKey: .showPlanTypeInMenuBar)
     }
 }
 
@@ -686,6 +692,7 @@ extension ProviderDescriptor {
         case .kimi:
             if copy.family == .official || copy.id == "kimi-official" {
                 copy.family = .official
+                copy.name = "Kimi Coding"
                 if copy.officialConfig == nil {
                     copy.officialConfig = Self.defaultOfficialConfig(type: .kimi)
                 } else if copy.officialConfig?.manualCookieAccount?.isEmpty ?? true {
@@ -1103,7 +1110,7 @@ extension ProviderDescriptor {
             family: .official,
             type: .codex,
             enabled: false,
-            pollIntervalSec: 60,
+            pollIntervalSec: 120,
             threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
             auth: AuthConfig(kind: .localCodex),
             baseURL: "https://chatgpt.com",
@@ -1118,7 +1125,7 @@ extension ProviderDescriptor {
             family: .official,
             type: .claude,
             enabled: false,
-            pollIntervalSec: 60,
+            pollIntervalSec: 120,
             threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
             auth: .none,
             baseURL: "https://claude.ai",
@@ -1249,7 +1256,7 @@ extension ProviderDescriptor {
     static func defaultOfficialKimi() -> ProviderDescriptor {
         ProviderDescriptor(
             id: "kimi-official",
-            name: "Official Kimi",
+            name: "Kimi Coding",
             family: .official,
             type: .kimi,
             enabled: false,
@@ -1461,6 +1468,17 @@ extension AppConfig {
                 migrated.providers[idx] = migrated.providers[idx].migratedSiteDefaults(from: defaultProvider)
             } else {
                 migrated.providers.append(defaultProvider)
+            }
+        }
+
+        for idx in migrated.providers.indices {
+            let providerID = migrated.providers[idx].id
+            guard providerID == "codex-official" || providerID == "claude-official" else {
+                continue
+            }
+            // Only migrate historical defaults; keep user-custom intervals untouched.
+            if migrated.providers[idx].pollIntervalSec == 60 {
+                migrated.providers[idx].pollIntervalSec = 120
             }
         }
 

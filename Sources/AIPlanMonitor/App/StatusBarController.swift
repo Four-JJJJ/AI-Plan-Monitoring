@@ -223,7 +223,7 @@ final class StatusBarController: NSObject {
 
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshStatusDisplay()
             }
@@ -295,7 +295,7 @@ final class StatusBarController: NSObject {
         case .windsurf:
             return "Windsurf"
         case .kimi:
-            return "Kimi"
+            return provider.family == .official ? "Kimi Coding" : "Kimi"
         case .relay, .open, .dragon:
             let trimmed = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "API" : trimmed

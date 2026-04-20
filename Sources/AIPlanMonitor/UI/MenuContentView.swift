@@ -506,7 +506,12 @@ struct MenuContentView: View {
     }
 
     private func monitorPlanType(for provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
-        PlanTypeDisplayFormatter.resolvedPlanType(
+        guard provider.family == .official else { return nil }
+        let showsPlanType = provider.officialConfig?.showPlanTypeInMenuBar
+            ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).showPlanTypeInMenuBar
+        guard showsPlanType else { return nil }
+
+        return PlanTypeDisplayFormatter.resolvedPlanType(
             providerType: provider.type,
             extrasPlanType: snapshot?.extras["planType"],
             rawPlanType: snapshot?.rawMeta["planType"]
@@ -770,7 +775,7 @@ struct MenuContentView: View {
         case .windsurf:
             return "Windsurf"
         case .kimi:
-            return "KIMI"
+            return provider.family == .official ? "Kimi Coding" : "KIMI"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -1251,11 +1256,10 @@ private struct PercentageMetricView: View {
                         .monospacedDigit()
                         .foregroundStyle(Color.white.opacity(0.40))
                         .lineSpacing(0)
-                        .frame(minWidth: 42, alignment: .trailing)
                         .fixedSize(horizontal: true, vertical: false)
                         .lineLimit(1)
                 }
-                .frame(minWidth: 54, alignment: .trailing)
+                .frame(alignment: .trailing)
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
                 .frame(height: 10)

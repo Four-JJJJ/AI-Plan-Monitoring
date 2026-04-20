@@ -1355,6 +1355,7 @@ struct SettingsView: View {
             }
             .fixedSize(horizontal: true, vertical: false)
             .frame(height: 20, alignment: .leading)
+            .offset(y: 1)
             .padding(.horizontal, 24)
         }
         .frame(height: statusBarPreviewCardHeight, alignment: .leading)
@@ -2203,6 +2204,11 @@ struct SettingsView: View {
                 providerNameToggleRow(title: officialShowEmailTitle, isOn: Binding(
                     get: { viewModel.showOfficialAccountEmailInMenuBar },
                     set: { viewModel.setShowOfficialAccountEmailInMenuBar($0) }
+                ))
+
+                providerNameToggleRow(title: officialShowPlanTypeTitle, isOn: Binding(
+                    get: { viewModel.showOfficialPlanTypeInMenuBar(providerID: provider.id) },
+                    set: { viewModel.setShowOfficialPlanTypeInMenuBar($0, providerID: provider.id) }
                 ))
 
                 officialConfigSection(provider)
@@ -4528,6 +4534,10 @@ struct SettingsView: View {
         viewModel.language == .zhHans ? "显示邮箱" : "Show Email"
     }
 
+    private var officialShowPlanTypeTitle: String {
+        viewModel.language == .zhHans ? "套餐信息" : "Plan Info"
+    }
+
     private var officialStatusBarTitle: String {
         viewModel.language == .zhHans ? "状态栏显示" : "Status Bar"
     }
@@ -6385,7 +6395,7 @@ struct SettingsView: View {
         case .windsurf:
             return "Windsurf"
         case .kimi:
-            return "Kimi"
+            return provider.family == .official ? "Kimi Coding" : "Kimi"
         case .relay, .open, .dragon:
             return provider.name
         }
