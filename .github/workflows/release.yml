@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: macos-15
+    runs-on: macos-latest
 
     env:
       TAG_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
