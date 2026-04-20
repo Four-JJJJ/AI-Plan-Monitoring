@@ -18,6 +18,7 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "kiro-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "windsurf-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "kimi-official" && $0.family == .official && !$0.enabled }))
+        XCTAssertTrue(migrated.providers.contains(where: { $0.id == "trae-official" && $0.family == .official && !$0.enabled }))
     }
 
     func testLegacyCodexDescriptorNormalizesToOfficialFamily() {

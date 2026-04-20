@@ -259,6 +259,11 @@ final class StatusBarController: NSObject {
             return formattedAmount(remaining)
         }
 
+        if traeDisplaysAmount(provider),
+           let amount = traePrimaryRemainingAmount(snapshot: snapshot) {
+            return TraeValueDisplayFormatter.format(amount, kind: .dollarBalance)
+        }
+
         if let percent = preferredPercent(from: snapshot, provider: provider) {
             return "\(Int(percent.rounded()))%"
         }
@@ -296,6 +301,8 @@ final class StatusBarController: NSObject {
             return "Windsurf"
         case .kimi:
             return provider.family == .official ? "Kimi Coding" : "Kimi"
+        case .trae:
+            return "Trae SOLO"
         case .relay, .open, .dragon:
             let trimmed = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "API" : trimmed
@@ -327,6 +334,12 @@ final class StatusBarController: NSObject {
     }
 
     private func preferredPercent(from snapshot: UsageSnapshot, provider: ProviderDescriptor) -> Double? {
+        if provider.type == .trae,
+           let percent = Self.traePrimaryPercent(
+            snapshot: snapshot
+           ) {
+            return percent
+        }
         if let percent = fiveHourPercent(from: snapshot, displaysUsedQuota: provider.displaysUsedQuota) {
             return percent
         }
@@ -341,6 +354,47 @@ final class StatusBarController: NSObject {
             }
             if let remaining = snapshot.remaining, remaining >= 0, remaining <= 100 {
                 return remaining
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func traePrimaryPercent(snapshot: UsageSnapshot) -> Double? {
+        let primaryWindow = snapshot.quotaWindows.first(where: isTraeDollarWindow) ?? snapshot.quotaWindows.first
+        if let primaryWindow {
+            return primaryWindow.remainingPercent
+        }
+        if snapshot.unit == "%" {
+            if let remaining = snapshot.remaining,
+               remaining >= 0, remaining <= 100 {
+                return remaining
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func isTraeDollarWindow(_ window: UsageQuotaWindow) -> Bool {
+        let identifier = window.id.lowercased()
+        let title = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return identifier.contains("dollar")
+            || title.contains("dollar")
+            || title.contains("美元")
+    }
+
+    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
+        provider.family == .official
+            && provider.type == .trae
+            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
+    }
+
+    private func traePrimaryRemainingAmount(snapshot: UsageSnapshot) -> Double? {
+        if let raw = snapshot.extras["dollarRemaining"], let value = Double(raw) {
+            return value
+        }
+        if let window = snapshot.quotaWindows.first {
+            let percent = max(0, min(100, window.remainingPercent))
+            if let raw = snapshot.extras["dollarLimit"], let limit = Double(raw) {
+                return max(0, limit * percent / 100)
             }
         }
         return nil
@@ -388,7 +442,7 @@ final class StatusBarController: NSObject {
             let fallback = NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: "Kimi")
             fallback?.isTemplate = true
             return fallback
-        case .relay, .open, .dragon, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf:
+        case .relay, .open, .dragon, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
             let fallback = NSImage(systemSymbolName: "globe", accessibilityDescription: "Relay")
             fallback?.isTemplate = true
             return fallback
@@ -433,6 +487,8 @@ final class StatusBarController: NSObject {
             return "menu_windsurf_icon"
         case .kimi:
             return "menu_kimi_icon"
+        case .trae:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override

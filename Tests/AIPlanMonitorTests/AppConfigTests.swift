@@ -35,6 +35,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.defaultStatusBarProviderID(from: providers), "codex-official")
     }
 
+    func testDefaultProvidersIncludeOfficialTraeWithStableOrder() {
+        let ids = AppConfig.default.providers.map(\.id)
+        XCTAssertEqual(ids.suffix(2), ["kimi-official", "trae-official"])
+
+        let trae = AppConfig.default.providers.first(where: { $0.id == "trae-official" })
+        XCTAssertEqual(trae?.family, .official)
+        XCTAssertEqual(trae?.type, .trae)
+        XCTAssertEqual(trae?.auth.kind, .bearer)
+        XCTAssertEqual(trae?.baseURL, "https://api-sg-central.trae.ai")
+    }
+
     func testDefaultOfficialClaudeUsesUsedQuotaDisplayMode() {
         XCTAssertEqual(
             ProviderDescriptor.defaultOfficialClaude().officialConfig?.quotaDisplayMode,

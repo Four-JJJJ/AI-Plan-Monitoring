@@ -16,6 +16,7 @@ enum ProviderType: String, Codable, CaseIterable {
     case jetbrains
     case kiro
     case windsurf
+    case trae
     case relay
     case open
     case dragon
@@ -545,7 +546,8 @@ struct AppConfig: Codable, Equatable {
             .defaultOfficialJetBrains(),
             .defaultOfficialKiro(),
             .defaultOfficialWindsurf(),
-            .defaultOfficialKimi()
+            .defaultOfficialKimi(),
+            .defaultOfficialTrae()
         ]
     )
 
@@ -607,7 +609,7 @@ extension ProviderDescriptor {
         switch type {
         case .relay, .open, .dragon:
             return true
-        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi:
+        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             return false
         }
     }
@@ -620,7 +622,7 @@ extension ProviderDescriptor {
         }
 
         switch copy.type {
-        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf:
+        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
             copy.family = .official
             if copy.officialConfig == nil {
                 copy.officialConfig = Self.defaultOfficialConfig(type: copy.type)
@@ -746,6 +748,8 @@ extension ProviderDescriptor {
             return "https://server.codeium.com"
         case .kimi:
             return "https://api.kimi.com"
+        case .trae:
+            return "https://api-sg-central.trae.ai"
         case .relay, .open, .dragon:
             return ""
         }
@@ -825,6 +829,13 @@ extension ProviderDescriptor {
                 autoDiscoveryEnabled: true
             )
         case .kimi:
+            return OfficialProviderConfig(
+                sourceMode: .auto,
+                webMode: .disabled,
+                manualCookieAccount: nil,
+                autoDiscoveryEnabled: true
+            )
+        case .trae:
             return OfficialProviderConfig(
                 sourceMode: .auto,
                 webMode: .disabled,
@@ -1317,6 +1328,25 @@ extension ProviderDescriptor {
         )
     }
 
+    static func defaultOfficialTrae() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "trae-official",
+            name: "Trae SOLO",
+            family: .official,
+            type: .trae,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(
+                kind: .bearer,
+                keychainService: KeychainService.defaultServiceName,
+                keychainAccount: "official/trae/cloud-ide-jwt"
+            ),
+            baseURL: "https://api-sg-central.trae.ai",
+            officialConfig: defaultOfficialConfig(type: .trae)
+        )
+    }
+
     static func defaultOpenAilinyu() -> ProviderDescriptor {
         ProviderDescriptor(
             id: "open-ailinyu",
@@ -1447,7 +1477,7 @@ extension ProviderDescriptor {
             return [.auto, .api, .cli, .web]
         case .kiro:
             return [.auto, .cli]
-        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi:
+        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae:
             return [.auto, .api]
         case .relay, .open, .dragon:
             return []
@@ -1459,7 +1489,7 @@ extension ProviderDescriptor {
         switch type {
         case .codex, .claude:
             return [.disabled, .autoImport, .manual]
-        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi:
+        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             return [.disabled]
         case .relay, .open, .dragon:
             return []

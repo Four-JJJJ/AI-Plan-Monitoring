@@ -1,13 +1,170 @@
 import Foundation
+import AppKit
 
 enum LocalTrendDisplayMetric: String, CaseIterable, Sendable {
     case tokens
     case responses
 }
 
+enum TraeMetricKind: Equatable {
+    case dollarBalance
+    case autocomplete
+
+    static func detect(id: String, title: String) -> TraeMetricKind? {
+        let lowerID = id.lowercased()
+        let lowerTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lowerID.contains("autocomplete") || lowerTitle.contains("autocomplete") || lowerTitle.contains("自动补全") {
+            return .autocomplete
+        }
+        if lowerID.contains("dollar") || lowerTitle.contains("dollar") || lowerTitle.contains("美元") {
+            return .dollarBalance
+        }
+        return nil
+    }
+}
+
+enum MetricValueLayoutFormatter {
+    static let metricValueMinimumWidth: CGFloat = 46
+    static let metricValueReferenceText: String = "900%"
+    static var metricValueFont: NSFont { NSFont.systemFont(ofSize: 16, weight: .semibold) }
+
+    static var metricValueReferenceTextWidth: CGFloat {
+        ceil((metricValueReferenceText as NSString).size(withAttributes: [.font: metricValueFont]).width)
+    }
+
+    static var metricValueColumnWidth: CGFloat {
+        max(metricValueMinimumWidth, metricValueReferenceTextWidth)
+    }
+}
+
+enum TraeValueDisplayFormatter {
+    static func format(
+        _ value: Double,
+        kind: TraeMetricKind,
+        maxWidth: CGFloat? = nil,
+        font: NSFont? = nil
+    ) -> String {
+        let candidates = formatCandidates(for: value, kind: kind)
+        guard !candidates.isEmpty else { return "-" }
+        let deduped = deduplicated(candidates)
+
+        guard let maxWidth else {
+            return deduped[0]
+        }
+
+        let measureFont = font ?? MetricValueLayoutFormatter.metricValueFont
+        for candidate in deduped {
+            if measuredWidth(candidate, font: measureFont) <= maxWidth {
+                return candidate
+            }
+        }
+        return deduped.last ?? "-"
+    }
+
+    private static func formatCandidates(for value: Double, kind: TraeMetricKind) -> [String] {
+        switch kind {
+        case .dollarBalance:
+            return dollarCandidates(value)
+        case .autocomplete:
+            return autocompleteCandidates(value)
+        }
+    }
+
+    private static func dollarCandidates(_ value: Double) -> [String] {
+        let absValue = abs(value)
+        var output: [String] = []
+        if absValue < 1 {
+            output.append(decimal(value, minFractionDigits: 2, maxFractionDigits: 2, grouping: false))
+        } else {
+            output.append(decimal(value, minFractionDigits: 0, maxFractionDigits: 2))
+        }
+        output.append(decimal(value, minFractionDigits: 0, maxFractionDigits: 1))
+        output.append(decimal(value, minFractionDigits: 0, maxFractionDigits: 0))
+        output.append(compactKOrW(value, maxFractionDigits: 1, fallbackMaxFractionDigits: 0))
+        return output
+    }
+
+    private static func autocompleteCandidates(_ value: Double) -> [String] {
+        let absValue = abs(value)
+        if absValue < 1_000 {
+            return [
+                decimal(value, minFractionDigits: 0, maxFractionDigits: 1, grouping: false),
+                decimal(value, minFractionDigits: 0, maxFractionDigits: 0, grouping: false)
+            ]
+        }
+        if absValue < 10_000 {
+            return [
+                compact(value, divisor: 1_000, suffix: "K", maxFractionDigits: 1),
+                compact(value, divisor: 1_000, suffix: "K", maxFractionDigits: 0)
+            ]
+        }
+        return [
+            compact(value, divisor: 10_000, suffix: "W", maxFractionDigits: 1),
+            compact(value, divisor: 10_000, suffix: "W", maxFractionDigits: 0)
+        ]
+    }
+
+    private static func compactKOrW(
+        _ value: Double,
+        maxFractionDigits: Int,
+        fallbackMaxFractionDigits: Int
+    ) -> String {
+        let absValue = abs(value)
+        if absValue >= 10_000 {
+            return compact(value, divisor: 10_000, suffix: "W", maxFractionDigits: maxFractionDigits)
+        }
+        if absValue >= 1_000 {
+            return compact(value, divisor: 1_000, suffix: "K", maxFractionDigits: maxFractionDigits)
+        }
+        return decimal(value, minFractionDigits: 0, maxFractionDigits: fallbackMaxFractionDigits, grouping: false)
+    }
+
+    private static func compact(
+        _ value: Double,
+        divisor: Double,
+        suffix: String,
+        maxFractionDigits: Int
+    ) -> String {
+        guard divisor > 0 else { return "-" }
+        let scaled = value / divisor
+        return "\(decimal(scaled, minFractionDigits: 0, maxFractionDigits: maxFractionDigits, grouping: false))\(suffix)"
+    }
+
+    private static func decimal(
+        _ value: Double,
+        minFractionDigits: Int,
+        maxFractionDigits: Int,
+        grouping: Bool = true
+    ) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = grouping
+        formatter.minimumFractionDigits = max(0, minFractionDigits)
+        formatter.maximumFractionDigits = max(0, maxFractionDigits)
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.\(max(0, maxFractionDigits))f", value)
+    }
+
+    private static func measuredWidth(_ text: String, font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private static func deduplicated(_ values: [String]) -> [String] {
+        var output: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if !output.contains(trimmed) {
+                output.append(trimmed)
+            }
+        }
+        return output
+    }
+}
+
 enum PlanTypeDisplayFormatter {
     private static let supportedProviderTypes: Set<ProviderType> = [
-        .codex, .claude, .gemini, .kimi
+        .codex, .claude, .gemini, .kimi, .trae
     ]
 
     private static let hiddenValues: Set<String> = [
@@ -18,10 +175,21 @@ enum PlanTypeDisplayFormatter {
         supportedProviderTypes.contains(providerType)
     }
 
-    static func normalizedPlanType(_ value: String?) -> String? {
+    static func normalizedPlanType(_ value: String?, providerType: ProviderType? = nil) -> String? {
         guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else {
             return nil
+        }
+
+        if providerType == .trae {
+            let cleaned = stripTraePlanKeyword(raw)
+            guard !cleaned.isEmpty else {
+                return nil
+            }
+            if hiddenValues.contains(cleaned.lowercased()) {
+                return nil
+            }
+            return cleaned
         }
 
         if hiddenValues.contains(raw.lowercased()) {
@@ -38,7 +206,8 @@ enum PlanTypeDisplayFormatter {
         guard supportsPlanType(providerType: providerType) else {
             return nil
         }
-        guard let resolved = normalizedPlanType(extrasPlanType) ?? normalizedPlanType(rawPlanType) else {
+        guard let resolved = normalizedPlanType(extrasPlanType, providerType: providerType)
+            ?? normalizedPlanType(rawPlanType, providerType: providerType) else {
             return nil
         }
         return normalizedDisplayPlanType(resolved, providerType: providerType)
@@ -111,6 +280,23 @@ enum PlanTypeDisplayFormatter {
             }
         }
         return output
+    }
+
+    private static func stripTraePlanKeyword(_ value: String) -> String {
+        let removedKeyword = value.replacingOccurrences(
+            of: "plan",
+            with: "",
+            options: [.caseInsensitive, .diacriticInsensitive]
+        )
+        let collapsedWhitespace = removedKeyword.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        )
+        return collapsedWhitespace.trimmingCharacters(
+            in: CharacterSet.whitespacesAndNewlines
+                .union(CharacterSet(charactersIn: "-_|/:"))
+        )
     }
 }
 

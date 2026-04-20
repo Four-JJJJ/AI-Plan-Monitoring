@@ -69,6 +69,52 @@ final class ThirdPartyBalanceBaselineTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.contains(providerID: "relay-4"))
     }
 
+    func testResolvedRemainingUsesLimitMinusUsedFallbackWhenRemainingMissing() {
+        assertOptionalEqual(
+            ThirdPartyBalanceBaselineTracker.resolvedRemainingForBaseline(
+                remaining: nil,
+                used: 400,
+                limit: 1000
+            ),
+            expected: 600
+        )
+        assertOptionalEqual(
+            ThirdPartyBalanceBaselineTracker.resolvedRemainingForBaseline(
+                remaining: nil,
+                used: 1200,
+                limit: 1000
+            ),
+            expected: 0
+        )
+        XCTAssertNil(
+            ThirdPartyBalanceBaselineTracker.resolvedRemainingForBaseline(
+                remaining: nil,
+                used: nil,
+                limit: 1000
+            )
+        )
+        assertOptionalEqual(
+            ThirdPartyBalanceBaselineTracker.resolvedRemainingForBaseline(
+                remaining: 150,
+                used: 20,
+                limit: 1000
+            ),
+            expected: 150
+        )
+    }
+
+    func testSnapshotAndRestoreRoundTrip() {
+        var tracker = ThirdPartyBalanceBaselineTracker()
+        _ = tracker.record(remaining: 1000, for: "relay-a", at: Date(timeIntervalSince1970: 11))
+        _ = tracker.record(remaining: 800, for: "relay-a", at: Date(timeIntervalSince1970: 12))
+
+        let entries = tracker.snapshotEntries()
+        var restored = ThirdPartyBalanceBaselineTracker()
+        restored.restore(entries: entries)
+
+        assertPercent(restored.percent(for: "relay-a"), equals: 80)
+    }
+
     private func assertPercent(
         _ value: Double?,
         equals expected: Double,
@@ -77,6 +123,19 @@ final class ThirdPartyBalanceBaselineTrackerTests: XCTestCase {
     ) {
         guard let value else {
             XCTFail("Expected percent value, got nil", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(value, expected, accuracy: 0.0001, file: file, line: line)
+    }
+
+    private func assertOptionalEqual(
+        _ value: Double?,
+        expected: Double,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let value else {
+            XCTFail("Expected value \(expected), got nil", file: file, line: line)
             return
         }
         XCTAssertEqual(value, expected, accuracy: 0.0001, file: file, line: line)

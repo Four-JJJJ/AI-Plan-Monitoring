@@ -403,7 +403,12 @@ struct MenuContentView: View {
                     codexTeamAliases: codexTeamAliases
                 ),
                 status: status,
-                metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: disconnected),
+                metrics: buildPercentageMetricDisplays(
+                    from: visibleMetrics,
+                    provider: provider,
+                    snapshot: snapshot,
+                    disconnected: disconnected
+                ),
                 errorText: error,
                 backgroundColor: cardBackground,
                 isDisconnected: disconnected,
@@ -451,7 +456,12 @@ struct MenuContentView: View {
                 codexTeamAliases: codexTeamAliases
             ),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
-            metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
+            metrics: buildPercentageMetricDisplays(
+                from: visibleMetrics,
+                provider: provider,
+                snapshot: slot.snapshot,
+                disconnected: false
+            ),
             errorText: nil,
             backgroundColor: cardBackground,
             isDisconnected: false,
@@ -480,7 +490,12 @@ struct MenuContentView: View {
             iconFallback: fallbackIcon(for: provider),
             subtitle: officialAccountSubtitle(providerType: provider.type, snapshot: slot.snapshot),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
-            metrics: buildPercentageMetricDisplays(from: visibleMetrics, disconnected: false),
+            metrics: buildPercentageMetricDisplays(
+                from: visibleMetrics,
+                provider: provider,
+                snapshot: slot.snapshot,
+                disconnected: false
+            ),
             errorText: nil,
             backgroundColor: cardBackground,
             isDisconnected: false,
@@ -534,11 +549,24 @@ struct MenuContentView: View {
         }
     }
 
-    private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
+    private func buildPercentageMetricDisplays(
+        from metrics: [QuotaMetric],
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        disconnected: Bool
+    ) -> [PercentageMetricDisplay] {
         metrics.map { metric in
             let percent = disconnected ? nil : metric.displayPercent
             let displayPercent = percent.map { Int($0.rounded()) }
-            let valueText = displayPercent.map { "\($0)%" } ?? "-"
+            let valueText: String
+            if disconnected {
+                valueText = "-"
+            } else if traeDisplaysAmount(provider),
+                      let amount = traeRemainingAmountText(for: metric, snapshot: snapshot) {
+                valueText = amount
+            } else {
+                valueText = displayPercent.map { "\($0)%" } ?? "-"
+            }
             let resetLabel = disconnected ? "-" : Self.countdownText(to: metric.resetAt, now: now)
             return PercentageMetricDisplay(
                 id: metric.id,
@@ -822,6 +850,8 @@ struct MenuContentView: View {
             return "Windsurf"
         case .kimi:
             return provider.family == .official ? "Kimi Coding" : "KIMI"
+        case .trae:
+            return "Trae SOLO"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -852,6 +882,8 @@ struct MenuContentView: View {
             return "menu_windsurf_icon"
         case .kimi:
             return "menu_kimi_icon"
+        case .trae:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override
@@ -901,7 +933,7 @@ struct MenuContentView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .relay, .open, .dragon:
+        case .trae, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"
@@ -987,6 +1019,23 @@ struct MenuContentView: View {
                 QuotaMetric(id: "\(provider.id)-placeholder-prompt", title: "Prompt", displayPercent: 0, healthPercent: 0, resetAt: nil),
                 QuotaMetric(id: "\(provider.id)-placeholder-flex", title: "Flex", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
+        case .trae:
+            return [
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-dollar",
+                    title: localizedTraeMetricTitle("Dollar"),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                ),
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-autocomplete",
+                    title: localizedTraeMetricTitle("Autocomplete"),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                )
+            ]
         case .relay, .open, .dragon:
             return []
         }
@@ -1005,6 +1054,9 @@ struct MenuContentView: View {
     }
 
     private func metricTitle(for window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
+        if provider.type == .trae {
+            return localizedTraeMetricTitle(window.title)
+        }
         let baseTitle: String
         switch window.kind {
         case .session:
@@ -1021,6 +1073,47 @@ struct MenuContentView: View {
             }
         }
         return placeholderMetricTitle(baseTitle, provider: provider)
+    }
+
+    private func localizedTraeMetricTitle(_ rawTitle: String) -> String {
+        let normalized = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("autocomplete") || normalized.contains("自动补全") {
+            return viewModel.localizedText("自动补全", "Autocomplete")
+        }
+        if normalized.contains("dollar") || normalized.contains("美元") {
+            return viewModel.localizedText("美元余额", "Dollar Balance")
+        }
+        return rawTitle
+    }
+
+    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
+        provider.family == .official
+            && provider.type == .trae
+            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
+    }
+
+    private func traeRemainingAmountText(for metric: QuotaMetric, snapshot: UsageSnapshot?) -> String? {
+        guard let snapshot else { return nil }
+        let key: String?
+        let kind: TraeMetricKind?
+        switch TraeMetricKind.detect(id: metric.id, title: metric.title) {
+        case .autocomplete:
+            key = "autocompleteRemaining"
+            kind = .autocomplete
+        case .dollarBalance:
+            key = "dollarRemaining"
+            kind = .dollarBalance
+        case .none:
+            key = nil
+            kind = nil
+        }
+        guard let key, let raw = snapshot.extras[key], let value = Double(raw) else { return nil }
+        guard let kind else { return nil }
+        return TraeValueDisplayFormatter.format(
+            value,
+            kind: kind,
+            maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+        )
     }
 
     private func placeholderMetricTitle(_ baseTitle: String, provider: ProviderDescriptor) -> String {
@@ -1312,12 +1405,12 @@ private struct PercentageMetricView: View {
             }
             .frame(height: 10)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Text(metric.valueText)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.80))
                     .lineSpacing(0)
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: MetricValueLayoutFormatter.metricValueColumnWidth, alignment: .leading)
                     .lineLimit(1)
 
                 GeometryReader { geo in

@@ -42,6 +42,8 @@ final class ProviderFactory {
             return KiroProvider(descriptor: descriptor)
         case .windsurf:
             return WindsurfProvider(descriptor: descriptor)
+        case .trae:
+            return TraeProvider(descriptor: descriptor, keychain: keychain)
         case .relay, .open, .dragon:
             return RelayProvider(
                 descriptor: descriptor,

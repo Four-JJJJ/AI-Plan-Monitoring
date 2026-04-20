@@ -8,6 +8,7 @@ import UserNotifications
 final class AppViewModel {
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
+    private let thirdPartyBalanceBaselineStore = ThirdPartyBalanceBaselineStore()
     private let appUpdateService: any AppUpdateServicing
     private let codexSlotStore = CodexAccountSlotStore()
     private let codexProfileStore = CodexAccountProfileStore()
@@ -98,6 +99,7 @@ final class AppViewModel {
         self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
         self.claudeProfiles = []
+        thirdPartyBalanceBaselineTracker.restore(entries: thirdPartyBalanceBaselineStore.load())
         let preNormalizedConfig = self.config
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
@@ -1082,6 +1084,7 @@ final class AppViewModel {
         consecutiveFailures.removeAll()
         activeAlerts.removeAll()
         thirdPartyBalanceBaselineTracker.removeAll()
+        thirdPartyBalanceBaselineStore.reset()
         lastUpdatedAt = nil
 
         launchAtLoginService.reset()
@@ -1386,6 +1389,7 @@ final class AppViewModel {
         if config.providers[idx].enabled == enabled { return }
         if !enabled, config.providers[idx].family == .thirdParty {
             thirdPartyBalanceBaselineTracker.remove(providerID: providerID)
+            persistThirdPartyBalanceBaselines()
         }
         config.providers[idx].enabled = enabled
 
@@ -1564,6 +1568,7 @@ final class AppViewModel {
             config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
         }
         thirdPartyBalanceBaselineTracker.remove(providerID: providerID)
+        persistThirdPartyBalanceBaselines()
         snapshots.removeValue(forKey: providerID)
         errors.removeValue(forKey: providerID)
         consecutiveFailures.removeValue(forKey: providerID)
@@ -1863,6 +1868,7 @@ final class AppViewModel {
     }
 
     private func pruneThirdPartyBalanceBaselines() {
+        let previousEntries = thirdPartyBalanceBaselineTracker.snapshotEntries()
         let validProviderIDs = Set(
             config.providers
                 .filter { $0.family == .thirdParty }
@@ -1872,6 +1878,19 @@ final class AppViewModel {
             keepingProviderIDs: validProviderIDs,
             maxEntries: RuntimeDiagnosticsLimits.thirdPartyBalanceBaselineCacheMaxEntries
         )
+        persistThirdPartyBalanceBaselinesIfChanged(previousEntries: previousEntries)
+    }
+
+    private func persistThirdPartyBalanceBaselinesIfChanged(
+        previousEntries: [String: ThirdPartyBalanceBaselineTracker.Entry]
+    ) {
+        let latestEntries = thirdPartyBalanceBaselineTracker.snapshotEntries()
+        guard latestEntries != previousEntries else { return }
+        thirdPartyBalanceBaselineStore.save(latestEntries)
+    }
+
+    private func persistThirdPartyBalanceBaselines() {
+        thirdPartyBalanceBaselineStore.save(thirdPartyBalanceBaselineTracker.snapshotEntries())
     }
 
     private func displayNameForDiscovery(_ descriptor: ProviderDescriptor) -> String {
@@ -1898,6 +1917,8 @@ final class AppViewModel {
             return "Windsurf"
         case .kimi:
             return descriptor.family == .official ? "Kimi Coding" : "Kimi"
+        case .trae:
+            return "Trae SOLO"
         case .relay, .open, .dragon:
             return descriptor.name
         }
@@ -1907,7 +1928,7 @@ final class AppViewModel {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
         case .bearer:
-            return KimiProvider.normalizeToken(trimmed)
+            return TraeProvider.normalizeToken(trimmed)
         case .none, .localCodex:
             return trimmed
         }
@@ -2024,11 +2045,13 @@ final class AppViewModel {
             }
             snapshots[descriptor.id] = boundedSnapshot(snapshot)
             if descriptor.family == .thirdParty {
+                let previousEntries = thirdPartyBalanceBaselineTracker.snapshotEntries()
                 _ = thirdPartyBalanceBaselineTracker.record(
-                    remaining: snapshot.remaining,
+                    remaining: resolvedThirdPartyRemainingForBaseline(snapshot),
                     for: descriptor.id,
                     at: snapshot.updatedAt
                 )
+                persistThirdPartyBalanceBaselinesIfChanged(previousEntries: previousEntries)
             }
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
@@ -2288,6 +2311,26 @@ final class AppViewModel {
     private func format(_ value: Double?) -> String {
         guard let value else { return text(.unlimited) }
         return String(format: "%.2f", value)
+    }
+
+    private func resolvedThirdPartyRemainingForBaseline(_ snapshot: UsageSnapshot) -> Double? {
+        Self.resolvedThirdPartyRemainingForBaseline(
+            remaining: snapshot.remaining,
+            used: snapshot.used,
+            limit: snapshot.limit
+        )
+    }
+
+    nonisolated static func resolvedThirdPartyRemainingForBaseline(
+        remaining: Double?,
+        used: Double?,
+        limit: Double?
+    ) -> Double? {
+        ThirdPartyBalanceBaselineTracker.resolvedRemainingForBaseline(
+            remaining: remaining,
+            used: used,
+            limit: limit
+        )
     }
 
     private func normalizeBaseURL(_ raw: String) -> String {

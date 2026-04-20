@@ -2292,7 +2292,7 @@ struct SettingsView: View {
                     .padding(.top, 12)
 
                 if snapshot != nil || error != nil {
-                    providerMonitorSnapshotSection(
+                    officialSingleAccountCardsSection(
                         provider: provider,
                         snapshot: snapshot,
                         error: error
@@ -2300,12 +2300,20 @@ struct SettingsView: View {
                         .padding(.top, 16)
                 }
             } else if snapshot != nil || error != nil {
-                providerMonitorSnapshotSection(
+                dividerLine
+                    .padding(.top, 24)
+                    .padding(.bottom, 16)
+
+                Text(localOfficialAccountSectionTitle(for: provider))
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+
+                officialSingleAccountCardsSection(
                     provider: provider,
                     snapshot: snapshot,
                     error: error
                 )
-                    .padding(.top, 16)
+                    .padding(.top, 12)
             }
 
             if shouldShowOfficialLocalTrendCard(for: provider) {
@@ -2418,26 +2426,46 @@ struct SettingsView: View {
         )
     }
 
+    private func localOfficialAccountSectionTitle(for provider: ProviderDescriptor) -> String {
+        let displayName = sidebarDisplayName(for: provider)
+        if viewModel.language == .zhHans {
+            return "本机\(displayName)账号"
+        }
+        return "Local \(displayName) Account"
+    }
+
     @ViewBuilder
-    private func providerMonitorSnapshotSection(
+    private func officialSingleAccountCardsSection(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        error: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            officialSingleAccountCard(provider: provider, snapshot: snapshot, error: error)
+        }
+    }
+
+    private func officialSingleAccountCard(
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
         error: String?
     ) -> some View {
         let status = codexSlotStatus(snapshot: snapshot)
-        let metrics = codexQuotaMetrics(snapshot: snapshot)
+        let metrics = codexQuotaMetrics(provider: provider, snapshot: snapshot)
         let subtitle = officialMonitorSubtitle(snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: provider.type, snapshot: snapshot)
         let hasError = (error?.isEmpty == false) || snapshot?.valueFreshness == .empty
-        let updatedText: String? = {
-            guard let snapshot else { return nil }
+        let updatedText: String = {
+            guard let snapshot else {
+                return viewModel.language == .zhHans ? "更新于 --" : "Updated --"
+            }
             if viewModel.language == .zhHans {
                 return "更新于 \(settingsElapsedText(from: snapshot.updatedAt))"
             }
             return "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: snapshot.updatedAt))"
         }()
 
-        officialAccountMonitorCard(
+        return officialAccountMonitorCard(
             highlightColor: hasError ? Color(hex: 0xD05757) : nil
         ) {
             VStack(alignment: .leading, spacing: 0) {
@@ -2493,13 +2521,21 @@ struct SettingsView: View {
                         .padding(.top, 8)
                 }
 
-                if let updatedText {
+                dividerLine
+                    .padding(.top, hasError ? 8 : 10)
+
+                HStack(spacing: 8) {
+                    Text(viewModel.localizedText("正在使用", "Current"))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0x69BD64))
+
                     Text(updatedText)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(settingsHintColor)
-                        .lineLimit(1)
-                        .padding(.top, 8)
+
+                    Spacer(minLength: 8)
                 }
+                .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4384,66 +4420,11 @@ struct SettingsView: View {
         )
 
         VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
-            if supportedWebModes.count > 1 {
-                officialConfigRow(title: viewModel.text(.sourceMode)) {
-                    officialSegmentControl(
-                        selection: sourceBinding,
-                        options: supportedSourceModes,
-                        label: sourceModeLabel
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    officialConfigRow(title: viewModel.text(.webMode)) {
-                        officialSegmentControl(
-                            selection: webBinding,
-                            options: supportedWebModes,
-                            label: webModeLabel
-                        )
-                    }
-
-                    officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    officialConfigRow(title: viewModel.text(.sourceMode)) {
-                        officialSegmentControl(
-                            selection: sourceBinding,
-                            options: supportedSourceModes,
-                            label: sourceModeLabel
-                        )
-                    }
-
-                    officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
-                }
-            }
-
-            if provider.type == .claude {
-                VStack(alignment: .leading, spacing: 8) {
-                    officialConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
-                        officialSegmentControl(
-                            selection: quotaDisplayBinding,
-                            options: [.remaining, .used],
-                            label: { mode in
-                                switch mode {
-                                case .remaining:
-                                    viewModel.text(.quotaDisplayRemaining)
-                                case .used:
-                                    viewModel.text(.quotaDisplayUsed)
-                                }
-                            }
-                        )
-                    }
-
-                    officialConfigHintText(viewModel.text(.claudeQuotaDisplayHint))
-                }
-            }
-
-            if supportsManualInput {
+            if provider.type == .trae {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
-                        let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
+                        let hasSavedToken = viewModel.hasToken(for: provider)
+                        let savedTokenLength = viewModel.savedTokenLength(for: provider)
 
                         Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
                             .font(settingsLabelFont)
@@ -4451,7 +4432,9 @@ struct SettingsView: View {
                             .frame(width: 60, alignment: .leading)
 
                         relayProminentSecureField(
-                            hasSavedManualCookie ? maskedSecretDots(length: savedManualCookieLength) : viewModel.text(.manualCookieHeader),
+                            hasSavedToken
+                            ? maskedSecretDots(length: savedTokenLength)
+                            : viewModel.localizedText("粘贴 Cloud-IDE-JWT / JWT", "Paste Cloud-IDE-JWT / JWT"),
                             text: Binding(
                                 get: { officialCookieInputs[provider.id, default: ""] },
                                 set: { officialCookieInputs[provider.id] = $0 }
@@ -4462,13 +4445,13 @@ struct SettingsView: View {
                         settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                             let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                             if !raw.isEmpty {
-                                _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                                _ = viewModel.saveToken(raw, for: provider)
                             }
                             viewModel.updateOfficialProviderSettings(
                                 providerID: provider.id,
-                                sourceMode: sourceBinding.wrappedValue,
-                                webMode: webBinding.wrappedValue,
-                                quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+                                sourceMode: .auto,
+                                webMode: .disabled,
+                                quotaDisplayMode: quotaDisplayBinding.wrappedValue
                             )
                             officialCookieInputs[provider.id] = ""
                             viewModel.restartPolling()
@@ -4477,11 +4460,122 @@ struct SettingsView: View {
                         .layoutPriority(2)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                    officialConfigRow(title: viewModel.localizedText("Trae 显示", "Trae Display")) {
+                        officialSegmentControl(
+                            selection: quotaDisplayBinding,
+                            options: [.remaining, .used],
+                            label: { mode in
+                                switch mode {
+                                case .remaining:
+                                    viewModel.localizedText("百分比", "Percent")
+                                case .used:
+                                    viewModel.localizedText("数字", "Amount")
+                                }
+                            }
+                        )
+                    }
+                }
+            } else {
+                if supportedWebModes.count > 1 {
+                    officialConfigRow(title: viewModel.text(.sourceMode)) {
+                        officialSegmentControl(
+                            selection: sourceBinding,
+                            options: supportedSourceModes,
+                            label: sourceModeLabel
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        officialConfigRow(title: viewModel.text(.webMode)) {
+                            officialSegmentControl(
+                                selection: webBinding,
+                                options: supportedWebModes,
+                                label: webModeLabel
+                            )
+                        }
+
+                        officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        officialConfigRow(title: viewModel.text(.sourceMode)) {
+                            officialSegmentControl(
+                                selection: sourceBinding,
+                                options: supportedSourceModes,
+                                label: sourceModeLabel
+                            )
+                        }
+
+                        officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                    }
+                }
+
+                if provider.type == .claude {
+                    VStack(alignment: .leading, spacing: 8) {
+                        officialConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
+                            officialSegmentControl(
+                                selection: quotaDisplayBinding,
+                                options: [.remaining, .used],
+                                label: { mode in
+                                    switch mode {
+                                    case .remaining:
+                                        viewModel.text(.quotaDisplayRemaining)
+                                    case .used:
+                                        viewModel.text(.quotaDisplayUsed)
+                                    }
+                                }
+                            )
+                        }
+
+                        officialConfigHintText(viewModel.text(.claudeQuotaDisplayHint))
+                    }
+                }
+
+                if supportsManualInput {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
+                            let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
+
+                            Text("Token")
+                                .font(settingsLabelFont)
+                                .foregroundStyle(settingsBodyColor)
+                                .frame(width: 60, alignment: .leading)
+
+                            relayProminentSecureField(
+                                hasSavedManualCookie ? maskedSecretDots(length: savedManualCookieLength) : viewModel.text(.manualCookieHeader),
+                                text: Binding(
+                                    get: { officialCookieInputs[provider.id, default: ""] },
+                                    set: { officialCookieInputs[provider.id] = $0 }
+                                )
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                            settingsCapsuleButton(viewModel.text(.save)) {
+                                let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !raw.isEmpty {
+                                    _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                                }
+                                viewModel.updateOfficialProviderSettings(
+                                    providerID: provider.id,
+                                    sourceMode: sourceBinding.wrappedValue,
+                                    webMode: webBinding.wrappedValue,
+                                    quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+                                )
+                                officialCookieInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
         .onChange(of: sourceBinding.wrappedValue) { _, newValue in
-            guard !supportsManualInput else { return }
+            guard provider.type != .trae, !supportsManualInput else { return }
             viewModel.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: newValue,
@@ -4490,7 +4584,7 @@ struct SettingsView: View {
             )
         }
         .onChange(of: webBinding.wrappedValue) { _, newValue in
-            guard !supportsManualInput else { return }
+            guard provider.type != .trae, !supportsManualInput else { return }
             viewModel.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
@@ -4499,7 +4593,14 @@ struct SettingsView: View {
             )
         }
         .onChange(of: quotaDisplayBinding.wrappedValue) { _, newValue in
-            guard !supportsManualInput, provider.type == .claude else { return }
+            switch provider.type {
+            case .claude:
+                guard !supportsManualInput else { return }
+            case .trae:
+                break
+            default:
+                return
+            }
             viewModel.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
@@ -4698,7 +4799,7 @@ struct SettingsView: View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
         let status = codexSlotStatus(snapshot: snapshot)
-        let metrics = codexQuotaMetrics(snapshot: snapshot)
+        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .codex, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -4907,7 +5008,7 @@ struct SettingsView: View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
         let status = codexSlotStatus(snapshot: snapshot)
-        let metrics = codexQuotaMetrics(snapshot: snapshot)
+        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .claude, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -5224,12 +5325,12 @@ struct SettingsView: View {
             }
             .frame(height: 10)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Text(metric.valueText)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.80))
                     .lineSpacing(0)
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: MetricValueLayoutFormatter.metricValueColumnWidth, alignment: .leading)
                     .lineLimit(1)
 
                 GeometryReader { proxy in
@@ -5404,7 +5505,7 @@ struct SettingsView: View {
             }
         }
 
-        let minimum = codexQuotaMetrics(snapshot: snapshot).map(\.percent).min() ?? 0
+        let minimum = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot).map(\.percent).min() ?? 0
         if minimum > 30 {
             return (viewModel.text(.statusSufficient), Color(hex: 0x69BD64))
         }
@@ -5414,30 +5515,51 @@ struct SettingsView: View {
         return (viewModel.text(.statusExhausted), Color(hex: 0xD05757))
     }
 
-    private func codexQuotaMetrics(snapshot: UsageSnapshot?) -> [CodexQuotaMetricDisplay] {
+    private func codexQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [CodexQuotaMetricDisplay] {
         let windows: [UsageQuotaWindow]
         if let snapshot, !snapshot.quotaWindows.isEmpty {
             windows = snapshot.quotaWindows
                 .sorted { codexQuotaRank($0.kind) < codexQuotaRank($1.kind) }
         } else {
-            windows = [
-                UsageQuotaWindow(
-                    id: "codex-placeholder-session",
-                    title: viewModel.text(.quotaFiveHour),
-                    remainingPercent: 0,
-                    usedPercent: 100,
-                    resetAt: nil,
-                    kind: .session
-                ),
-                UsageQuotaWindow(
-                    id: "codex-placeholder-weekly",
-                    title: viewModel.text(.quotaWeekly),
-                    remainingPercent: 0,
-                    usedPercent: 100,
-                    resetAt: nil,
-                    kind: .weekly
-                )
-            ]
+            if provider.type == .trae {
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-dollar",
+                        title: traeQuotaMetricTitle(baseTitle: "Dollar"),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    ),
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-autocomplete",
+                        title: traeQuotaMetricTitle(baseTitle: "Autocomplete"),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    )
+                ]
+            } else {
+                windows = [
+                    UsageQuotaWindow(
+                        id: "codex-placeholder-session",
+                        title: viewModel.text(.quotaFiveHour),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .session
+                    ),
+                    UsageQuotaWindow(
+                        id: "codex-placeholder-weekly",
+                        title: viewModel.text(.quotaWeekly),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .weekly
+                    )
+                ]
+            }
         }
 
         return windows.prefix(2).map { window in
@@ -5453,8 +5575,8 @@ struct SettingsView: View {
 
             return CodexQuotaMetricDisplay(
                 id: window.id,
-                title: codexQuotaDisplayTitle(window),
-                valueText: "\(Int(clamped.rounded()))%",
+                title: codexQuotaDisplayTitle(window, provider: provider),
+                valueText: codexQuotaValueText(window: window, provider: provider, snapshot: snapshot, percent: clamped),
                 resetText: codexResetCountdownText(to: window.resetAt),
                 percent: clamped,
                 barColor: barColor
@@ -5462,7 +5584,10 @@ struct SettingsView: View {
         }
     }
 
-    private func codexQuotaDisplayTitle(_ window: UsageQuotaWindow) -> String {
+    private func codexQuotaDisplayTitle(_ window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
+        if provider.type == .trae {
+            return traeQuotaMetricTitle(baseTitle: window.title)
+        }
         switch window.kind {
         case .session:
             return viewModel.text(.quotaFiveHour)
@@ -5471,6 +5596,58 @@ struct SettingsView: View {
         default:
             return window.title
         }
+    }
+
+    private func codexQuotaValueText(
+        window: UsageQuotaWindow,
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        percent: Double
+    ) -> String {
+        if provider.type == .trae, traeDisplaysAmount(provider) {
+            if let amount = traeRemainingAmountValue(window: window, snapshot: snapshot),
+               let kind = TraeMetricKind.detect(id: window.id, title: window.title) {
+                return TraeValueDisplayFormatter.format(
+                    amount,
+                    kind: kind,
+                    maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+                )
+            }
+            return "-"
+        }
+        return "\(Int(percent.rounded()))%"
+    }
+
+    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
+        provider.family == .official
+            && provider.type == .trae
+            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
+    }
+
+    private func traeRemainingAmountValue(window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> Double? {
+        guard let snapshot else { return nil }
+        let key: String?
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if window.id.lowercased().contains("autocomplete") || normalizedTitle.contains("autocomplete") || normalizedTitle.contains("自动补全") {
+            key = "autocompleteRemaining"
+        } else if window.id.lowercased().contains("dollar") || normalizedTitle.contains("dollar") || normalizedTitle.contains("美元") {
+            key = "dollarRemaining"
+        } else {
+            key = nil
+        }
+        guard let key, let raw = snapshot.extras[key] else { return nil }
+        return Double(raw)
+    }
+
+    private func traeQuotaMetricTitle(baseTitle: String) -> String {
+        let normalized = baseTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("autocomplete") || normalized.contains("自动补全") {
+            return viewModel.localizedText("自动补全", "Autocomplete")
+        }
+        if normalized.contains("dollar") || normalized.contains("美元") {
+            return viewModel.localizedText("美元余额", "Dollar Balance")
+        }
+        return baseTitle
     }
 
     private func codexQuotaRank(_ kind: UsageQuotaKind) -> Int {
@@ -6505,6 +6682,8 @@ struct SettingsView: View {
             return "Windsurf"
         case .kimi:
             return provider.family == .official ? "Kimi Coding" : "Kimi"
+        case .trae:
+            return "Trae SOLO"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -6534,6 +6713,8 @@ struct SettingsView: View {
             return "menu_windsurf_icon"
         case .kimi:
             return "menu_kimi_icon"
+        case .trae:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override
@@ -6586,7 +6767,7 @@ struct SettingsView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .relay, .open, .dragon:
+        case .trae, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"

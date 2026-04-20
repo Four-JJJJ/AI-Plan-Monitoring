@@ -1,7 +1,7 @@
 import Foundation
 
 struct ThirdPartyBalanceBaselineTracker {
-    struct Entry {
+    struct Entry: Codable, Equatable {
         var baseline: Double
         var lastRemaining: Double
         var updatedAt: Date
@@ -12,7 +12,7 @@ struct ThirdPartyBalanceBaselineTracker {
     @discardableResult
     mutating func record(remaining: Double?, for providerID: String, at timestamp: Date = Date()) -> Double? {
         guard !providerID.isEmpty,
-              let remaining,
+              let remaining = Self.resolvedRemainingForBaseline(remaining: remaining),
               remaining.isFinite,
               remaining >= 0 else {
             return nil
@@ -39,6 +39,25 @@ struct ThirdPartyBalanceBaselineTracker {
     func percent(for providerID: String) -> Double? {
         guard let entry = entries[providerID] else { return nil }
         return Self.normalizedPercent(remaining: entry.lastRemaining, baseline: entry.baseline)
+    }
+
+    mutating func restore(entries restored: [String: Entry]) {
+        entries = restored.reduce(into: [:]) { partial, item in
+            let key = item.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { return }
+            let entry = item.value
+            guard entry.baseline.isFinite,
+                  entry.lastRemaining.isFinite,
+                  entry.baseline >= 0,
+                  entry.lastRemaining >= 0 else {
+                return
+            }
+            partial[key] = entry
+        }
+    }
+
+    func snapshotEntries() -> [String: Entry] {
+        entries
     }
 
     mutating func remove(providerID: String) {
@@ -74,6 +93,26 @@ struct ThirdPartyBalanceBaselineTracker {
 
     func contains(providerID: String) -> Bool {
         entries[providerID] != nil
+    }
+
+    static func resolvedRemainingForBaseline(
+        remaining: Double?,
+        used: Double? = nil,
+        limit: Double? = nil
+    ) -> Double? {
+        if let remaining,
+           remaining.isFinite,
+           remaining >= 0 {
+            return remaining
+        }
+
+        guard let limit,
+              let used,
+              limit.isFinite,
+              used.isFinite else {
+            return nil
+        }
+        return max(0, limit - used)
     }
 
     private static func normalizedPercent(remaining: Double, baseline: Double) -> Double {

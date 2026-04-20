@@ -30,7 +30,7 @@ final class UsageDisplayFormatterTests: XCTestCase {
         )
     }
 
-    func testPlanTypeResolutionIsOnlyEnabledForFourOfficialModels() {
+    func testPlanTypeResolutionIsOnlyEnabledForSelectedOfficialModels() {
         XCTAssertNil(
             PlanTypeDisplayFormatter.resolvedPlanType(
                 providerType: .copilot,
@@ -65,6 +65,59 @@ final class UsageDisplayFormatterTests: XCTestCase {
             ),
             "student plus"
         )
+
+        XCTAssertEqual(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .trae,
+                extrasPlanType: "solo annual",
+                rawPlanType: nil
+            ),
+            "solo annual"
+        )
+
+        XCTAssertEqual(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .trae,
+                extrasPlanType: "Free plan",
+                rawPlanType: nil
+            ),
+            "Free"
+        )
+
+        XCTAssertEqual(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .trae,
+                extrasPlanType: "Pro plan",
+                rawPlanType: nil
+            ),
+            "Pro"
+        )
+
+        XCTAssertNil(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .trae,
+                extrasPlanType: "plan",
+                rawPlanType: nil
+            )
+        )
+
+        XCTAssertEqual(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .trae,
+                extrasPlanType: "Ultra",
+                rawPlanType: nil
+            ),
+            "Ultra"
+        )
+
+        XCTAssertEqual(
+            PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: .codex,
+                extrasPlanType: "Business Plan",
+                rawPlanType: nil
+            ),
+            "Business Plan"
+        )
     }
 
     func testCompactNumberZhHansBoundaries() {
@@ -94,6 +147,52 @@ final class UsageDisplayFormatterTests: XCTestCase {
         XCTAssertEqual(
             LocalTrendValueFormatter.metricValueText(value: 2_981, metric: .responses, language: .en),
             "3K req"
+        )
+    }
+
+    func testTraeValueFormattingSupportsAdaptiveDollarAndAutocompleteCompaction() {
+        XCTAssertEqual(
+            TraeValueDisplayFormatter.format(
+                0.2,
+                kind: .dollarBalance,
+                maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+            ),
+            "0.20"
+        )
+        XCTAssertEqual(
+            TraeValueDisplayFormatter.format(
+                3,
+                kind: .dollarBalance,
+                maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+            ),
+            "3"
+        )
+        XCTAssertEqual(
+            TraeValueDisplayFormatter.format(
+                5_000,
+                kind: .dollarBalance,
+                maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+            ),
+            "5,000"
+        )
+        XCTAssertEqual(
+            TraeValueDisplayFormatter.format(
+                50_000,
+                kind: .dollarBalance,
+                maxWidth: MetricValueLayoutFormatter.metricValueColumnWidth
+            ),
+            "5W"
+        )
+        XCTAssertEqual(TraeValueDisplayFormatter.format(950, kind: .autocomplete), "950")
+        XCTAssertEqual(TraeValueDisplayFormatter.format(1_500, kind: .autocomplete), "1.5K")
+        XCTAssertEqual(TraeValueDisplayFormatter.format(23_000, kind: .autocomplete), "2.3W")
+    }
+
+    func testMetricValueColumnWidthFits900PercentReference() {
+        XCTAssertGreaterThanOrEqual(MetricValueLayoutFormatter.metricValueColumnWidth, 46)
+        XCTAssertGreaterThanOrEqual(
+            MetricValueLayoutFormatter.metricValueColumnWidth,
+            MetricValueLayoutFormatter.metricValueReferenceTextWidth
         )
     }
 }
