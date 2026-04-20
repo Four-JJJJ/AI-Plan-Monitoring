@@ -5,37 +5,44 @@ import Foundation
 final class CodexDesktopAppService {
     private let runningAppsProvider: () -> [NSRunningApplication]
     private let bundleURLResolver: () -> URL?
+    private let appMatcher: (NSRunningApplication) -> Bool
+    private let forceTerminator: (NSRunningApplication) -> Bool
     private let openApplication: (URL, NSWorkspace.OpenConfiguration) async throws -> NSRunningApplication
 
     init(
         runningAppsProvider: @escaping () -> [NSRunningApplication] = { NSWorkspace.shared.runningApplications },
         bundleURLResolver: @escaping () -> URL? = { CodexDesktopAppService.defaultBundleURL() },
+        appMatcher: @escaping (NSRunningApplication) -> Bool = CodexDesktopAppService.matches,
+        forceTerminator: @escaping (NSRunningApplication) -> Bool = { $0.forceTerminate() },
         openApplication: @escaping (URL, NSWorkspace.OpenConfiguration) async throws -> NSRunningApplication = { url, configuration in
             try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
         }
     ) {
         self.runningAppsProvider = runningAppsProvider
         self.bundleURLResolver = bundleURLResolver
+        self.appMatcher = appMatcher
+        self.forceTerminator = forceTerminator
         self.openApplication = openApplication
     }
 
     @discardableResult
     func restartIfRunning() async -> Bool {
-        let initialRunningApps = runningAppsProvider().filter(Self.matches)
-        let bundleURL = initialRunningApps.compactMap(\.bundleURL).first ?? bundleURLResolver()
-        guard let bundleURL else {
+        let initialRunningApps = runningAppsProvider().filter(appMatcher)
+        guard !initialRunningApps.isEmpty else {
             return false
         }
+        let bundleURL = initialRunningApps.compactMap(\.bundleURL).first ?? bundleURLResolver()
+        guard let bundleURL else { return false }
 
         // Use force-quit first so apps like Codex do not surface a "confirm quit"
         // sheet that blocks the relaunch path.
         for app in initialRunningApps {
-            _ = app.forceTerminate()
+            _ = forceTerminator(app)
         }
 
         let shutdownDeadline = Date().addingTimeInterval(6.0)
         while Date() < shutdownDeadline {
-            let stillRunning = runningAppsProvider().contains(where: Self.matches)
+            let stillRunning = runningAppsProvider().contains(where: appMatcher)
             if !stillRunning {
                 break
             }
@@ -56,7 +63,7 @@ final class CodexDesktopAppService {
         return false
     }
 
-    private static func defaultBundleURL() -> URL? {
+    nonisolated private static func defaultBundleURL() -> URL? {
         let workspace = NSWorkspace.shared
         let fileManager = FileManager.default
         let knownBundleIDs = [
@@ -78,7 +85,7 @@ final class CodexDesktopAppService {
         return workspace.runningApplications.first(where: matches)?.bundleURL
     }
 
-    private static func matches(_ app: NSRunningApplication) -> Bool {
+    nonisolated private static func matches(_ app: NSRunningApplication) -> Bool {
         let localizedName = (app.localizedName ?? "").lowercased()
         let bundleIdentifier = (app.bundleIdentifier ?? "").lowercased()
         let bundleName = app.bundleURL?.lastPathComponent.lowercased() ?? ""
