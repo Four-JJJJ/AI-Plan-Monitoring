@@ -114,6 +114,21 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(manifest.id, "hongmacc")
     }
 
+    func testGenericNewAPIManifestUsesAccessTokenAndUserIDDefaults() {
+        let manifest = RelayAdapterRegistry.shared.manifest(for: "https://relay.example.com", preferredID: "generic-newapi")
+
+        XCTAssertEqual(manifest.match.defaultTokenChannelEnabled, false)
+        XCTAssertEqual(manifest.match.defaultBalanceChannelEnabled, true)
+        XCTAssertEqual(manifest.setup?.requiredInputs, [.displayName, .baseURL, .balanceAuth, .userID])
+        XCTAssertEqual(manifest.balanceRequest.path, "/api/user/self")
+        XCTAssertEqual(manifest.balanceRequest.userIDHeader, "New-Api-User")
+        XCTAssertEqual(manifest.extract.remaining, "div(data.quota,50000)")
+        XCTAssertEqual(manifest.extract.used, "div(data.used_quota,50000)")
+        XCTAssertEqual(manifest.extract.limit, "div(add(data.quota,data.used_quota),50000)")
+        XCTAssertEqual(manifest.extract.unit, "USD")
+        XCTAssertEqual(manifest.extract.accountLabel, "coalesce(data.group,\"默认套餐\")")
+    }
+
     func testRegistryMatchesDeepseekManifest() {
         let manifest = RelayAdapterRegistry.shared.manifest(for: "https://platform.deepseek.com")
         XCTAssertEqual(manifest.id, "deepseek")
@@ -199,7 +214,7 @@ final class RelayProviderTests: XCTestCase {
             }
             XCTAssertEqual(auth, "Bearer good-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"success":true,"data":{"quota":12,"used_quota":3,"request_quota":15}}"#.utf8))
+            return (response, Data(#"{"success":true,"data":{"quota":6000000,"used_quota":1500000}}"#.utf8))
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -208,7 +223,11 @@ final class RelayProviderTests: XCTestCase {
         let session = URLSession(configuration: config)
 
         let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "generic-newapi", baseURL: "https://relay.example.com"),
+            descriptor: genericNewAPIDescriptor(
+                service: service,
+                baseURL: "https://relay.example.com",
+                userID: "user-123"
+            ),
             session: session,
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(
@@ -220,7 +239,7 @@ final class RelayProviderTests: XCTestCase {
         )
 
         let snapshot = try await provider.fetch()
-        XCTAssertEqual(snapshot.remaining ?? -1, 12, accuracy: 0.001)
+        XCTAssertEqual(snapshot.remaining ?? -1, 120, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserBearer:browser")
         XCTAssertEqual(snapshot.fetchHealth, .ok)
         XCTAssertEqual(snapshot.valueFreshness, .live)
@@ -241,7 +260,7 @@ final class RelayProviderTests: XCTestCase {
         RelayMockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"success":true,"data":{"quota":9,"used_quota":1,"request_quota":10}}"#.utf8))
+            return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -250,7 +269,11 @@ final class RelayProviderTests: XCTestCase {
         let session = URLSession(configuration: config)
 
         let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "generic-newapi", baseURL: "https://relay.example.com"),
+            descriptor: genericNewAPIDescriptor(
+                service: service,
+                baseURL: "https://relay.example.com",
+                userID: "user-123"
+            ),
             session: session,
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(
@@ -266,9 +289,96 @@ final class RelayProviderTests: XCTestCase {
         )
 
         let snapshot = try await provider.fetch()
-        XCTAssertEqual(snapshot.remaining ?? -1, 9, accuracy: 0.001)
+        XCTAssertEqual(snapshot.remaining ?? -1, 90, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "savedBearer")
         XCTAssertEqual(browserBearerLookupCount, 0)
+    }
+
+    func testGenericNewAPIFetchConvertsQuotaToUSDBalance() async throws {
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("access-token", service: service, account: "relay.example.com/system-token"))
+
+        var descriptor = makeRelayDescriptor(service: service, adapterID: "generic-newapi", baseURL: "https://relay.example.com")
+        descriptor.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Authorization",
+            authScheme: "Bearer",
+            userID: "user-123",
+            userIDHeader: "New-Api-User",
+            requestMethod: "GET",
+            requestBodyJSON: nil,
+            endpointPath: "/api/user/self",
+            remainingExpression: nil,
+            usedExpression: nil,
+            limitExpression: nil,
+            successExpression: nil,
+            unitExpression: nil,
+            accountLabelExpression: nil,
+            staticHeaders: nil
+        )
+
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://relay.example.com/api/user/self")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "New-Api-User"), "user-123")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let payload = #"{"success":true,"data":{"group":"Pro","quota":1500000,"used_quota":500000,"request_count":12}}"#
+            return (response, Data(payload.utf8))
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 30, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.used ?? -1, 10, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.limit ?? -1, 40, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.unit, "USD")
+        XCTAssertEqual(snapshot.accountLabel, "Pro")
+        XCTAssertEqual(snapshot.rawMeta["account.userID"], "user-123")
+        XCTAssertEqual(snapshot.rawMeta["account.requestCount"], "12")
+        XCTAssertEqual(snapshot.rawMeta["account.rawUsedQuota"], "500000.0")
+        XCTAssertTrue(snapshot.note.contains("Requests 12"))
+    }
+
+    func testGenericNewAPIOverrideMigrationAppliesScaledExpressions() {
+        var descriptor = makeRelayDescriptor(
+            service: "AIPlanMonitorTests",
+            adapterID: "generic-newapi",
+            baseURL: "https://relay.example.com"
+        )
+        descriptor.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Authorization",
+            authScheme: "Bearer",
+            userID: "1",
+            userIDHeader: "New-Api-User",
+            requestMethod: "GET",
+            requestBodyJSON: nil,
+            endpointPath: "/api/user/self",
+            remainingExpression: "data.quota",
+            usedExpression: "data.used_quota",
+            limitExpression: "add(data.quota,data.used_quota)",
+            successExpression: "success",
+            unitExpression: "USD",
+            accountLabelExpression: nil,
+            staticHeaders: nil
+        )
+
+        let normalized = descriptor.normalized()
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.remainingExpression, "div(data.quota,50000)")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.usedExpression, "div(data.used_quota,50000)")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.limitExpression, "div(add(data.quota,data.used_quota),50000)")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.unitExpression, "USD")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.userID, "1")
     }
 
     func testFetchSupportsSumAndCoalesceExpressions() async throws {
@@ -1417,6 +1527,35 @@ final class RelayProviderTests: XCTestCase {
                 manualOverrides: nil
             )
         )
+    }
+
+    private func genericNewAPIDescriptor(
+        service: String,
+        baseURL: String,
+        userID: String
+    ) -> ProviderDescriptor {
+        var descriptor = makeRelayDescriptor(
+            service: service,
+            adapterID: "generic-newapi",
+            baseURL: baseURL
+        )
+        descriptor.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Authorization",
+            authScheme: "Bearer",
+            userID: userID,
+            userIDHeader: "New-Api-User",
+            requestMethod: nil,
+            requestBodyJSON: nil,
+            endpointPath: nil,
+            remainingExpression: nil,
+            usedExpression: nil,
+            limitExpression: nil,
+            successExpression: nil,
+            unitExpression: nil,
+            accountLabelExpression: nil,
+            staticHeaders: nil
+        )
+        return descriptor
     }
 
     private func makeJWT(exp: Int) -> String {

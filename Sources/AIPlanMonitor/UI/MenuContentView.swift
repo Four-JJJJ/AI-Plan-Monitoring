@@ -420,6 +420,7 @@ struct MenuContentView: View {
                 iconFallback: fallbackIcon(for: provider),
                 status: status,
                 amountText: (disconnected || stale) ? "-" : formattedBalanceNumber(snapshot?.remaining),
+                secondaryText: (disconnected || stale) ? nil : relaySecondaryText(provider: provider, snapshot: snapshot),
                 errorText: error,
                 backgroundColor: cardBackground,
                 isDisconnected: disconnected || stale,
@@ -515,6 +516,22 @@ struct MenuContentView: View {
             return value
         }
         return "\(value) · \(teamAlias)"
+    }
+
+    private func relaySecondaryText(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
+        let adapterID = snapshot?.rawMeta["relay.adapterID"] ?? provider.relayConfig?.adapterID
+        guard adapterID == "generic-newapi",
+              let rawRequestCount = snapshot?.rawMeta["account.requestCount"],
+              let requestCount = Int(rawRequestCount.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+
+        switch viewModel.language {
+        case .zhHans:
+            return "请求次数 \(requestCount)"
+        case .en:
+            return "Requests \(requestCount)"
+        }
     }
 
     private func buildPercentageMetricDisplays(from metrics: [QuotaMetric], disconnected: Bool) -> [PercentageMetricDisplay] {
@@ -1326,6 +1343,7 @@ private struct AmountModelCard: View {
     let iconFallback: String
     let status: CardStatus
     let amountText: String
+    let secondaryText: String?
     let errorText: String?
     let backgroundColor: Color
     let isDisconnected: Bool
@@ -1366,6 +1384,14 @@ private struct AmountModelCard: View {
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundStyle(Color.white.opacity(0.80))
+
+                if let secondaryText, !secondaryText.isEmpty {
+                    Text(secondaryText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .lineSpacing(0)
+                        .lineLimit(1)
+                }
             }
 
             if let errorText, !errorText.isEmpty {

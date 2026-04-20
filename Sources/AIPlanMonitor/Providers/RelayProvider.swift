@@ -366,6 +366,13 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         if let userID = request.userID {
             extraMeta["userID"] = userID
         }
+        let requestCount = numericValue(for: "coalesce(data.request_count,request_count)", in: root)
+        if let requestCount {
+            extraMeta["requestCount"] = String(Int(requestCount.rounded()))
+        }
+        if let rawUsedQuota = numericValue(for: "coalesce(data.used_quota,used_quota)", in: root) {
+            extraMeta["rawUsedQuota"] = String(rawUsedQuota)
+        }
 
         if manifest.postprocessID == .quotaDisplayStatus {
             let converted = try? await convertAilinyuQuotaToDisplayAmount(
@@ -384,7 +391,11 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             }
         }
 
-        let note = "Account remaining \(String(format: "%.2f", remaining))"
+        var noteParts = ["Account remaining \(String(format: "%.2f", remaining))"]
+        if let requestCount {
+            noteParts.append("Requests \(Int(requestCount.rounded()))")
+        }
+        let note = noteParts.joined(separator: " | ")
         return AccountChannelResult(
             remaining: remaining,
             used: used,
@@ -1514,6 +1525,17 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     private func numericValue(for expression: String, in root: Any) -> Double? {
         let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.hasPrefix("div("), trimmed.hasSuffix(")") {
+            let arguments = splitArguments(String(trimmed.dropFirst(4).dropLast()))
+            guard arguments.count == 2,
+                  let numerator = numericValue(for: arguments[0], in: root),
+                  let denominator = numericValue(for: arguments[1], in: root),
+                  denominator != 0 else {
+                return nil
+            }
+            return numerator / denominator
+        }
 
         if trimmed.hasPrefix("sum("), trimmed.hasSuffix(")") {
             let inner = String(trimmed.dropFirst(4).dropLast())
