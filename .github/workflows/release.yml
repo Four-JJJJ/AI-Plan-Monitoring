@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+
+    env:
+      TAG_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${TAG_NAME:-}"
+          if [[ -z "$TAG" ]]; then
+            TAG="v$(tr -d '[:space:]' < VERSION)"
+          fi
+
+          VERSION="${TAG#v}"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_VERSION="${{ steps.version.outputs.version }}" ./scripts/package_dmg.sh
+
+      - name: Generate update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          RELEASE_URL="https://github.com/$REPO/releases/tag/$TAG"
+          ZIP_NAME="AI-Plan-Monitor-macOS.zip"
+          DMG_NAME="AI Plan Monitor.dmg"
+          ZIP_SHA="$(shasum -a 256 "dist/$ZIP_NAME" | awk '{print $1}')"
+          DMG_SHA="$(shasum -a 256 "dist/$DMG_NAME" | awk '{print $1}')"
+          ZIP_SIZE="$(stat -f%z "dist/$ZIP_NAME")"
+          DMG_SIZE="$(stat -f%z "dist/$DMG_NAME")"
+          PUBLISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          cat > dist/latest.json <<JSON
+          {
+            "version": "$VERSION",
+            "pub_date": "$PUBLISHED_AT",
+            "release_url": "$RELEASE_URL",
+            "notes_url": "$RELEASE_URL",
+            "assets": {
+              "macos_zip": {
+                "url": "https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME",
+                "sha256": "$ZIP_SHA",
+                "size": $ZIP_SIZE
+              },
+              "macos_dmg": {
+                "url": "https://github.com/$REPO/releases/download/$TAG/$DMG_NAME",
+                "sha256": "$DMG_SHA",
+                "size": $DMG_SIZE
+              }
+            }
+          }
+          JSON
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.version.outputs.tag }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/latest.json "dist/AI Plan Monitor.dmg" dist/AI-Plan-Monitor-macOS.zip --clobber
+          else
+            gh release create "$TAG" \
+              dist/latest.json \
+              "dist/AI Plan Monitor.dmg" \
+              dist/AI-Plan-Monitor-macOS.zip \
+              --title "$TAG" \
+              --generate-notes
+          fi

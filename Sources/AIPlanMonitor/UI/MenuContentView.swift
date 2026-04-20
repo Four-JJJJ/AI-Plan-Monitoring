@@ -79,8 +79,8 @@ struct MenuContentView: View {
 
             Spacer(minLength: 8)
 
-            if let update = viewModel.availableUpdate {
-                headerUpdateButton(update)
+            if shouldShowUpdateButton {
+                headerUpdateButton
             }
 
             HStack(spacing: headerActionSpacing) {
@@ -158,7 +158,15 @@ struct MenuContentView: View {
         .frame(width: headerActionIconSize, height: headerActionIconSize)
     }
 
-    private func headerUpdateButton(_ update: AppUpdateInfo) -> some View {
+    private var shouldShowUpdateButton: Bool {
+        viewModel.availableUpdate != nil
+            || viewModel.updateDownloadInFlight
+            || viewModel.updateInstallationInFlight
+            || viewModel.updatePreparedVersion != nil
+            || viewModel.updateInstallErrorMessage != nil
+    }
+
+    private var headerUpdateButton: some View {
         Button {
             viewModel.openLatestReleaseDownload()
         } label: {
@@ -177,15 +185,16 @@ struct MenuContentView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(!viewModel.isUpdateActionEnabled)
         .accessibilityLabel(
             viewModel.language == .zhHans
-                ? "发现新版本 \(update.latestVersion)，点击下载最新安装包"
-                : "New version \(update.latestVersion) available, download latest installer"
+                ? "应用更新操作：\(headerUpdateTitle)"
+                : "App update action: \(headerUpdateTitle)"
         )
     }
 
     private var headerUpdateTitle: String {
-        viewModel.language == .zhHans ? "新版本" : "New"
+        viewModel.updateActionTitle
     }
 
     private var permissionGuideCard: some View {

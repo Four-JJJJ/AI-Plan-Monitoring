@@ -570,12 +570,12 @@ struct SettingsView: View {
 
     private var settingsTopMetaBar: some View {
         HStack(spacing: 12) {
-            if let update = viewModel.availableUpdate {
+            if shouldShowUpdateMetaItem {
                 Button {
                     viewModel.openLatestReleaseDownload()
                 } label: {
                     settingsTopMetaItem(
-                        text: updateBadgeTitle(version: update.latestVersion),
+                        text: updateBadgeTitle,
                         iconName: "settings_download_icon",
                         fallbackIcon: "arrow.down",
                         textColor: Color(hex: 0x69BD64),
@@ -583,6 +583,7 @@ struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(!viewModel.isUpdateActionEnabled)
             }
 
             settingsTopMetaItem(
@@ -604,6 +605,30 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var shouldShowUpdateMetaItem: Bool {
+        viewModel.availableUpdate != nil
+            || viewModel.updateDownloadInFlight
+            || viewModel.updateInstallationInFlight
+            || viewModel.updatePreparedVersion != nil
+            || viewModel.updateInstallErrorMessage != nil
+    }
+
+    private var updateBadgeTitle: String {
+        if let version = viewModel.updatePreparedVersion {
+            return viewModel.localizedText("安装 \(version)", "Install \(version)")
+        }
+        if viewModel.updateDownloadInFlight || viewModel.updateInstallationInFlight {
+            return viewModel.updateActionTitle
+        }
+        if let update = viewModel.availableUpdate {
+            return updateBadgeTitle(version: update.latestVersion)
+        }
+        if viewModel.updateInstallErrorMessage != nil {
+            return viewModel.localizedText("重试更新", "Retry Update")
+        }
+        return viewModel.updateActionTitle
     }
 
     @ViewBuilder
