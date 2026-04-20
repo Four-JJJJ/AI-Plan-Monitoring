@@ -14,6 +14,8 @@ RES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 DMG_STAGING="$TMP_ROOT/dmg-root"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
+ZIP_NAME="AI-Plan-Monitor-macOS.zip"
+ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 RW_DMG_PATH="$TMP_ROOT/$APP_NAME-rw.dmg"
 MOUNT_POINT="$TMP_ROOT/mount"
 APP_ZIP_PATH="$TMP_ROOT/$APP_NAME.zip"
@@ -301,7 +303,7 @@ fi
 PRODUCTS_DIR="$(build_products_dir "$BIN_PATH")"
 
 mkdir -p "$DIST_DIR"
-rm -rf "$DIST_DIR/$APP_NAME.app" "$DIST_DIR/dmg-root" "$DMG_PATH"
+rm -rf "$DIST_DIR/$APP_NAME.app" "$DIST_DIR/dmg-root" "$DMG_PATH" "$ZIP_PATH"
 mkdir -p "$MACOS_DIR" "$RES_DIR" "$FRAMEWORKS_DIR" "$DMG_STAGING"
 
 cp "$BIN_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
@@ -384,6 +386,10 @@ if should_notarize; then
   staple_artifact "$APP_DIR"
 fi
 
+require_cmd ditto
+log "Creating distributable ZIP"
+ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
+
 cp -R "$APP_DIR" "$DMG_STAGING/"
 prepare_install_guide
 ln -s /Applications "$DMG_STAGING/Applications"
@@ -412,4 +418,5 @@ if should_notarize; then
 fi
 
 log "DMG: $DMG_PATH"
+log "ZIP: $ZIP_PATH"
 log "TMP_APP: $APP_DIR"

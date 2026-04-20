@@ -261,7 +261,6 @@ struct SettingsView: View {
             syncSelection()
             resetProviderReorderState()
             viewModel.refreshPermissionStatusesNow()
-            viewModel.checkForAppUpdate()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             viewModel.refreshPermissionStatusesNow()
@@ -570,21 +569,6 @@ struct SettingsView: View {
 
     private var settingsTopMetaBar: some View {
         HStack(spacing: 12) {
-            if let update = viewModel.availableUpdate {
-                Button {
-                    viewModel.openLatestReleaseDownload()
-                } label: {
-                    settingsTopMetaItem(
-                        text: updateBadgeTitle(version: update.latestVersion),
-                        iconName: "settings_download_icon",
-                        fallbackIcon: "arrow.down",
-                        textColor: Color(hex: 0x69BD64),
-                        textWeight: .semibold
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
             settingsTopMetaItem(
                 text: currentVersionTitle,
                 iconName: "settings_version_icon",
@@ -644,13 +628,6 @@ struct SettingsView: View {
             return "版本 \(viewModel.currentAppVersion)"
         }
         return "Version \(viewModel.currentAppVersion)"
-    }
-
-    private func updateBadgeTitle(version: String) -> String {
-        if viewModel.language == .zhHans {
-            return "新版本 \(version)"
-        }
-        return "New \(version)"
     }
 
     @ViewBuilder
@@ -1088,6 +1065,11 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 24)
 
+            versionUpdateSection
+
+            Spacer()
+                .frame(height: 24)
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
                     Text(settingsLaunchTitle)
@@ -1118,6 +1100,70 @@ struct SettingsView: View {
 
             permissionsSection
         }
+    }
+
+    private var versionUpdateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(viewModel.localizedText("版本更新", "App Updates"))
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+
+                Spacer(minLength: 0)
+
+                Text(currentVersionTitle)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+
+                settingsActionButton(
+                    viewModel.localizedText("检查更新", "Check for Updates")
+                ) {
+                    viewModel.checkForAppUpdate(force: true)
+                }
+                .disabled(viewModel.updateCheckInFlight || viewModel.updateDownloadInFlight || viewModel.updateInstallationInFlight)
+
+                if viewModel.availableUpdate != nil
+                    || viewModel.updatePreparedVersion != nil
+                    || viewModel.updateDownloadInFlight
+                    || viewModel.updateInstallationInFlight {
+                    settingsActionButton(
+                        viewModel.updateActionTitle,
+                        prominent: true
+                    ) {
+                        viewModel.openLatestReleaseDownload()
+                    }
+                    .disabled(!viewModel.isUpdateActionEnabled)
+                }
+            }
+            .frame(minHeight: 24)
+
+            Text(versionUpdateHintText)
+                .font(settingsHintFont)
+                .foregroundStyle(versionUpdateHintColor)
+                .padding(.leading, 60)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var versionUpdateHintText: String {
+        if viewModel.updateCheckInFlight {
+            return viewModel.localizedText("正在检查最新版本…", "Checking for the latest version…")
+        }
+        return viewModel.updateStatusSummary
+            ?? viewModel.localizedText(
+                "点击“检查更新”后，再由你决定是否安装新版本。",
+                "Check for updates first, then choose whether to install the new version."
+            )
+    }
+
+    private var versionUpdateHintColor: Color {
+        if viewModel.updateInstallErrorMessage != nil {
+            return Color(hex: 0xD05757)
+        }
+        if viewModel.availableUpdate != nil || viewModel.updatePreparedVersion != nil {
+            return Color(hex: 0x69BD64)
+        }
+        return settingsHintColor
     }
 
     private var permissionsSection: some View {
