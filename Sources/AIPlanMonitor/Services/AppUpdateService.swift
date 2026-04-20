@@ -194,7 +194,7 @@ actor AppUpdateService {
         let installerScriptURL = prepared.workingDirectoryURL.appendingPathComponent("install_update.sh")
         let sourceAppURL = prepared.appBundleURL.standardizedFileURL
         let targetAppURL = standardizedCurrentAppURL
-        let backupAppURL = targetAppURL.deletingLastPathComponent()
+        let backupAppURL = prepared.workingDirectoryURL
             .appendingPathComponent("\(targetAppURL.deletingPathExtension().lastPathComponent) Backup.app")
         let pid = ProcessInfo.processInfo.processIdentifier
 

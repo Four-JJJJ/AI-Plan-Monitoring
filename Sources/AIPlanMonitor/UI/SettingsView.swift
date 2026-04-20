@@ -1111,6 +1111,10 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
 
+                Text(currentVersionTitle)
+                    .font(settingsHintFont)
+                    .foregroundStyle(settingsHintColor)
+
                 settingsActionButton(
                     viewModel.localizedText("检查更新", "Check for Updates")
                 ) {
