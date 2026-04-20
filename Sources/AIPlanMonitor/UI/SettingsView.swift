@@ -4421,47 +4421,56 @@ struct SettingsView: View {
 
         VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
             if provider.type == .trae {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        let hasSavedToken = viewModel.hasToken(for: provider)
-                        let savedTokenLength = viewModel.savedTokenLength(for: provider)
+                VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            let hasSavedToken = viewModel.hasToken(for: provider)
+                            let savedTokenLength = viewModel.savedTokenLength(for: provider)
 
-                        Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
-                            .font(settingsLabelFont)
-                            .foregroundStyle(settingsBodyColor)
-                            .frame(width: 60, alignment: .leading)
+                            Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
+                                .font(settingsLabelFont)
+                                .foregroundStyle(settingsBodyColor)
+                                .frame(width: 60, alignment: .leading)
 
-                        relayProminentSecureField(
-                            hasSavedToken
-                            ? maskedSecretDots(length: savedTokenLength)
-                            : viewModel.localizedText("粘贴 Cloud-IDE-JWT / JWT", "Paste Cloud-IDE-JWT / JWT"),
-                            text: Binding(
-                                get: { officialCookieInputs[provider.id, default: ""] },
-                                set: { officialCookieInputs[provider.id] = $0 }
+                            relayProminentSecureField(
+                                hasSavedToken
+                                ? maskedSecretDots(length: savedTokenLength)
+                                : viewModel.localizedText("粘贴 Cloud-IDE-JWT / JWT", "Paste Cloud-IDE-JWT / JWT"),
+                                text: Binding(
+                                    get: { officialCookieInputs[provider.id, default: ""] },
+                                    set: { officialCookieInputs[provider.id] = $0 }
+                                )
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                            settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
+                                let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !raw.isEmpty {
+                                    _ = viewModel.saveToken(raw, for: provider)
+                                }
+                                viewModel.updateOfficialProviderSettings(
+                                    providerID: provider.id,
+                                    sourceMode: .auto,
+                                    webMode: .disabled,
+                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue
+                                )
+                                officialCookieInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        officialConfigHintText(
+                            viewModel.localizedText(
+                                "获取说明：登录 trae.ai 后打开开发者工具 Network，刷新页面，复制 /trae/api/v1/pay/ide_user_ent_usage 请求头 Authorization（Cloud-IDE-JWT ...）粘贴到上方。",
+                                "How to get token: sign in to trae.ai, open DevTools Network, refresh, then copy Authorization from /trae/api/v1/pay/ide_user_ent_usage (Cloud-IDE-JWT ...) and paste above."
                             )
                         )
-                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
-
-                        settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
-                            let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !raw.isEmpty {
-                                _ = viewModel.saveToken(raw, for: provider)
-                            }
-                            viewModel.updateOfficialProviderSettings(
-                                providerID: provider.id,
-                                sourceMode: .auto,
-                                webMode: .disabled,
-                                quotaDisplayMode: quotaDisplayBinding.wrappedValue
-                            )
-                            officialCookieInputs[provider.id] = ""
-                            viewModel.restartPolling()
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    officialConfigRow(title: viewModel.localizedText("Trae 显示", "Trae Display")) {
+                    officialConfigRow(title: viewModel.localizedText("用量显示", "Usage Display")) {
                         officialSegmentControl(
                             selection: quotaDisplayBinding,
                             options: [.remaining, .used],
