@@ -78,6 +78,11 @@ final class AppViewModel {
         self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
         self.claudeProfiles = []
+        let preNormalizedConfig = self.config
+        normalizeStatusBarSelections()
+        if self.config != preNormalizedConfig {
+            try? configStore.save(self.config)
+        }
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
@@ -211,6 +216,14 @@ final class AppViewModel {
         config.statusBarProviderID
     }
 
+    var statusBarMultiUsageEnabled: Bool {
+        config.statusBarMultiUsageEnabled
+    }
+
+    var statusBarDisplayStyle: StatusBarDisplayStyle {
+        config.statusBarDisplayStyle
+    }
+
     var showOfficialAccountEmailInMenuBar: Bool {
         config.showOfficialAccountEmailInMenuBar
     }
@@ -267,7 +280,55 @@ final class AppViewModel {
     }
 
     func isStatusBarProvider(providerID: String) -> Bool {
-        config.statusBarProviderID == providerID
+        if config.statusBarMultiUsageEnabled {
+            return config.statusBarMultiProviderIDs.contains(providerID)
+        }
+        return config.statusBarProviderID == providerID
+    }
+
+    func setStatusBarMultiUsageEnabled(_ enabled: Bool) {
+        guard config.statusBarMultiUsageEnabled != enabled else { return }
+        config.statusBarMultiUsageEnabled = enabled
+        if enabled,
+           config.statusBarMultiProviderIDs.isEmpty,
+           let selected = config.statusBarProviderID {
+            config.statusBarMultiProviderIDs = [selected]
+        }
+        normalizeStatusBarSelections()
+        try? configStore.save(config)
+    }
+
+    func setStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
+        guard config.statusBarDisplayStyle != style else { return }
+        config.statusBarDisplayStyle = style
+        try? configStore.save(config)
+    }
+
+    func setStatusBarDisplayEnabled(_ enabled: Bool, providerID: String) {
+        guard config.providers.contains(where: { $0.id == providerID }) else { return }
+
+        if config.statusBarMultiUsageEnabled {
+            if enabled {
+                if !config.statusBarMultiProviderIDs.contains(providerID) {
+                    config.statusBarMultiProviderIDs.append(providerID)
+                }
+                if config.statusBarProviderID == nil {
+                    config.statusBarProviderID = providerID
+                }
+            } else {
+                config.statusBarMultiProviderIDs.removeAll { $0 == providerID }
+                if config.statusBarProviderID == providerID {
+                    config.statusBarProviderID = config.statusBarMultiProviderIDs.first
+                        ?? AppConfig.defaultStatusBarProviderID(from: config.providers)
+                }
+            }
+            normalizeStatusBarSelections()
+            try? configStore.save(config)
+            return
+        }
+
+        guard enabled else { return }
+        setStatusBarProvider(providerID: providerID)
     }
 
     func setStatusBarProvider(providerID: String?) {
@@ -278,8 +339,15 @@ final class AppViewModel {
         } else {
             normalized = AppConfig.defaultStatusBarProviderID(from: config.providers)
         }
-        guard config.statusBarProviderID != normalized else { return }
+        guard config.statusBarProviderID != normalized else {
+            if normalized != nil {
+                normalizeStatusBarSelections()
+                try? configStore.save(config)
+            }
+            return
+        }
         config.statusBarProviderID = normalized
+        normalizeStatusBarSelections()
         try? configStore.save(config)
     }
 
@@ -298,6 +366,22 @@ final class AppViewModel {
             return nil
         }
         return config.providers.first(where: { $0.id == fallbackID })
+    }
+
+    func statusBarProvidersForDisplay() -> [ProviderDescriptor] {
+        if !config.statusBarMultiUsageEnabled {
+            if let provider = statusBarProvider() {
+                return [provider]
+            }
+            return []
+        }
+
+        let providersByID = Dictionary(uniqueKeysWithValues: config.providers.map { ($0.id, $0) })
+        let selectedProviders = config.statusBarMultiProviderIDs.compactMap { id -> ProviderDescriptor? in
+            guard let provider = providersByID[id], provider.enabled else { return nil }
+            return provider
+        }
+        return selectedProviders
     }
 
     func text(_ key: L10nKey) -> String {
@@ -722,12 +806,7 @@ final class AppViewModel {
             }
         }
 
-        let currentStatusProviderIsEnabled = config.statusBarProviderID.flatMap { selectedID in
-            config.providers.first(where: { $0.id == selectedID && $0.enabled })
-        } != nil
-        if !currentStatusProviderIsEnabled {
-            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
-        }
+        normalizeStatusBarSelections()
 
         if discoveredIDs.isEmpty {
             return text(.localDiscoveryNothingFound)
@@ -1411,8 +1490,26 @@ final class AppViewModel {
     }
 
     private func persistAndRestart() {
+        normalizeStatusBarSelections()
         try? configStore.save(config)
         restartPolling()
+    }
+
+    private func normalizeStatusBarSelections() {
+        let enabledProviders = config.providers.filter(\.enabled)
+        let enabledProviderIDs = Set(enabledProviders.map(\.id))
+
+        if let selectedID = config.statusBarProviderID,
+           !enabledProviderIDs.contains(selectedID) {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        } else if config.statusBarProviderID == nil {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
+
+        config.statusBarMultiProviderIDs = AppConfig.normalizedStatusBarMultiProviderIDs(
+            config.statusBarMultiProviderIDs,
+            providers: config.providers
+        ).filter { enabledProviderIDs.contains($0) }
     }
 
     private func displayNameForDiscovery(_ descriptor: ProviderDescriptor) -> String {

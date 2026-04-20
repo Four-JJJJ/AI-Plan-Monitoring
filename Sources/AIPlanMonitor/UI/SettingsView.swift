@@ -1098,6 +1098,16 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 24)
 
+            statusBarMultiUsageSection
+
+            Spacer()
+                .frame(height: 24)
+
+            statusBarDisplayStyleSection
+
+            Spacer()
+                .frame(height: 24)
+
             permissionsSection
         }
     }
@@ -1164,6 +1174,191 @@ struct SettingsView: View {
             return Color(hex: 0x69BD64)
         }
         return settingsHintColor
+    }
+
+    private var statusBarMultiUsageSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(settingsStatusBarMultiUsageTitle)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+                    .frame(width: 48, alignment: .leading)
+
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { viewModel.statusBarMultiUsageEnabled },
+                        set: { viewModel.setStatusBarMultiUsageEnabled($0) }
+                    )
+                )
+                .toggleStyle(FigmaSwitchToggleStyle(onTrackOpacity: 0.55))
+                .labelsHidden()
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: 410, height: 24, alignment: .leading)
+
+            Text(settingsStatusBarMultiUsageHint)
+                .font(settingsHintFont)
+                .foregroundStyle(settingsHintColor)
+                .lineSpacing(0)
+                .lineLimit(1)
+                .padding(.leading, 60)
+                .frame(width: 410, alignment: .leading)
+        }
+        .frame(width: 410, alignment: .leading)
+    }
+
+    private var statusBarDisplayStyleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(settingsStatusBarDisplayStyleTitle)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+                    .frame(width: 48, alignment: .leading)
+
+                statusBarDisplayStyleSegmentControl
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: 410, height: 24, alignment: .leading)
+
+            statusBarDisplayStylePreview
+                .padding(.leading, 60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: 410, alignment: .leading)
+    }
+
+    private var statusBarDisplayStyleSegmentControl: some View {
+        HStack(spacing: 0) {
+            statusBarDisplayStyleSegmentButton(style: .iconPercent, title: settingsStatusBarStyleIconPercent)
+            statusBarDisplayStyleSegmentButton(style: .barNamePercent, title: settingsStatusBarStyleBarNamePercent)
+        }
+        .padding(1)
+        .frame(width: 180, height: 24)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.15))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func statusBarDisplayStyleSegmentButton(style: StatusBarDisplayStyle, title: String) -> some View {
+        let isSelected = viewModel.statusBarDisplayStyle == style
+        return Button {
+            viewModel.setStatusBarDisplayStyle(style)
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var statusBarDisplayStylePreview: some View {
+        switch viewModel.statusBarDisplayStyle {
+        case .iconPercent:
+            statusBarDisplayStylePreviewIconPercent
+        case .barNamePercent:
+            statusBarDisplayStylePreviewBarNamePercent
+        }
+    }
+
+    private var statusBarPreviewCardHeight: CGFloat { 64 }
+
+    private var statusBarDisplayStylePreviewIconPercent: some View {
+        let items: [(icon: String, value: String)] = [
+            ("menu_codex_icon", "78%"),
+            ("menu_claude_icon", "53%"),
+            ("menu_kimi_icon", "96%")
+        ]
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+
+            HStack(spacing: 16) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 4) {
+                        if let image = bundledImage(named: item.icon) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 16, height: 16)
+                                .opacity(0.8)
+                        }
+                        Text(item.value)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.8))
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(height: 16)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(height: 16, alignment: .leading)
+            .padding(.horizontal, 24)
+        }
+        .frame(height: statusBarPreviewCardHeight, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var statusBarDisplayStylePreviewBarNamePercent: some View {
+        let items: [(name: String, value: String, percent: CGFloat)] = [
+            ("Codex", "78%", 78),
+            ("Claude", "100%", 100),
+            ("Kimi", "10%", 10)
+        ]
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+
+            HStack(spacing: 16) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 4) {
+                        ZStack(alignment: .bottom) {
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(Color.white.opacity(0.30))
+                                .frame(width: 10, height: 20)
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(Color.white.opacity(0.8))
+                                .frame(width: 6, height: max(0, round(16 * item.percent / 100)))
+                                .offset(y: -2)
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(item.name)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(Color.white.opacity(0.80))
+                                .lineLimit(1)
+                            Text(item.value)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.8))
+                                .lineLimit(1)
+                        }
+                        .offset(y: 1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(height: 20)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(height: 20, alignment: .leading)
+            .padding(.horizontal, 24)
+        }
+        .frame(height: statusBarPreviewCardHeight, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var permissionsSection: some View {
@@ -1570,6 +1765,29 @@ struct SettingsView: View {
             : viewModel.text(.launchAtLoginHint)
     }
 
+    private var settingsStatusBarMultiUsageTitle: String {
+        viewModel.localizedText("多模展示", "Multi-Model Display")
+    }
+
+    private var settingsStatusBarMultiUsageHint: String {
+        viewModel.localizedText(
+            "开启后状态栏会同时展示多个勾选模型的用量；模型过多时可能挤占菜单栏空间。",
+            "When enabled, the menu bar shows usage from multiple selected providers; too many providers may crowd the menu bar."
+        )
+    }
+
+    private var settingsStatusBarDisplayStyleTitle: String {
+        viewModel.text(.statusBarDisplayStyle)
+    }
+
+    private var settingsStatusBarStyleIconPercent: String {
+        viewModel.text(.statusBarStyleIconPercent)
+    }
+
+    private var settingsStatusBarStyleBarNamePercent: String {
+        viewModel.text(.statusBarStyleBarNamePercent)
+    }
+
     private var statusAuthorizedText: String {
         viewModel.language == .zhHans ? "已授权" : "Authorized"
     }
@@ -1897,9 +2115,7 @@ struct SettingsView: View {
                 providerNameToggleRow(title: officialStatusBarTitle, isOn: Binding(
                     get: { viewModel.isStatusBarProvider(providerID: provider.id) },
                     set: { newValue in
-                        if newValue {
-                            viewModel.setStatusBarProvider(providerID: provider.id)
-                        }
+                        viewModel.setStatusBarDisplayEnabled(newValue, providerID: provider.id)
                     }
                 ))
 
@@ -1980,9 +2196,7 @@ struct SettingsView: View {
                 providerNameToggleRow(title: officialStatusBarTitle, isOn: Binding(
                     get: { viewModel.isStatusBarProvider(providerID: provider.id) },
                     set: { newValue in
-                        if newValue {
-                            viewModel.setStatusBarProvider(providerID: provider.id)
-                        }
+                        viewModel.setStatusBarDisplayEnabled(newValue, providerID: provider.id)
                     }
                 ))
 
@@ -6948,6 +7162,9 @@ struct SettingsView: View {
 }
 
 private struct FigmaSwitchToggleStyle: ToggleStyle {
+    var onTrackOpacity: Double = 0.80
+    var offTrackOpacity: Double = 0.15
+
     func makeBody(configuration: Configuration) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.12)) {
@@ -6957,7 +7174,7 @@ private struct FigmaSwitchToggleStyle: ToggleStyle {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                 RoundedRectangle(cornerRadius: 100, style: .continuous)
                     // 开关轨道：选中/未选中透明度在这里改。
-                    .fill(Color.white.opacity(configuration.isOn ? 0.80 : 0.15))
+                    .fill(Color.white.opacity(configuration.isOn ? onTrackOpacity : offTrackOpacity))
                     .frame(width: 54, height: 24)
 
                 RoundedRectangle(cornerRadius: 100, style: .continuous)

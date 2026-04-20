@@ -29,6 +29,13 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum StatusBarDisplayStyle: String, Codable, CaseIterable, Identifiable {
+    case iconPercent
+    case barNamePercent
+
+    var id: String { rawValue }
+}
+
 enum AuthKind: String, Codable {
     case none
     case bearer
@@ -485,6 +492,9 @@ struct AppConfig: Codable, Equatable {
     var simplifiedRelayConfig: Bool
     var showOfficialAccountEmailInMenuBar: Bool
     var statusBarProviderID: String?
+    var statusBarMultiUsageEnabled: Bool
+    var statusBarMultiProviderIDs: [String]
+    var statusBarDisplayStyle: StatusBarDisplayStyle
     var providers: [ProviderDescriptor]
 
     init(
@@ -493,14 +503,27 @@ struct AppConfig: Codable, Equatable {
         simplifiedRelayConfig: Bool = true,
         showOfficialAccountEmailInMenuBar: Bool = false,
         statusBarProviderID: String? = nil,
+        statusBarMultiUsageEnabled: Bool = false,
+        statusBarMultiProviderIDs: [String]? = nil,
+        statusBarDisplayStyle: StatusBarDisplayStyle = .iconPercent,
         providers: [ProviderDescriptor]
     ) {
+        let normalizedProviders = providers.map { $0.normalized() }
+        let resolvedStatusProviderID = statusBarProviderID ?? Self.defaultStatusBarProviderID(from: normalizedProviders)
         self.language = language
         self.launchAtLoginEnabled = launchAtLoginEnabled
         self.simplifiedRelayConfig = simplifiedRelayConfig
         self.showOfficialAccountEmailInMenuBar = showOfficialAccountEmailInMenuBar
-        self.statusBarProviderID = statusBarProviderID ?? Self.defaultStatusBarProviderID(from: providers)
-        self.providers = providers
+        self.statusBarProviderID = resolvedStatusProviderID
+        self.statusBarMultiUsageEnabled = statusBarMultiUsageEnabled
+        let decodedMultiProviderIDs = statusBarMultiProviderIDs
+            ?? (resolvedStatusProviderID.map { [$0] } ?? [])
+        self.statusBarMultiProviderIDs = Self.normalizedStatusBarMultiProviderIDs(
+            decodedMultiProviderIDs,
+            providers: normalizedProviders
+        )
+        self.statusBarDisplayStyle = statusBarDisplayStyle
+        self.providers = normalizedProviders
     }
 
     static let `default` = AppConfig(
@@ -526,6 +549,9 @@ struct AppConfig: Codable, Equatable {
         case simplifiedRelayConfig
         case showOfficialAccountEmailInMenuBar
         case statusBarProviderID
+        case statusBarMultiUsageEnabled
+        case statusBarMultiProviderIDs
+        case statusBarDisplayStyle
         case providers
     }
 
@@ -537,8 +563,18 @@ struct AppConfig: Codable, Equatable {
         self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
         let decodedProviders = try container.decodeIfPresent([ProviderDescriptor].self, forKey: .providers) ?? AppConfig.default.providers
         self.providers = decodedProviders.map { $0.normalized() }
-        self.statusBarProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)
+        let resolvedStatusProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)
             ?? Self.defaultStatusBarProviderID(from: providers)
+        self.statusBarProviderID = resolvedStatusProviderID
+        self.statusBarMultiUsageEnabled = try container.decodeIfPresent(Bool.self, forKey: .statusBarMultiUsageEnabled) ?? false
+        let decodedMultiProviderIDs = try container.decodeIfPresent([String].self, forKey: .statusBarMultiProviderIDs)
+            ?? (resolvedStatusProviderID.map { [$0] } ?? [])
+        self.statusBarMultiProviderIDs = Self.normalizedStatusBarMultiProviderIDs(
+            decodedMultiProviderIDs,
+            providers: providers
+        )
+        self.statusBarDisplayStyle = try container.decodeIfPresent(StatusBarDisplayStyle.self, forKey: .statusBarDisplayStyle)
+            ?? .iconPercent
     }
 
     static func defaultStatusBarProviderID(from providers: [ProviderDescriptor]) -> String? {
@@ -546,6 +582,17 @@ struct AppConfig: Codable, Equatable {
             return codex.id
         }
         return providers.first(where: \.enabled)?.id
+    }
+
+    static func normalizedStatusBarMultiProviderIDs(_ ids: [String], providers: [ProviderDescriptor]) -> [String] {
+        let validProviderIDs = Set(providers.map(\.id))
+        var seenIDs = Set<String>()
+        var normalizedIDs: [String] = []
+        for id in ids {
+            guard validProviderIDs.contains(id), seenIDs.insert(id).inserted else { continue }
+            normalizedIDs.append(id)
+        }
+        return normalizedIDs
     }
 }
 
@@ -1423,6 +1470,14 @@ extension AppConfig {
         }
         if migrated.statusBarProviderID == nil {
             migrated.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: migrated.providers)
+        }
+        migrated.statusBarMultiProviderIDs = AppConfig.normalizedStatusBarMultiProviderIDs(
+            migrated.statusBarMultiProviderIDs,
+            providers: migrated.providers
+        )
+        if migrated.statusBarMultiProviderIDs.isEmpty,
+           let selected = migrated.statusBarProviderID {
+            migrated.statusBarMultiProviderIDs = [selected]
         }
 
         return migrated
