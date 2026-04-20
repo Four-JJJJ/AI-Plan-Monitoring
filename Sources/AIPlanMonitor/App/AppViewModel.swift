@@ -20,7 +20,9 @@ final class AppViewModel {
     private let claudeDesktopAuthService = ClaudeDesktopAuthService()
     private let launchAtLoginService = LaunchAtLoginService()
     private let notifications = NotificationService()
+    @ObservationIgnored private let localSessionSignalMonitor = LocalSessionCompletionSignalMonitor()
     private let providerFactory: ProviderFactory
+    @ObservationIgnored private let localSessionRefreshCoordinator: LocalSessionRefreshCoordinator
 
     private(set) var config: AppConfig
     private(set) var snapshots: [String: UsageSnapshot] = [:]
@@ -64,6 +66,7 @@ final class AppViewModel {
     private var notificationPermissionPollingTask: Task<Void, Never>?
     private var preparedUpdate: PreparedAppUpdate?
     private var updateFlowVersionInFlight: String?
+    @ObservationIgnored private var localSessionMonitorTask: Task<Void, Never>?
 
     init() {
         var loadedConfig = (try? configStore.load()) ?? .default
@@ -74,10 +77,18 @@ final class AppViewModel {
         self.config = loadedConfig
         self.currentAppVersion = Self.detectCurrentAppVersion()
         self.providerFactory = ProviderFactory(keychain: keychain)
+        self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
+            signalSource: localSessionSignalMonitor
+        )
         self.codexSlots = codexSlotStore.visibleSlots()
         self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
         self.claudeProfiles = []
+        let preNormalizedConfig = self.config
+        normalizeStatusBarSelections()
+        if self.config != preNormalizedConfig {
+            try? configStore.save(self.config)
+        }
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
@@ -104,6 +115,8 @@ final class AppViewModel {
                 await self?.pollLoop(providerID: provider.id)
             }
         }
+
+        restartLocalSessionSignalMonitor()
     }
 
     func refreshNow() {
@@ -211,6 +224,14 @@ final class AppViewModel {
         config.statusBarProviderID
     }
 
+    var statusBarMultiUsageEnabled: Bool {
+        config.statusBarMultiUsageEnabled
+    }
+
+    var statusBarDisplayStyle: StatusBarDisplayStyle {
+        config.statusBarDisplayStyle
+    }
+
     var showOfficialAccountEmailInMenuBar: Bool {
         config.showOfficialAccountEmailInMenuBar
     }
@@ -267,7 +288,55 @@ final class AppViewModel {
     }
 
     func isStatusBarProvider(providerID: String) -> Bool {
-        config.statusBarProviderID == providerID
+        if config.statusBarMultiUsageEnabled {
+            return config.statusBarMultiProviderIDs.contains(providerID)
+        }
+        return config.statusBarProviderID == providerID
+    }
+
+    func setStatusBarMultiUsageEnabled(_ enabled: Bool) {
+        guard config.statusBarMultiUsageEnabled != enabled else { return }
+        config.statusBarMultiUsageEnabled = enabled
+        if enabled,
+           config.statusBarMultiProviderIDs.isEmpty,
+           let selected = config.statusBarProviderID {
+            config.statusBarMultiProviderIDs = [selected]
+        }
+        normalizeStatusBarSelections()
+        try? configStore.save(config)
+    }
+
+    func setStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
+        guard config.statusBarDisplayStyle != style else { return }
+        config.statusBarDisplayStyle = style
+        try? configStore.save(config)
+    }
+
+    func setStatusBarDisplayEnabled(_ enabled: Bool, providerID: String) {
+        guard config.providers.contains(where: { $0.id == providerID }) else { return }
+
+        if config.statusBarMultiUsageEnabled {
+            if enabled {
+                if !config.statusBarMultiProviderIDs.contains(providerID) {
+                    config.statusBarMultiProviderIDs.append(providerID)
+                }
+                if config.statusBarProviderID == nil {
+                    config.statusBarProviderID = providerID
+                }
+            } else {
+                config.statusBarMultiProviderIDs.removeAll { $0 == providerID }
+                if config.statusBarProviderID == providerID {
+                    config.statusBarProviderID = config.statusBarMultiProviderIDs.first
+                        ?? AppConfig.defaultStatusBarProviderID(from: config.providers)
+                }
+            }
+            normalizeStatusBarSelections()
+            try? configStore.save(config)
+            return
+        }
+
+        guard enabled else { return }
+        setStatusBarProvider(providerID: providerID)
     }
 
     func setStatusBarProvider(providerID: String?) {
@@ -278,14 +347,47 @@ final class AppViewModel {
         } else {
             normalized = AppConfig.defaultStatusBarProviderID(from: config.providers)
         }
-        guard config.statusBarProviderID != normalized else { return }
+        guard config.statusBarProviderID != normalized else {
+            if normalized != nil {
+                normalizeStatusBarSelections()
+                try? configStore.save(config)
+            }
+            return
+        }
         config.statusBarProviderID = normalized
+        normalizeStatusBarSelections()
         try? configStore.save(config)
     }
 
     func setShowOfficialAccountEmailInMenuBar(_ enabled: Bool) {
         guard config.showOfficialAccountEmailInMenuBar != enabled else { return }
         config.showOfficialAccountEmailInMenuBar = enabled
+        try? configStore.save(config)
+    }
+
+    func showOfficialPlanTypeInMenuBar(providerID: String) -> Bool {
+        guard let provider = config.providers.first(where: { $0.id == providerID }) else {
+            return true
+        }
+        guard provider.family == .official else {
+            return true
+        }
+        return provider.officialConfig?.showPlanTypeInMenuBar
+            ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).showPlanTypeInMenuBar
+    }
+
+    func setShowOfficialPlanTypeInMenuBar(_ enabled: Bool, providerID: String) {
+        guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
+              config.providers[idx].family == .official else {
+            return
+        }
+
+        var provider = config.providers[idx]
+        var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type)
+        guard official.showPlanTypeInMenuBar != enabled else { return }
+        official.showPlanTypeInMenuBar = enabled
+        provider.officialConfig = official
+        config.providers[idx] = provider
         try? configStore.save(config)
     }
 
@@ -298,6 +400,22 @@ final class AppViewModel {
             return nil
         }
         return config.providers.first(where: { $0.id == fallbackID })
+    }
+
+    func statusBarProvidersForDisplay() -> [ProviderDescriptor] {
+        if !config.statusBarMultiUsageEnabled {
+            if let provider = statusBarProvider() {
+                return [provider]
+            }
+            return []
+        }
+
+        let providersByID = Dictionary(uniqueKeysWithValues: config.providers.map { ($0.id, $0) })
+        let selectedProviders = config.statusBarMultiProviderIDs.compactMap { id -> ProviderDescriptor? in
+            guard let provider = providersByID[id], provider.enabled else { return nil }
+            return provider
+        }
+        return selectedProviders
     }
 
     func text(_ key: L10nKey) -> String {
@@ -722,12 +840,7 @@ final class AppViewModel {
             }
         }
 
-        let currentStatusProviderIsEnabled = config.statusBarProviderID.flatMap { selectedID in
-            config.providers.first(where: { $0.id == selectedID && $0.enabled })
-        } != nil
-        if !currentStatusProviderIsEnabled {
-            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
-        }
+        normalizeStatusBarSelections()
 
         if discoveredIDs.isEmpty {
             return text(.localDiscoveryNothingFound)
@@ -1411,8 +1524,26 @@ final class AppViewModel {
     }
 
     private func persistAndRestart() {
+        normalizeStatusBarSelections()
         try? configStore.save(config)
         restartPolling()
+    }
+
+    private func normalizeStatusBarSelections() {
+        let enabledProviders = config.providers.filter(\.enabled)
+        let enabledProviderIDs = Set(enabledProviders.map(\.id))
+
+        if let selectedID = config.statusBarProviderID,
+           !enabledProviderIDs.contains(selectedID) {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        } else if config.statusBarProviderID == nil {
+            config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
+        }
+
+        config.statusBarMultiProviderIDs = AppConfig.normalizedStatusBarMultiProviderIDs(
+            config.statusBarMultiProviderIDs,
+            providers: config.providers
+        ).filter { enabledProviderIDs.contains($0) }
     }
 
     private func displayNameForDiscovery(_ descriptor: ProviderDescriptor) -> String {
@@ -1438,7 +1569,7 @@ final class AppViewModel {
         case .windsurf:
             return "Windsurf"
         case .kimi:
-            return "Kimi"
+            return descriptor.family == .official ? "Kimi Coding" : "Kimi"
         case .relay, .open, .dragon:
             return descriptor.name
         }
@@ -1459,6 +1590,15 @@ final class AppViewModel {
     }
 
     private func pollLoop(providerID: String) async {
+        let startupJitterSeconds = Double.random(in: 0...20)
+        if startupJitterSeconds > 0 {
+            do {
+                try await Task.sleep(for: .seconds(startupJitterSeconds))
+            } catch {
+                return
+            }
+        }
+
         while !Task.isCancelled {
             guard let descriptor = descriptor(for: providerID), descriptor.enabled else {
                 return
@@ -1471,6 +1611,60 @@ final class AppViewModel {
 
             do {
                 try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func restartLocalSessionSignalMonitor() {
+        localSessionMonitorTask?.cancel()
+        localSessionMonitorTask = nil
+        let hasWatchTargets = config.providers.contains {
+            $0.enabled && $0.family == .official && ($0.type == .codex || $0.type == .claude)
+        }
+        guard hasWatchTargets else {
+            return
+        }
+        localSessionMonitorTask = Task { [weak self] in
+            await self?.localSessionSignalLoop()
+        }
+    }
+
+    private func localSessionSignalLoop() async {
+        var idleCycles = 0
+        while !Task.isCancelled {
+            let watchTargets = config.providers.filter {
+                $0.enabled && $0.family == .official && ($0.type == .codex || $0.type == .claude)
+            }
+            if watchTargets.isEmpty {
+                return
+            }
+
+            var didTriggerRefresh = false
+            if !watchTargets.isEmpty {
+                let refreshTargets = localSessionRefreshCoordinator.refreshCandidates(from: watchTargets)
+                for descriptor in refreshTargets {
+                    didTriggerRefresh = true
+                    await refreshProvider(descriptor, forceRefresh: false)
+                }
+            }
+
+            if didTriggerRefresh {
+                idleCycles = 0
+            } else {
+                idleCycles += 1
+            }
+
+            let sleepSeconds: TimeInterval
+            if idleCycles <= 2 {
+                sleepSeconds = 10
+            } else {
+                sleepSeconds = 30
+            }
+
+            do {
+                try await Task.sleep(for: .seconds(sleepSeconds))
             } catch {
                 return
             }

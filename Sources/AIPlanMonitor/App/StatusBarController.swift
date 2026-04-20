@@ -11,8 +11,6 @@ final class StatusBarController: NSObject {
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private let statusIconSize: CGFloat = 16
-    private let statusSpacing: CGFloat = 4
-    private let statusTextBaselineOffset: CGFloat = -1
     private let popoverWidth: CGFloat = 316
     private let popoverMinHeight: CGFloat = 60
     private let popoverGapBelowStatusIcon: CGFloat = 1
@@ -28,7 +26,6 @@ final class StatusBarController: NSObject {
         blue: 0x23 / 255.0,
         alpha: 1.0
     )
-    private lazy var statusFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     private var providerStatusImageCache: [String: NSImage] = [:]
     private lazy var appStatusImage: NSImage? = {
         if let image = NSApp.applicationIconImage?.copy() as? NSImage, image.isValid {
@@ -81,7 +78,6 @@ final class StatusBarController: NSObject {
         guard let button = statusItem.button else { return }
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
-        button.font = statusFont
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
         button.imageHugsTitle = false
@@ -124,14 +120,13 @@ final class StatusBarController: NSObject {
 
     private func refreshStatusDisplay() {
         guard let button = statusItem.button else { return }
-        let statusProvider = viewModel.statusBarProvider()
-        let text = statusText(for: statusProvider)
-        button.image = image(for: statusProvider)
-        button.image?.size = NSSize(width: statusIconSize, height: statusIconSize)
+        let displayProviders = viewModel.statusBarProvidersForDisplay()
+        let entries = displayProviders.map(statusDisplayEntry(for:))
+        button.image = nil
         button.title = ""
-        button.attributedTitle = statusAttributedTitle(
-            for: text,
-            appearance: button.effectiveAppearance
+        button.attributedTitle = StatusBarDisplayRenderer.attributedString(
+            entries: entries,
+            style: viewModel.statusBarDisplayStyle
         )
         updatePopoverContentSizeIfNeeded()
     }
@@ -228,7 +223,7 @@ final class StatusBarController: NSObject {
 
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshStatusDisplay()
             }
@@ -277,6 +272,55 @@ final class StatusBarController: NSObject {
         return ""
     }
 
+    private func statusDisplayName(for provider: ProviderDescriptor) -> String {
+        switch provider.type {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude"
+        case .gemini:
+            return "Gemini"
+        case .copilot:
+            return "Copilot"
+        case .zai:
+            return "Z.ai"
+        case .amp:
+            return "Amp"
+        case .cursor:
+            return "Cursor"
+        case .jetbrains:
+            return "JetBrains"
+        case .kiro:
+            return "Kiro"
+        case .windsurf:
+            return "Windsurf"
+        case .kimi:
+            return provider.family == .official ? "Kimi Coding" : "Kimi"
+        case .relay, .open, .dragon:
+            let trimmed = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "API" : trimmed
+        }
+    }
+
+    private func statusPercent(for provider: ProviderDescriptor) -> Double? {
+        if provider.type == .codex,
+           let activeSlot = viewModel.codexSlotViewModels().first(where: { $0.isActive }),
+           let percent = fiveHourPercent(from: activeSlot.snapshot) {
+            return percent
+        }
+        guard let snapshot = viewModel.snapshots[provider.id] else { return nil }
+        return preferredPercent(from: snapshot, provider: provider)
+    }
+
+    private func statusDisplayEntry(for provider: ProviderDescriptor) -> StatusBarDisplayEntry {
+        StatusBarDisplayEntry(
+            icon: image(for: provider),
+            name: statusDisplayName(for: provider),
+            valueText: statusText(for: provider),
+            percent: statusPercent(for: provider)
+        )
+    }
+
     private func preferredPercent(from snapshot: UsageSnapshot, provider: ProviderDescriptor) -> Double? {
         if let percent = fiveHourPercent(from: snapshot, displaysUsedQuota: provider.displaysUsedQuota) {
             return percent
@@ -318,35 +362,6 @@ final class StatusBarController: NSObject {
             return String(format: "%.1f", value)
         }
         return String(format: "%.2f", value)
-    }
-
-    private func statusTextAttributes(for appearance: NSAppearance) -> [NSAttributedString.Key: Any] {
-        let isDarkAppearance = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let textColor: NSColor = isDarkAppearance
-            ? NSColor.white.withAlphaComponent(0.95)
-            : NSColor.labelColor
-        return [
-            .font: statusFont,
-            .foregroundColor: textColor,
-            // 状态栏里数值文本轻微下移，保证图标+百分比在视觉上垂直居中。
-            .baselineOffset: statusTextBaselineOffset
-        ]
-    }
-
-    private func statusAttributedTitle(for text: String, appearance: NSAppearance) -> NSAttributedString {
-        guard !text.isEmpty else {
-            return NSAttributedString(string: "")
-        }
-
-        let result = NSMutableAttributedString()
-        let spacer = NSTextAttachment()
-        spacer.bounds = NSRect(x: 0, y: 0, width: statusSpacing, height: 1)
-        result.append(NSAttributedString(attachment: spacer))
-        result.append(NSAttributedString(
-            string: text,
-            attributes: statusTextAttributes(for: appearance)
-        ))
-        return result
     }
 
     private func image(for provider: ProviderDescriptor?) -> NSImage? {

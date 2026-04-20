@@ -120,6 +120,9 @@ enum L10nKey {
     case connectionFailed
     case advancedSettings
     case statusBarDisplayProvider
+    case statusBarDisplayStyle
+    case statusBarStyleIconPercent
+    case statusBarStyleBarNamePercent
     case codexProfiles
     case codexProfileSlotA
     case codexProfileSlotB
@@ -320,6 +323,9 @@ enum Localizer {
             case .connectionFailed: return "连接失败"
             case .advancedSettings: return "高级设置"
             case .statusBarDisplayProvider: return "在状态栏展示该模型"
+            case .statusBarDisplayStyle: return "展示样式"
+            case .statusBarStyleIconPercent: return "图标+百分比"
+            case .statusBarStyleBarNamePercent: return "柱状图+文字"
             case .codexProfiles: return "Codex 账号档案"
             case .codexProfileSlotA: return "账号 A"
             case .codexProfileSlotB: return "账号 B"
@@ -516,6 +522,9 @@ enum Localizer {
             case .connectionFailed: return "Connection failed"
             case .advancedSettings: return "Advanced settings"
             case .statusBarDisplayProvider: return "Show this provider in menu bar"
+            case .statusBarDisplayStyle: return "Display Style"
+            case .statusBarStyleIconPercent: return "Icon + Percent"
+            case .statusBarStyleBarNamePercent: return "Bar + Text"
             case .codexProfiles: return "Codex Profiles"
             case .codexProfileSlotA: return "Account A"
             case .codexProfileSlotB: return "Account B"
