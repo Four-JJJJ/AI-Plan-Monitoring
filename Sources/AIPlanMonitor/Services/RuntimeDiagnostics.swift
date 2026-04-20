@@ -4,6 +4,7 @@ import Darwin.Mach
 enum RuntimeDiagnosticsLimits {
     static let snapshotNoteMaxLength = 384
     static let localUsageTrendCacheMaxEntries = 24
+    static let thirdPartyBalanceBaselineCacheMaxEntries = 24
     static let localUsageTrendCacheEntryTTL: TimeInterval = 15 * 60
     static let localUsageTrendModelBreakdownCacheEntries = 0
     static let claudePrefetchMaxConcurrent = 2

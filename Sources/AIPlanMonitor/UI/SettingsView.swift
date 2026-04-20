@@ -1229,22 +1229,24 @@ struct SettingsView: View {
                         set: { viewModel.setStatusBarMultiUsageEnabled($0) }
                     )
                 )
-                .toggleStyle(FigmaSwitchToggleStyle(onTrackOpacity: 0.55))
+                .toggleStyle(FigmaSwitchToggleStyle())
                 .labelsHidden()
 
                 Spacer(minLength: 0)
             }
-            .frame(width: 410, height: 24, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
 
             Text(settingsStatusBarMultiUsageHint)
                 .font(settingsHintFont)
                 .foregroundStyle(settingsHintColor)
                 .lineSpacing(0)
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .allowsTightening(true)
                 .padding(.leading, 60)
-                .frame(width: 410, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 410, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusBarDisplayStyleSection: some View {
@@ -1698,12 +1700,18 @@ struct SettingsView: View {
         _ title: String,
         destructive: Bool = false,
         disabled: Bool = false,
+        dismissInputFocus: Bool = false,
         textOpacity: Double = 0.80,
         borderOpacity: Double = 0.55,
         action: @escaping () -> Void
     ) -> some View {
         // 设置页统一胶囊按钮（开始扫描/取消授权/重置所有数据等）。
-        Button(action: action) {
+        Button {
+            if dismissInputFocus {
+                dismissEditingFocus()
+            }
+            action()
+        } label: {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(textOpacity, 0.45) : textOpacity)))
@@ -1720,6 +1728,13 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+    }
+
+    private func dismissEditingFocus() {
+        focusedThresholdProviderID = nil
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            window.makeFirstResponder(nil)
+        }
     }
 
     private var resetSectionTitle: String {
@@ -4430,7 +4445,7 @@ struct SettingsView: View {
                         let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
                         let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
 
-                        Text("Token")
+                        Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
                             .font(settingsLabelFont)
                             .foregroundStyle(settingsBodyColor)
                             .frame(width: 60, alignment: .leading)
@@ -4444,7 +4459,7 @@ struct SettingsView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
-                        settingsCapsuleButton(viewModel.text(.save)) {
+                        settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                             let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                             if !raw.isEmpty {
                                 _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
@@ -4529,7 +4544,7 @@ struct SettingsView: View {
                 .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
             content()
         }
-        .frame(maxWidth: .infinity, minHeight: 24, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
     }
 
     private func thirdPartyHintText(_ text: String) -> some View {
@@ -4561,10 +4576,6 @@ struct SettingsView: View {
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.15))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(outlineColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -5147,7 +5158,7 @@ struct SettingsView: View {
                     claudeProfileEditorJSON = ""
                     claudeProfileEditorSource = .configDir
                 }
-                settingsCapsuleButton(viewModel.text(.save)) {
+                settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                     saveClaudeProfileEditor()
                 }
             }
@@ -5347,7 +5358,7 @@ struct SettingsView: View {
                     codexProfileEditor = nil
                     codexProfileEditorJSON = ""
                 }
-                settingsCapsuleButton(viewModel.text(.save)) {
+                settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                     saveCodexProfileEditor()
                 }
             }
@@ -5635,7 +5646,7 @@ struct SettingsView: View {
         let showUserIDField = showBalanceCredential && relayTemplateNeedsManualUserID(selectedTemplate)
         let currentBaseURL = baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
         let usesGenericTemplate = (selectedRelayTemplateInputs[provider.id] ?? providerAdapterID) == "generic-newapi"
-        let showNameField = usesGenericTemplate
+        let showNameField = true
         let showBaseURLField = usesGenericTemplate || !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
         let tokenSaveButtonTitle = viewModel.language == .zhHans ? "保存" : "Save"
         let quotaCredentialTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
@@ -5681,6 +5692,35 @@ struct SettingsView: View {
             set: { relayCredentialModeInputs[provider.id] = $0 }
         )
         let contentLeading = thirdPartyConfigLabelWidth + thirdPartyConfigLabelSpacing
+        let persistRelaySettings: () -> Void = {
+            viewModel.updateOpenProviderSettings(
+                providerID: provider.id,
+                name: resolvedRelayNameInput(
+                    typedName: providerNameInputs[provider.id] ?? provider.name,
+                    manifest: selectedTemplate
+                ),
+                baseURL: resolvedRelayBaseURLInput(
+                    typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
+                    manifest: selectedTemplate
+                ),
+                preferredAdapterID: selectedRelayTemplateInputs[provider.id] ?? providerAdapterID,
+                balanceCredentialMode: relayCredentialModeInputs[provider.id]
+                    ?? provider.relayConfig?.balanceCredentialMode
+                    ?? .manualPreferred,
+                tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
+                accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
+                authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
+                authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
+                userID: userIDInputs[provider.id] ?? defaultUserID,
+                userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
+                endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
+                remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
+                usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
+                limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
+                successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
+                unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
+            )
+        }
 
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 8) {
@@ -5714,22 +5754,38 @@ struct SettingsView: View {
 
             if showBaseURLField {
                 thirdPartyConfigRow(title: "Base URL") {
-                    relayProminentTextField(viewModel.text(.baseURL), text: Binding(
-                        get: { baseURLInputs[provider.id] ?? (provider.baseURL ?? "") },
-                        set: { baseURLInputs[provider.id] = $0 }
-                    ))
-                    .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
+                    HStack(spacing: 8) {
+                        relayProminentTextField(viewModel.text(.baseURL), text: Binding(
+                            get: { baseURLInputs[provider.id] ?? (provider.baseURL ?? "") },
+                            set: { baseURLInputs[provider.id] = $0 }
+                        ))
+                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                        settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
+                            persistRelaySettings()
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
             if showNameField {
                 thirdPartyConfigRow(title: viewModel.text(.providerName)) {
-                    relayProminentTextField(viewModel.text(.providerName), text: Binding(
-                        get: { providerNameInputs[provider.id] ?? provider.name },
-                        set: { providerNameInputs[provider.id] = $0 }
-                    ))
-                    .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
+                    HStack(spacing: 8) {
+                        relayProminentTextField(viewModel.text(.providerName), text: Binding(
+                            get: { providerNameInputs[provider.id] ?? provider.name },
+                            set: { providerNameInputs[provider.id] = $0 }
+                        ))
+                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                        settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
+                            persistRelaySettings()
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -5737,11 +5793,19 @@ struct SettingsView: View {
             if showUserIDField {
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: viewModel.text(.userID)) {
-                        relayProminentTextField(viewModel.text(.userID), text: Binding(
-                            get: { userIDInputs[provider.id] ?? defaultUserID },
-                            set: { userIDInputs[provider.id] = $0 }
-                        ))
-                        .frame(maxWidth: 396, minHeight: 24, maxHeight: 24, alignment: .leading)
+                        HStack(spacing: 8) {
+                            relayProminentTextField(viewModel.text(.userID), text: Binding(
+                                get: { userIDInputs[provider.id] ?? defaultUserID },
+                                set: { userIDInputs[provider.id] = $0 }
+                            ))
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                            settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
+                                persistRelaySettings()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -5756,7 +5820,7 @@ struct SettingsView: View {
                 let savedBalanceTokenLength = accountAuth.flatMap { viewModel.savedTokenLength(auth: $0) }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    thirdPartyConfigRow(title: balanceFieldTitle, alignment: .top) {
+                    thirdPartyConfigRow(title: balanceFieldTitle) {
                         HStack(spacing: 8) {
                             relayProminentSecureField(hasSavedBalanceToken ? maskedSecretDots(length: savedBalanceTokenLength) : balancePlaceholder, text: Binding(
                                 get: { systemTokenInputs[provider.id, default: ""] },
@@ -5764,7 +5828,7 @@ struct SettingsView: View {
                             ))
                             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
-                            settingsCapsuleButton(tokenSaveButtonTitle) {
+                            settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
                                 guard let accountAuth else { return }
                                 let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
@@ -5789,7 +5853,7 @@ struct SettingsView: View {
                 let savedTokenLength = viewModel.savedTokenLength(for: provider)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    thirdPartyConfigRow(title: quotaFieldTitle, alignment: .top) {
+                    thirdPartyConfigRow(title: quotaFieldTitle) {
                         HStack(spacing: 8) {
                             relayProminentSecureField(hasSavedToken ? maskedSecretDots(length: savedTokenLength) : quotaPlaceholder, text: Binding(
                                 get: { tokenInputs[provider.id, default: ""] },
@@ -5797,7 +5861,7 @@ struct SettingsView: View {
                             ))
                             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
-                            settingsCapsuleButton(tokenSaveButtonTitle) {
+                            settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
                                 let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
                                 _ = viewModel.saveToken(token, for: provider)
@@ -5829,34 +5893,8 @@ struct SettingsView: View {
             }
 
             HStack(spacing: 8) {
-                settingsCapsuleButton(viewModel.text(.saveConfig)) {
-                    viewModel.updateOpenProviderSettings(
-                        providerID: provider.id,
-                        name: resolvedRelayNameInput(
-                            typedName: providerNameInputs[provider.id] ?? provider.name,
-                            manifest: selectedTemplate
-                        ),
-                        baseURL: resolvedRelayBaseURLInput(
-                            typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
-                            manifest: selectedTemplate
-                        ),
-                        preferredAdapterID: selectedRelayTemplateInputs[provider.id] ?? providerAdapterID,
-                        balanceCredentialMode: relayCredentialModeInputs[provider.id]
-                            ?? provider.relayConfig?.balanceCredentialMode
-                            ?? .manualPreferred,
-                        tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
-                        accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
-                        authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
-                        authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
-                        userID: userIDInputs[provider.id] ?? defaultUserID,
-                        userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
-                        endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
-                        remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
-                        usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
-                        limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
-                        successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-                        unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
-                    )
+                settingsCapsuleButton(viewModel.text(.saveConfig), dismissInputFocus: true) {
+                    persistRelaySettings()
                 }
 
                 settingsCapsuleButton(viewModel.text(.testConnection)) {
@@ -6788,19 +6826,15 @@ struct SettingsView: View {
     }
 
     private func relayCredentialFieldName(
-        isAccount: Bool,
+        isAccount _: Bool,
         templateKind: RelayCredentialTemplateKind
     ) -> String {
         let language = viewModel.language
         switch templateKind {
         case .cookie:
-            return "Cookie"
+            return language == .zhHans ? "凭证信息" : "Credential"
         case .bearer:
-            if language == .zhHans {
-                return isAccount ? "Access Token" : "API Key / Token"
-            } else {
-                return isAccount ? "Access Token" : "API Key / Token"
-            }
+            return language == .zhHans ? "凭证信息" : "Credential"
         case .custom(let header, _):
             if language == .zhHans {
                 return "\(header) 值"
@@ -7008,8 +7042,19 @@ struct SettingsView: View {
                     .foregroundStyle(Color.white)
 
                 HStack(spacing: 6) {
-                    Text("💰")
-                        .font(.system(size: 14, weight: .regular))
+                    if let image = bundledImage(named: "menu_balance_icon") {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                            .opacity(0.9)
+                    } else {
+                        Image(systemName: "dollarsign.circle.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
                     Text(balanceText)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.white)

@@ -308,6 +308,11 @@ final class StatusBarController: NSObject {
            let percent = fiveHourPercent(from: activeSlot.snapshot) {
             return percent
         }
+        if viewModel.statusBarDisplayStyle == .barNamePercent,
+           provider.family == .thirdParty,
+           let percent = viewModel.thirdPartyBarPercent(for: provider.id) {
+            return percent
+        }
         guard let snapshot = viewModel.snapshots[provider.id] else { return nil }
         return preferredPercent(from: snapshot, provider: provider)
     }

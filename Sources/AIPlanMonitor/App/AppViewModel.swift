@@ -63,6 +63,7 @@ final class AppViewModel {
     private var didRunClaudeAutoCaptureCompaction = false
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
+    private var thirdPartyBalanceBaselineTracker = ThirdPartyBalanceBaselineTracker()
     private var hasStarted = false
     private var lastPermissionStatusRefreshAt = Date.distantPast
     private var notificationPermissionPollingTask: Task<Void, Never>?
@@ -99,6 +100,7 @@ final class AppViewModel {
         self.claudeProfiles = []
         let preNormalizedConfig = self.config
         normalizeStatusBarSelections()
+        pruneThirdPartyBalanceBaselines()
         if self.config != preNormalizedConfig {
             try? configStore.save(self.config)
         }
@@ -134,6 +136,7 @@ final class AppViewModel {
         self.codexProfiles = []
         self.claudeProfiles = []
         normalizeStatusBarSelections()
+        pruneThirdPartyBalanceBaselines()
     }
 #endif
 
@@ -252,6 +255,10 @@ final class AppViewModel {
 
     var showOfficialAccountEmailInMenuBar: Bool {
         config.showOfficialAccountEmailInMenuBar
+    }
+
+    func thirdPartyBarPercent(for providerID: String) -> Double? {
+        thirdPartyBalanceBaselineTracker.percent(for: providerID)
     }
 
     var hasNotificationPermission: Bool {
@@ -1074,6 +1081,7 @@ final class AppViewModel {
         errors.removeAll()
         consecutiveFailures.removeAll()
         activeAlerts.removeAll()
+        thirdPartyBalanceBaselineTracker.removeAll()
         lastUpdatedAt = nil
 
         launchAtLoginService.reset()
@@ -1376,6 +1384,9 @@ final class AppViewModel {
     func setEnabled(_ enabled: Bool, providerID: String) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }) else { return }
         if config.providers[idx].enabled == enabled { return }
+        if !enabled, config.providers[idx].family == .thirdParty {
+            thirdPartyBalanceBaselineTracker.remove(providerID: providerID)
+        }
         config.providers[idx].enabled = enabled
 
         // Keep enabled providers grouped at the top of the same family list.
@@ -1552,6 +1563,7 @@ final class AppViewModel {
         if config.statusBarProviderID == providerID {
             config.statusBarProviderID = AppConfig.defaultStatusBarProviderID(from: config.providers)
         }
+        thirdPartyBalanceBaselineTracker.remove(providerID: providerID)
         snapshots.removeValue(forKey: providerID)
         errors.removeValue(forKey: providerID)
         consecutiveFailures.removeValue(forKey: providerID)
@@ -1826,6 +1838,7 @@ final class AppViewModel {
 
     private func persistAndRestart() {
         normalizeStatusBarSelections()
+        pruneThirdPartyBalanceBaselines()
         try? configStore.save(config)
         restartPolling()
         syncClaudeProfilesCurrentState()
@@ -1847,6 +1860,18 @@ final class AppViewModel {
             config.statusBarMultiProviderIDs,
             providers: config.providers
         ).filter { enabledProviderIDs.contains($0) }
+    }
+
+    private func pruneThirdPartyBalanceBaselines() {
+        let validProviderIDs = Set(
+            config.providers
+                .filter { $0.family == .thirdParty }
+                .map(\.id)
+        )
+        thirdPartyBalanceBaselineTracker.prune(
+            keepingProviderIDs: validProviderIDs,
+            maxEntries: RuntimeDiagnosticsLimits.thirdPartyBalanceBaselineCacheMaxEntries
+        )
     }
 
     private func displayNameForDiscovery(_ descriptor: ProviderDescriptor) -> String {
@@ -1975,6 +2000,7 @@ final class AppViewModel {
     }
 
     private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
+        defer { pruneThirdPartyBalanceBaselines() }
         let isClaudeOfficial = descriptor.type == .claude && descriptor.family == .official
         if descriptor.type == .codex, descriptor.family == .official {
             syncCodexProfilesCurrentState()
@@ -1997,6 +2023,13 @@ final class AppViewModel {
                 snapshot = fetched
             }
             snapshots[descriptor.id] = boundedSnapshot(snapshot)
+            if descriptor.family == .thirdParty {
+                _ = thirdPartyBalanceBaselineTracker.record(
+                    remaining: snapshot.remaining,
+                    for: descriptor.id,
+                    at: snapshot.updatedAt
+                )
+            }
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
             lastUpdatedAt = Date()

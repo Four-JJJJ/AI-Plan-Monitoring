@@ -1378,8 +1378,12 @@ private struct AmountModelCard: View {
                     .lineSpacing(0)
                     .lineLimit(1)
                 HStack(spacing: 2) {
-                    Text("💰")
-                        .font(.system(size: 16, weight: .semibold))
+                    BundledIconView(
+                        name: "menu_balance_icon",
+                        fallback: "dollarsign.circle.fill",
+                        size: 16,
+                        iconOpacity: 0.8
+                    )
                     Text(amountText)
                         .font(.system(size: 16, weight: .semibold))
                 }
