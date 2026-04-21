@@ -345,6 +345,188 @@ final class CodexLocalUsageServiceTests: XCTestCase {
         XCTAssertEqual(summary.today.responses, 1)
     }
 
+    func testFetchSummaryCurrentAccountRecoversMissingIdentityFromConversationHistory() throws {
+        let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
+        try createLogsTable(at: databasePath)
+
+        let now = try fixedDate("2026-04-18T12:00:00Z")
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T09:50:00Z").timeIntervalSince1970),
+            body: identityEventLogfmt(
+                conversationID: "conv-recover",
+                eventTimestamp: "2026-04-18T09:50:00Z",
+                kind: "response.output_text.delta",
+                accountID: "acct-recover",
+                email: "recover@example.com"
+            ),
+            at: databasePath
+        )
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T10:00:00Z").timeIntervalSince1970),
+            body: completedEventLogfmt(
+                conversationID: "conv-recover",
+                eventTimestamp: "2026-04-18T10:00:00Z",
+                model: "gpt-5.4",
+                input: 12,
+                output: 8,
+                cached: 0,
+                reasoning: 0,
+                tool: 0,
+                accountID: nil,
+                email: nil,
+                escapeIdentityQuotes: false
+            ),
+            at: databasePath
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = CodexLocalUsageService(
+            calendar: calendar,
+            nowProvider: { now }
+        )
+
+        let summary = try service.fetchSummary(
+            databasePath: databasePath,
+            scope: .currentAccount,
+            currentIdentity: CodexTrendIdentityContext(
+                accountID: "acct-recover",
+                email: "recover@example.com"
+            )
+        )
+
+        XCTAssertEqual(summary.today.totalTokens, 20)
+        XCTAssertEqual(summary.today.responses, 1)
+        XCTAssertEqual(summary.diagnostics?.recoveredByConversationResponses, 1)
+        XCTAssertEqual(summary.diagnostics?.recoveredByConversationTokens, 20)
+        XCTAssertEqual(summary.diagnostics?.unattributedResponses, 0)
+        XCTAssertEqual(summary.diagnostics?.unattributedTokens, 0)
+    }
+
+    func testFetchSummaryCurrentAccountUsesLatestConversationIdentityWhenConversationSwitches() throws {
+        let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
+        try createLogsTable(at: databasePath)
+
+        let now = try fixedDate("2026-04-18T12:00:00Z")
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T09:30:00Z").timeIntervalSince1970),
+            body: identityEventLogfmt(
+                conversationID: "conv-switch",
+                eventTimestamp: "2026-04-18T09:30:00Z",
+                kind: "response.output_text.delta",
+                accountID: "acct-old",
+                email: "old@example.com"
+            ),
+            at: databasePath
+        )
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T09:45:00Z").timeIntervalSince1970),
+            body: identityEventLogfmt(
+                conversationID: "conv-switch",
+                eventTimestamp: "2026-04-18T09:45:00Z",
+                kind: "response.output_text.delta",
+                accountID: "acct-new",
+                email: "new@example.com"
+            ),
+            at: databasePath
+        )
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T10:00:00Z").timeIntervalSince1970),
+            body: completedEventLogfmt(
+                conversationID: "conv-switch",
+                eventTimestamp: "2026-04-18T10:00:00Z",
+                model: "gpt-5.4",
+                input: 9,
+                output: 1,
+                cached: 0,
+                reasoning: 0,
+                tool: 0,
+                accountID: nil,
+                email: nil,
+                escapeIdentityQuotes: false
+            ),
+            at: databasePath
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = CodexLocalUsageService(
+            calendar: calendar,
+            nowProvider: { now }
+        )
+
+        let oldSummary = try service.fetchSummary(
+            databasePath: databasePath,
+            scope: .currentAccount,
+            currentIdentity: CodexTrendIdentityContext(
+                accountID: "acct-old",
+                email: "old@example.com"
+            )
+        )
+        XCTAssertEqual(oldSummary.today.totalTokens, 0)
+        XCTAssertEqual(oldSummary.today.responses, 0)
+
+        let newSummary = try service.fetchSummary(
+            databasePath: databasePath,
+            scope: .currentAccount,
+            currentIdentity: CodexTrendIdentityContext(
+                accountID: "acct-new",
+                email: "new@example.com"
+            )
+        )
+        XCTAssertEqual(newSummary.today.totalTokens, 10)
+        XCTAssertEqual(newSummary.today.responses, 1)
+        XCTAssertEqual(newSummary.diagnostics?.recoveredByConversationResponses, 1)
+        XCTAssertEqual(newSummary.diagnostics?.recoveredByConversationTokens, 10)
+    }
+
+    func testFetchSummaryCurrentAccountKeepsUnrecoverableCompletedEventsAsUnattributed() throws {
+        let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
+        try createLogsTable(at: databasePath)
+
+        let now = try fixedDate("2026-04-18T12:00:00Z")
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-18T10:00:00Z").timeIntervalSince1970),
+            body: completedEventLogfmt(
+                conversationID: "conv-unattributed",
+                eventTimestamp: "2026-04-18T10:00:00Z",
+                model: "gpt-5.4",
+                input: 7,
+                output: 3,
+                cached: 0,
+                reasoning: 0,
+                tool: 0,
+                accountID: nil,
+                email: nil,
+                escapeIdentityQuotes: false
+            ),
+            at: databasePath
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = CodexLocalUsageService(
+            calendar: calendar,
+            nowProvider: { now }
+        )
+
+        let summary = try service.fetchSummary(
+            databasePath: databasePath,
+            scope: .currentAccount,
+            currentIdentity: CodexTrendIdentityContext(
+                accountID: "acct-selected",
+                email: "selected@example.com"
+            )
+        )
+
+        XCTAssertEqual(summary.today.totalTokens, 0)
+        XCTAssertEqual(summary.today.responses, 0)
+        XCTAssertEqual(summary.diagnostics?.recoveredByConversationResponses, 0)
+        XCTAssertEqual(summary.diagnostics?.recoveredByConversationTokens, 0)
+        XCTAssertEqual(summary.diagnostics?.unattributedResponses, 1)
+        XCTAssertEqual(summary.diagnostics?.unattributedTokens, 10)
+    }
+
     func testFetchSummaryCurrentAccountPrefiltersResponseCompletedBeforeApplyingRowLimit() throws {
         let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
         try createLogsTable(at: databasePath)
@@ -642,6 +824,31 @@ final class CodexLocalUsageServiceTests: XCTestCase {
             } else {
                 parts.append("user.email=\"\(email)\"")
             }
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    private func identityEventLogfmt(
+        conversationID: String,
+        eventTimestamp: String,
+        kind: String,
+        accountID: String?,
+        email: String?
+    ) -> String {
+        var parts = [
+            "event.name=\"codex.sse_event\"",
+            "event.kind=\(kind)",
+            "event.timestamp=\(eventTimestamp)",
+            "conversation.id=\(conversationID)",
+            "model=gpt-5.4"
+        ]
+
+        if let accountID {
+            parts.append("user.account_id=\"\(accountID)\"")
+        }
+        if let email {
+            parts.append("user.email=\"\(email)\"")
         }
 
         return parts.joined(separator: " ")

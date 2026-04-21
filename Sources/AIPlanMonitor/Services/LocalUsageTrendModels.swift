@@ -17,6 +17,10 @@ struct LocalUsageTrendDiagnostics: Equatable, Sendable {
     var matchedRows: Int
     var parsedEvents: Int
     var attributableEvents: Int
+    var recoveredByConversationResponses: Int
+    var recoveredByConversationTokens: Int
+    var unattributedResponses: Int
+    var unattributedTokens: Int
     var latestEventAt: Date?
     var source: LocalUsageTrendDiagnosticsSource
 }
@@ -234,6 +238,10 @@ private extension LocalUsageTrendDiagnostics {
             matchedRows: value.matchedRows,
             parsedEvents: value.parsedEvents,
             attributableEvents: value.attributableEvents,
+            recoveredByConversationResponses: value.recoveredByConversationResponses,
+            recoveredByConversationTokens: value.recoveredByConversationTokens,
+            unattributedResponses: value.unattributedResponses,
+            unattributedTokens: value.unattributedTokens,
             latestEventAt: value.latestEventAt,
             source: LocalUsageTrendDiagnosticsSource(codex: value.source)
         )

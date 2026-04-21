@@ -2981,6 +2981,8 @@ struct SettingsView: View {
         let hasTrendData = summary.map(localUsageTrendHasData) ?? false
         let chartStatus = localUsageTrendChartStatus(
             provider: provider,
+            scope: scope,
+            summary: summary,
             loading: loading,
             error: error,
             hasData: hasTrendData
@@ -3479,6 +3481,8 @@ struct SettingsView: View {
 
     private func localUsageTrendChartStatus(
         provider: ProviderDescriptor,
+        scope: LocalUsageTrendScope,
+        summary: LocalUsageSummary?,
         loading: Bool,
         error: String?,
         hasData: Bool
@@ -3496,6 +3500,25 @@ struct SettingsView: View {
             )
         }
         if !hasData {
+            if provider.type == .codex, scope == .currentAccount {
+                if let diagnostics = summary?.diagnostics,
+                   diagnostics.unattributedResponses > 0 || diagnostics.unattributedTokens > 0 {
+                    let unattributedResponses = formattedSettingsInteger(diagnostics.unattributedResponses)
+                    let unattributedTokens = formattedSettingsInteger(diagnostics.unattributedTokens)
+                    let text = viewModel.localizedText(
+                        "当前账号暂无可归属事件（未归属 \(unattributedResponses) 条/\(unattributedTokens) Token）",
+                        "No attributable events for current account (Unattributed \(unattributedResponses)/\(unattributedTokens) tokens)"
+                    )
+                    return LocalUsageTrendChartStatus(
+                        text: text,
+                        color: Color.white.opacity(0.30)
+                    )
+                }
+                return LocalUsageTrendChartStatus(
+                    text: viewModel.localizedText("当前账号暂无可归属事件", "No attributable events for current account"),
+                    color: Color.white.opacity(0.30)
+                )
+            }
             let noDataText = provider.type == .gemini
                 ? localUsageTrendEmptyHintText(for: provider)
                 : viewModel.localizedText("暂无数据", "No data")
@@ -3653,10 +3676,14 @@ struct SettingsView: View {
         guard let diagnostics = summary.diagnostics else { return nil }
         let latestText = localUsageTrendDiagnosticTimeText(diagnostics.latestEventAt)
         let modeText = localUsageTrendDiagnosticSourceText(diagnostics.source)
+        let recoveredResponses = formattedSettingsInteger(diagnostics.recoveredByConversationResponses)
+        let recoveredTokens = formattedSettingsInteger(diagnostics.recoveredByConversationTokens)
+        let unattributedResponses = formattedSettingsInteger(diagnostics.unattributedResponses)
+        let unattributedTokens = formattedSettingsInteger(diagnostics.unattributedTokens)
         if viewModel.language == .zhHans {
-            return "匹配事件 \(formattedSettingsInteger(diagnostics.matchedRows)) 条 · 可归属 \(formattedSettingsInteger(diagnostics.attributableEvents)) 条 · 最近事件 \(latestText) · 口径 \(modeText)"
+            return "匹配事件 \(formattedSettingsInteger(diagnostics.matchedRows)) 条 · 可归属 \(formattedSettingsInteger(diagnostics.attributableEvents)) 条 · 会话回填 \(recoveredResponses) 条/\(recoveredTokens) Token · 未归属 \(unattributedResponses) 条/\(unattributedTokens) Token · 最近事件 \(latestText) · 口径 \(modeText)"
         }
-        return "Matched \(formattedSettingsInteger(diagnostics.matchedRows)) · Attributable \(formattedSettingsInteger(diagnostics.attributableEvents)) · Latest \(latestText) · Mode \(modeText)"
+        return "Matched \(formattedSettingsInteger(diagnostics.matchedRows)) · Attributable \(formattedSettingsInteger(diagnostics.attributableEvents)) · Recovered \(recoveredResponses)/\(recoveredTokens) tokens · Unattributed \(unattributedResponses)/\(unattributedTokens) tokens · Latest \(latestText) · Mode \(modeText)"
     }
 
     private func localUsageTrendDiagnosticSourceText(_ source: LocalUsageTrendDiagnosticsSource) -> String {
@@ -3685,6 +3712,7 @@ struct SettingsView: View {
         scope: LocalUsageTrendScope,
         summary: LocalUsageSummary?
     ) -> String {
+        _ = summary
         switch provider.type {
         case .codex:
             if scope == .allAccounts {
@@ -3693,15 +3721,9 @@ struct SettingsView: View {
                     "Data source: local ~/.codex/sessions (local token usage only, not official remaining quota)."
                 )
             }
-            if summary?.isApproximateFallback == true {
-                return viewModel.localizedText(
-                    "数据来源：严格口径 ~/.codex/logs_2.sqlite；当前回退显示 ~/.codex/sessions 近似趋势（仅本地 Token，不等价于官方剩余额度）",
-                    "Data source: strict scope from ~/.codex/logs_2.sqlite; current fallback display from ~/.codex/sessions as approximation (local token usage only, not official remaining quota)."
-                )
-            }
             return viewModel.localizedText(
-                "数据来源：本地 ~/.codex/logs_2.sqlite（当前账号可归属事件，仅本地 Token，不等价于官方剩余额度）",
-                "Data source: local ~/.codex/logs_2.sqlite attributable events for current account (local token usage only, not official remaining quota)."
+                "数据来源：本地 ~/.codex/logs_2.sqlite（当前账号可归属事件；缺失身份会按会话回填，仍无法归属会单独提示，仅本地 Token，不等价于官方剩余额度）",
+                "Data source: local ~/.codex/logs_2.sqlite attributable events for current account; missing identity is recovered by conversation when possible, and still-unattributed events are shown separately (local token usage only, not official remaining quota)."
             )
         case .claude:
             if scope == .allAccounts {
@@ -4065,29 +4087,10 @@ struct SettingsView: View {
         identityCacheKey: String,
         strictSummary: LocalUsageSummary?
     ) -> LocalUsageSummary? {
-        guard provider.type == .codex,
-              scope == .currentAccount,
-              let strictSummary,
-              strictSummary.last30Days.responses == 0 else {
-            return nil
-        }
-
-        let allAccountsKey = localUsageTrendQueryKey(
-            providerID: provider.id,
-            scope: .allAccounts,
-            identityCacheKey: localUsageTrendEffectiveIdentityCacheKey(
-                scope: .allAccounts,
-                identityCacheKey: identityCacheKey
-            )
-        )
-        guard let allAccountsSummary = localUsageTrendSummaries[allAccountsKey],
-              allAccountsSummary.last30Days.responses > 0 else {
-            return nil
-        }
-
-        var diagnostics = strictSummary.diagnostics
-        diagnostics?.source = .approximate
-        return allAccountsSummary.markedApproximateFallback(using: diagnostics)
+        _ = provider
+        _ = scope
+        _ = identityCacheKey
+        return strictSummary
     }
 
     private func localUsageTrendTrimmed(_ value: String?) -> String? {
@@ -4227,59 +4230,8 @@ struct SettingsView: View {
             switch result {
             case .success(let summary):
                 storeLocalUsageTrendSummary(summary, for: queryKey, refreshedAt: refreshedAt)
-                if providerType == .codex,
-                   scopeForRequest == .currentAccount,
-                   summary.last30Days.responses == 0 {
-                    prefetchCodexAllAccountsTrendIfNeeded(
-                        providerID: provider.id
-                    )
-                }
             case .failure(let error):
                 storeLocalUsageTrendError(error.localizedDescription, for: queryKey, refreshedAt: refreshedAt)
-            }
-        }
-    }
-
-    private func prefetchCodexAllAccountsTrendIfNeeded(providerID: String) {
-        let allAccountsKey = localUsageTrendQueryKey(
-            providerID: providerID,
-            scope: .allAccounts,
-            identityCacheKey: localUsageTrendEffectiveIdentityCacheKey(
-                scope: .allAccounts,
-                identityCacheKey: "any"
-            )
-        )
-        guard !localUsageTrendLoadingQueryKeys.contains(allAccountsKey) else { return }
-
-        let now = Date()
-        pruneLocalUsageTrendCaches(now: now)
-        if let lastRefreshedAt = localUsageTrendQueryLastRefreshedAt[allAccountsKey],
-           now.timeIntervalSince(lastRefreshedAt) < localUsageTrendRefreshTTL,
-           localUsageTrendSummaries[allAccountsKey] != nil {
-            return
-        }
-
-        localUsageTrendLoadingQueryKeys.insert(allAccountsKey)
-        localUsageTrendErrors.removeValue(forKey: allAccountsKey)
-
-        Task { @MainActor in
-            let result = await Task.detached(priority: .utility) {
-                Result<LocalUsageSummary, Error> {
-                    let summary = try CodexLocalUsageService().fetchSummary(
-                        scope: .allAccounts,
-                        currentIdentity: nil
-                    )
-                    return LocalUsageSummary(codex: summary)
-                }
-            }.value
-
-            localUsageTrendLoadingQueryKeys.remove(allAccountsKey)
-            let refreshedAt = Date()
-            switch result {
-            case .success(let summary):
-                storeLocalUsageTrendSummary(summary, for: allAccountsKey, refreshedAt: refreshedAt)
-            case .failure(let error):
-                storeLocalUsageTrendError(error.localizedDescription, for: allAccountsKey, refreshedAt: refreshedAt)
             }
         }
     }

@@ -73,6 +73,10 @@ struct CodexLocalUsageDiagnostics: Equatable, Sendable {
     var matchedRows: Int
     var parsedEvents: Int
     var attributableEvents: Int
+    var recoveredByConversationResponses: Int
+    var recoveredByConversationTokens: Int
+    var unattributedResponses: Int
+    var unattributedTokens: Int
     var latestEventAt: Date?
     var source: CodexLocalUsageDiagnosticsSource
 }
@@ -150,6 +154,10 @@ final class CodexLocalUsageService {
                 matchedRows: events.count,
                 parsedEvents: events.count,
                 attributableEvents: 0,
+                recoveredByConversationResponses: 0,
+                recoveredByConversationTokens: 0,
+                unattributedResponses: 0,
+                unattributedTokens: 0,
                 latestEventAt: events.map(\.eventAt).max(),
                 source: .sessions
             )
@@ -418,10 +426,6 @@ final class CodexLocalUsageService {
             ltrim(feedback_log_body) LIKE 'event.name=codex.sse_event%'
             OR ltrim(feedback_log_body) LIKE 'event.name="codex.sse_event"%'
           )
-          AND (
-            feedback_log_body LIKE '%event.kind=response.completed%'
-            OR feedback_log_body LIKE '%event.kind="response.completed"%'
-          )
         ORDER BY ts DESC
         LIMIT ?;
         """
@@ -435,6 +439,10 @@ final class CodexLocalUsageService {
                     matchedRows: 0,
                     parsedEvents: 0,
                     attributableEvents: 0,
+                    recoveredByConversationResponses: 0,
+                    recoveredByConversationTokens: 0,
+                    unattributedResponses: 0,
+                    unattributedTokens: 0,
                     latestEventAt: nil,
                     source: .strict
                 )
@@ -453,6 +461,10 @@ final class CodexLocalUsageService {
                     matchedRows: 0,
                     parsedEvents: 0,
                     attributableEvents: 0,
+                    recoveredByConversationResponses: 0,
+                    recoveredByConversationTokens: 0,
+                    unattributedResponses: 0,
+                    unattributedTokens: 0,
                     latestEventAt: nil,
                     source: .strict
                 )
@@ -465,10 +477,9 @@ final class CodexLocalUsageService {
         sqlite3_bind_int64(statement, 1, startEpoch)
         sqlite3_bind_int(statement, 2, Int32(maxRowCount))
 
-        var dedupedEvents: [String: ParsedTokenEvent] = [:]
+        var rows: [IdentityLogRow] = []
+        rows.reserveCapacity(min(maxRowCount, 4096))
         var matchedRows = 0
-        var parsedEvents = 0
-        var latestParsedEventAt: Date?
 
         while true {
             let stepResult = sqlite3_step(statement)
@@ -486,11 +497,36 @@ final class CodexLocalUsageService {
             if rowEventAt < startOfLast30Days {
                 break
             }
-            guard Self.containsTokenSignal(body) else {
+            rows.append(IdentityLogRow(eventAt: rowEventAt, body: body))
+        }
+
+        var dedupedEvents: [String: ParsedTokenEvent] = [:]
+        var parsedEvents = 0
+        var latestParsedEventAt: Date?
+        var recoveredByConversationResponses = 0
+        var recoveredByConversationTokens = 0
+        var unattributedResponses = 0
+        var unattributedTokens = 0
+        var conversationIdentity: [String: ConversationIdentity] = [:]
+
+        for row in rows.reversed() {
+            guard let metadata = Self.parseCodexSSEMetadata(from: row.body) else {
                 continue
             }
 
-            guard var event = Self.parseCompletedEvent(from: body, fallbackEventAt: rowEventAt) else {
+            if let conversationID = metadata.conversationID,
+               metadata.hasIdentity {
+                conversationIdentity[conversationID] = ConversationIdentity(
+                    accountID: metadata.accountID,
+                    email: metadata.email
+                )
+            }
+
+            guard metadata.kind == "response.completed" else {
+                continue
+            }
+
+            guard var event = Self.parseCompletedEvent(from: row.body, fallbackEventAt: row.eventAt) else {
                 continue
             }
             parsedEvents += 1
@@ -499,6 +535,30 @@ final class CodexLocalUsageService {
             }
             if latestParsedEventAt == nil || event.eventAt > (latestParsedEventAt ?? .distantPast) {
                 latestParsedEventAt = event.eventAt
+            }
+
+            if !event.hasIdentity,
+               let conversationID = metadata.conversationID,
+               let recovered = conversationIdentity[conversationID] {
+                event.accountID = event.accountID ?? recovered.accountID
+                event.email = event.email ?? recovered.email
+                if event.hasIdentity {
+                    recoveredByConversationResponses += 1
+                    recoveredByConversationTokens += event.totalTokens
+                }
+            }
+
+            if !event.hasIdentity {
+                unattributedResponses += 1
+                unattributedTokens += event.totalTokens
+            }
+
+            if let conversationID = metadata.conversationID,
+               event.hasIdentity {
+                conversationIdentity[conversationID] = ConversationIdentity(
+                    accountID: event.accountID,
+                    email: event.email
+                )
             }
 
             if let existing = dedupedEvents[event.signature] {
@@ -523,6 +583,10 @@ final class CodexLocalUsageService {
                 matchedRows: matchedRows,
                 parsedEvents: parsedEvents,
                 attributableEvents: 0,
+                recoveredByConversationResponses: recoveredByConversationResponses,
+                recoveredByConversationTokens: recoveredByConversationTokens,
+                unattributedResponses: unattributedResponses,
+                unattributedTokens: unattributedTokens,
                 latestEventAt: latestParsedEventAt,
                 source: .strict
             )
@@ -582,18 +646,17 @@ final class CodexLocalUsageService {
         return parseCompletedLogfmtEvent(from: body, fallbackEventAt: fallbackEventAt)
     }
 
-    private static func containsTokenSignal(_ body: String) -> Bool {
-        body.contains("input_token_count")
-            || body.contains("output_token_count")
-            || body.contains("cached_token_count")
-            || body.contains("reasoning_token_count")
-            || body.contains("tool_token_count")
-            || body.contains("total_tokens")
-            || body.contains("total_token_count")
-            || body.contains("input_tokens")
-            || body.contains("output_tokens")
-            || body.contains("cached_tokens")
-            || body.contains("\"usage\"")
+    private static func parseCodexSSEMetadata(from body: String) -> ParsedCodexSSEMetadata? {
+        let firstNonWhitespace = body.unicodeScalars.first {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+        if firstNonWhitespace == "{" || firstNonWhitespace == "[" {
+            if let metadata = parseCodexSSEMetadataJSON(from: body) {
+                return metadata
+            }
+            return parseCodexSSEMetadataLogfmt(from: body)
+        }
+        return parseCodexSSEMetadataLogfmt(from: body)
     }
 
     private static func parseCompletedJSONEvent(from body: String, fallbackEventAt: Date) -> ParsedTokenEvent? {
@@ -688,6 +751,56 @@ final class CodexLocalUsageService {
         )
     }
 
+    private static func parseCodexSSEMetadataJSON(from body: String) -> ParsedCodexSSEMetadata? {
+        guard let data = body.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+
+        let event = root["event"] as? [String: Any]
+        let eventName = stringValue(event?["name"])
+            ?? stringValue(root["event_name"])
+            ?? stringValue(root["name"])
+        guard eventName == "codex.sse_event" else {
+            return nil
+        }
+
+        let kind = normalizedIdentityField(
+            stringValue(event?["kind"])
+                ?? stringValue(root["event_kind"])
+                ?? stringValue(root["kind"])
+        )
+        let rootUser = root["user"] as? [String: Any]
+        let eventUser = event?["user"] as? [String: Any]
+        let accountID = normalizedAccountID(
+            stringValue(eventUser?["account_id"])
+                ?? stringValue(eventUser?["accountId"])
+                ?? stringValue(rootUser?["account_id"])
+                ?? stringValue(rootUser?["accountId"])
+                ?? stringValue(root["user.account_id"])
+                ?? stringValue(root["account_id"])
+                ?? stringValue(root["accountId"])
+        )
+        let email = normalizedEmail(
+            stringValue(eventUser?["email"])
+                ?? stringValue(rootUser?["email"])
+                ?? stringValue(root["user.email"])
+                ?? stringValue(root["email"])
+        )
+        let conversationID = normalizedConversationID(
+            stringValue((root["conversation"] as? [String: Any])?["id"])
+                ?? stringValue(root["conversation.id"])
+                ?? stringValue(root["conversation_id"])
+        )
+
+        return ParsedCodexSSEMetadata(
+            kind: kind,
+            conversationID: conversationID,
+            accountID: accountID,
+            email: email
+        )
+    }
+
     private static func parseCompletedLogfmtEvent(from body: String, fallbackEventAt: Date) -> ParsedTokenEvent? {
         let fields = parseLogfmtFields(body)
         let eventName = normalizedIdentityField(fields["event.name"])
@@ -731,6 +844,33 @@ final class CodexLocalUsageService {
             eventAt: eventAt,
             modelID: modelID,
             totalTokens: totalTokens,
+            accountID: accountID,
+            email: email
+        )
+    }
+
+    private static func parseCodexSSEMetadataLogfmt(from body: String) -> ParsedCodexSSEMetadata? {
+        let fields = parseLogfmtFields(body)
+        let eventName = normalizedIdentityField(fields["event.name"])
+        guard eventName == "codex.sse_event" else {
+            return nil
+        }
+
+        let kind = normalizedIdentityField(fields["event.kind"])
+        let accountID = normalizedAccountID(
+            fields["user.account_id"]
+                ?? fields["user.accountId"]
+                ?? fields["account_id"]
+                ?? fields["accountId"]
+        )
+        let email = normalizedEmail(fields["user.email"] ?? fields["email"])
+        let conversationID = normalizedConversationID(
+            fields["conversation.id"] ?? fields["conversation_id"]
+        )
+
+        return ParsedCodexSSEMetadata(
+            kind: kind,
+            conversationID: conversationID,
             accountID: accountID,
             email: email
         )
@@ -1016,6 +1156,10 @@ final class CodexLocalUsageService {
         normalizedIdentityField(raw)?.lowercased()
     }
 
+    private static func normalizedConversationID(_ raw: String?) -> String? {
+        normalizedIdentityField(raw)?.lowercased()
+    }
+
     private static func normalizedIdentityField(_ raw: String?) -> String? {
         guard var value = trimmed(raw) else { return nil }
 
@@ -1186,6 +1330,11 @@ private struct IdentityLogScanResult {
     var diagnostics: CodexLocalUsageDiagnostics
 }
 
+private struct IdentityLogRow {
+    var eventAt: Date
+    var body: String
+}
+
 private struct ParsedTokenEvent {
     var signature: String
     var eventAt: Date
@@ -1193,6 +1342,10 @@ private struct ParsedTokenEvent {
     var totalTokens: Int
     var accountID: String?
     var email: String?
+
+    var hasIdentity: Bool {
+        accountID != nil || email != nil
+    }
 
     func mergedIdentity(with other: ParsedTokenEvent) -> ParsedTokenEvent {
         ParsedTokenEvent(
@@ -1204,6 +1357,22 @@ private struct ParsedTokenEvent {
             email: email ?? other.email
         )
     }
+}
+
+private struct ParsedCodexSSEMetadata {
+    var kind: String?
+    var conversationID: String?
+    var accountID: String?
+    var email: String?
+
+    var hasIdentity: Bool {
+        accountID != nil || email != nil
+    }
+}
+
+private struct ConversationIdentity {
+    var accountID: String?
+    var email: String?
 }
 
 private struct PeriodAccumulator {
