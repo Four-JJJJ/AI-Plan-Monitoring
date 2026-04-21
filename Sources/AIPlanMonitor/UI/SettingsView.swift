@@ -4739,6 +4739,8 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func codexProfileManagementSection() -> some View {
+        // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
+        let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.codexProfilesForSettings()
         let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.codexSlotViewModels().map { ($0.slotID, $0) })
         let teamDisplayBySlotID = codexTeamDisplayInfoBySlotID(profiles: profiles)
@@ -4754,6 +4756,7 @@ struct SettingsView: View {
 
             codexImportNextProfileCard(nextSlotID: viewModel.nextCodexProfileSlotID())
         }
+        .id(refreshAnchor)
     }
 
     private func codexImportedProfileCard(
@@ -4956,6 +4959,8 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func claudeProfileManagementSection() -> some View {
+        // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
+        let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.claudeProfilesForSettings()
         let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.claudeSlotViewModels().map { ($0.slotID, $0) })
 
@@ -4969,6 +4974,7 @@ struct SettingsView: View {
 
             claudeImportNextProfileCard(nextSlotID: viewModel.nextClaudeProfileSlotID())
         }
+        .id(refreshAnchor)
     }
 
     private func claudeImportedProfileCard(

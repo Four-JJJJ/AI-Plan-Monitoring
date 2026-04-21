@@ -323,7 +323,8 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
         response: HTTPURLResponse,
         descriptor: ProviderDescriptor,
         sourceLabel: String,
-        accountLabel: String?
+        accountLabel: String?,
+        receivedAt: Date = Date()
     ) throws -> UsageSnapshot {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.invalidResponse("usage decode failed")
@@ -338,6 +339,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             ?? OfficialValueParser.double(response.value(forHTTPHeaderField: "x-codex-primary-used-percent"))
         let secondaryUsed = OfficialValueParser.double(secondary?["used_percent"])
             ?? OfficialValueParser.double(response.value(forHTTPHeaderField: "x-codex-secondary-used-percent"))
+        let clockSkew = OfficialValueParser.clockSkew(response: response, localReceiveAt: receivedAt)
 
         var windows: [UsageQuotaWindow] = []
         if let primaryUsed {
@@ -346,7 +348,10 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
                 title: "5h",
                 remainingPercent: max(0, 100 - primaryUsed),
                 usedPercent: primaryUsed,
-                resetAt: OfficialValueParser.epochDate(seconds: primary?["reset_at"]),
+                resetAt: OfficialValueParser.applyClockSkew(
+                    OfficialValueParser.epochDate(seconds: primary?["reset_at"]),
+                    skew: clockSkew
+                ),
                 kind: .session
             ))
         }
@@ -356,7 +361,10 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
                 title: "Weekly",
                 remainingPercent: max(0, 100 - secondaryUsed),
                 usedPercent: secondaryUsed,
-                resetAt: OfficialValueParser.epochDate(seconds: secondary?["reset_at"]),
+                resetAt: OfficialValueParser.applyClockSkew(
+                    OfficialValueParser.epochDate(seconds: secondary?["reset_at"]),
+                    skew: clockSkew
+                ),
                 kind: .weekly
             ))
         }
@@ -366,7 +374,10 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
                 title: "Reviews",
                 remainingPercent: max(0, 100 - reviewUsed),
                 usedPercent: reviewUsed,
-                resetAt: OfficialValueParser.epochDate(seconds: review?["reset_at"]),
+                resetAt: OfficialValueParser.applyClockSkew(
+                    OfficialValueParser.epochDate(seconds: review?["reset_at"]),
+                    skew: clockSkew
+                ),
                 kind: .reviews
             ))
         }

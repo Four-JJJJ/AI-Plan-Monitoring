@@ -115,6 +115,87 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
     }
 
+    func testCodexAPIResponseCalibratesResetAtFromServerDateHeader() throws {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "primary_window": { "used_percent": 25, "reset_at": 1760000000 },
+            "secondary_window": { "used_percent": 60, "reset_at": 1760500000 }
+          }
+        }
+        """
+        let serverNow = Date(timeIntervalSince1970: 1_750_000_000)
+        let localReceiveAt = serverNow.addingTimeInterval(90)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+
+        let response = HTTPURLResponse(
+            url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Date": formatter.string(from: serverNow)]
+        )!
+
+        let snapshot = try CodexProvider.parseUsageSnapshot(
+            data: Data(json.utf8),
+            response: response,
+            descriptor: ProviderDescriptor.defaultOfficialCodex(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            receivedAt: localReceiveAt
+        )
+        let sessionReset = try XCTUnwrap(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        let weeklyReset = try XCTUnwrap(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
+
+        XCTAssertEqual(
+            sessionReset.timeIntervalSince1970,
+            Date(timeIntervalSince1970: 1_760_000_000).addingTimeInterval(90).timeIntervalSince1970,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            weeklyReset.timeIntervalSince1970,
+            Date(timeIntervalSince1970: 1_760_500_000).addingTimeInterval(90).timeIntervalSince1970,
+            accuracy: 0.001
+        )
+    }
+
+    func testCodexAPIResponseWithoutServerDateHeaderKeepsResetAt() throws {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "primary_window": { "used_percent": 25, "reset_at": 1760000000 },
+            "secondary_window": { "used_percent": 60, "reset_at": 1760500000 }
+          }
+        }
+        """
+        let response = HTTPURLResponse(
+            url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let snapshot = try CodexProvider.parseUsageSnapshot(
+            data: Data(json.utf8),
+            response: response,
+            descriptor: ProviderDescriptor.defaultOfficialCodex(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            receivedAt: Date(timeIntervalSince1970: 2_000_000_000)
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt,
+            Date(timeIntervalSince1970: 1_760_000_000)
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt,
+            Date(timeIntervalSince1970: 1_760_500_000)
+        )
+    }
+
     func testCodexForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
         let homeDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("codex-provider-tests-\(UUID().uuidString)", isDirectory: true)
@@ -403,6 +484,79 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.count, 2)
         XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
         XCTAssertNil(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
+    }
+
+    func testClaudeOAuthResponseCalibratesResetAtFromServerDateHeader() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00Z"],
+            "seven_day": ["utilization": 55, "resets_at": "2026-04-17T00:00:00Z"]
+        ]
+        let serverNow = Date(timeIntervalSince1970: 1_750_000_000)
+        let localReceiveAt = serverNow.addingTimeInterval(120)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Date": formatter.string(from: serverNow)]
+        )!
+
+        let snapshot = try ClaudeProvider.parseClaudeSnapshot(
+            root: root,
+            response: response,
+            descriptor: ProviderDescriptor.defaultOfficialClaude(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            planHint: "pro",
+            receivedAt: localReceiveAt
+        )
+        let sessionReset = try XCTUnwrap(snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        let weeklyReset = try XCTUnwrap(snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt)
+        let expectedSession = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-04-11T10:00:00Z")
+        ).addingTimeInterval(120)
+        let expectedWeekly = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-04-17T00:00:00Z")
+        ).addingTimeInterval(120)
+
+        XCTAssertEqual(
+            sessionReset.timeIntervalSince1970,
+            expectedSession.timeIntervalSince1970,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            weeklyReset.timeIntervalSince1970,
+            expectedWeekly.timeIntervalSince1970,
+            accuracy: 0.001
+        )
+    }
+
+    func testClaudeOAuthResponseWithoutServerDateHeaderKeepsResetAt() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00Z"],
+            "seven_day": ["utilization": 55, "resets_at": "2026-04-17T00:00:00Z"]
+        ]
+        let snapshot = try ClaudeProvider.parseClaudeSnapshot(
+            root: root,
+            response: nil,
+            descriptor: ProviderDescriptor.defaultOfficialClaude(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            planHint: "pro",
+            receivedAt: Date(timeIntervalSince1970: 2_000_000_000)
+        )
+
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt,
+            ISO8601DateFormatter().date(from: "2026-04-11T10:00:00Z")
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.kind == .weekly })?.resetAt,
+            ISO8601DateFormatter().date(from: "2026-04-17T00:00:00Z")
+        )
     }
 
     func testClaudeOAuthResponseWithoutPlanAndWithAllZeroUsageIsRejected() throws {

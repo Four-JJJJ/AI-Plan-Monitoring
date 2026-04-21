@@ -103,6 +103,27 @@ final class CodexAccountProfileStore {
         updateCurrentProfiles(load(), currentIdentityKey: nil, currentFingerprint: fingerprint)
     }
 
+    @discardableResult
+    func updateStoredAuthJSON(slotID: CodexSlotID, authJSON: String) -> CodexAccountProfile? {
+        let trimmed = authJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let payload = try? Self.parseAuthJSON(trimmed) else { return nil }
+
+        var items = load()
+        guard let index = items.firstIndex(where: { $0.slotID == slotID }) else { return nil }
+        var profile = items[index]
+        profile.authJSON = trimmed
+        profile.accountId = payload.accountId
+        profile.accountEmail = payload.accountEmail
+        profile.accountSubject = payload.accountSubject
+        profile.credentialFingerprint = payload.credentialFingerprint
+        profile.lastImportedAt = Date()
+        profile = normalizedProfile(profile, payload: payload)
+        items[index] = profile
+        try? save(items, ignoredFingerprints: loadIgnoredFingerprints())
+        return profile
+    }
+
     func nextAvailableSlotID() -> CodexSlotID {
         let existing = Set(load().map(\.slotID))
         return CodexSlotID.nextAvailable(excluding: existing)

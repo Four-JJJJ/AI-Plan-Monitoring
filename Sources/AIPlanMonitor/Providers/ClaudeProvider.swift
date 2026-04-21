@@ -88,9 +88,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             credentials = try await refresh(credentials: credentials)
         }
 
-        let data = try await requestOAuthUsage(accessToken: credentials.accessToken)
+        let (data, usageResponse) = try await requestOAuthUsage(accessToken: credentials.accessToken)
         var snapshot = try Self.parseClaudeSnapshot(
             root: data,
+            response: usageResponse,
             descriptor: descriptor,
             sourceLabel: "API",
             accountLabel: credentials.accountLabel,
@@ -234,7 +235,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         try? encoded.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    private func requestOAuthUsage(accessToken: String) async throws -> [String: Any] {
+    private func requestOAuthUsage(accessToken: String) async throws -> ([String: Any], HTTPURLResponse) {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
@@ -260,7 +261,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.invalidResponse("oauth usage decode failed")
         }
-        return json
+        return (json, http)
     }
 
     private func loadWebSnapshot(forceRefresh: Bool) async throws -> UsageSnapshot {
@@ -294,8 +295,15 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadWebOAuthSnapshot(token: String, source: String) async throws -> UsageSnapshot {
-        let root = try await requestOAuthUsage(accessToken: token)
-        var snapshot = try Self.parseClaudeSnapshot(root: root, descriptor: descriptor, sourceLabel: "Web", accountLabel: nil, planHint: nil)
+        let (root, usageResponse) = try await requestOAuthUsage(accessToken: token)
+        var snapshot = try Self.parseClaudeSnapshot(
+            root: root,
+            response: usageResponse,
+            descriptor: descriptor,
+            sourceLabel: "Web",
+            accountLabel: nil,
+            planHint: nil
+        )
         snapshot.extras["webCookieSource"] = source
         return snapshot
     }
@@ -525,12 +533,15 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
     internal static func parseClaudeSnapshot(
         root: [String: Any],
+        response: HTTPURLResponse? = nil,
         descriptor: ProviderDescriptor,
         sourceLabel: String,
         accountLabel: String?,
-        planHint: String?
+        planHint: String?,
+        receivedAt: Date = Date()
     ) throws -> UsageSnapshot {
         var windows: [UsageQuotaWindow] = []
+        let clockSkew = response.flatMap { OfficialValueParser.clockSkew(response: $0, localReceiveAt: receivedAt) }
 
         if let fiveHour = root["five_hour"] as? [String: Any],
            let used = OfficialValueParser.double(fiveHour["utilization"] ?? fiveHour["used_percent"]) {
@@ -540,7 +551,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     title: "5h",
                     remainingPercent: max(0, 100 - used),
                     usedPercent: used,
-                    resetAt: OfficialValueParser.isoDate(OfficialValueParser.string(fiveHour["resets_at"])),
+                    resetAt: OfficialValueParser.applyClockSkew(
+                        OfficialValueParser.isoDate(OfficialValueParser.string(fiveHour["resets_at"])),
+                        skew: clockSkew
+                    ),
                     kind: .session
                 )
             )
@@ -553,7 +567,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     title: "Weekly",
                     remainingPercent: max(0, 100 - used),
                     usedPercent: used,
-                    resetAt: OfficialValueParser.isoDate(OfficialValueParser.string(sevenDay["resets_at"])),
+                    resetAt: OfficialValueParser.applyClockSkew(
+                        OfficialValueParser.isoDate(OfficialValueParser.string(sevenDay["resets_at"])),
+                        skew: clockSkew
+                    ),
                     kind: .weekly
                 )
             )
@@ -571,7 +588,10 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     title: title,
                     remainingPercent: max(0, 100 - used),
                     usedPercent: used,
-                    resetAt: OfficialValueParser.isoDate(OfficialValueParser.string(item["resets_at"])),
+                    resetAt: OfficialValueParser.applyClockSkew(
+                        OfficialValueParser.isoDate(OfficialValueParser.string(item["resets_at"])),
+                        skew: clockSkew
+                    ),
                     kind: .modelWeekly
                 )
             )

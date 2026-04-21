@@ -165,6 +165,32 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertTrue(profiles.first?.authJSON.contains("rotated-access-token") == true)
     }
 
+    func testUpdateStoredAuthJSONUpdatesSlotMetadata() throws {
+        let store = makeStore()
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "A",
+            authJSON: sampleAuthJSON(accountID: "team-old", email: "old@example.com"),
+            currentFingerprint: nil
+        )
+
+        let updated = store.updateStoredAuthJSON(
+            slotID: .a,
+            authJSON: sampleAuthJSON(
+                accountID: "team-new",
+                email: "new@example.com",
+                subject: "sub-new",
+                accessToken: "rotated-token"
+            )
+        )
+
+        XCTAssertEqual(updated?.slotID, .a)
+        XCTAssertEqual(updated?.accountId, "team-new")
+        XCTAssertEqual(updated?.accountEmail, "new@example.com")
+        XCTAssertEqual(updated?.accountSubject, "sub-new")
+        XCTAssertTrue(updated?.authJSON.contains("rotated-token") == true)
+    }
+
     func testCaptureCurrentAuthDoesNotMergeDifferentTeamsEvenWhenFingerprintMatches() {
         let store = makeStore()
         let sharedToken = "same-access-token"

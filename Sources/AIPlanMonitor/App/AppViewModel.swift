@@ -61,6 +61,11 @@ final class AppViewModel {
     private var claudeSwitchingSlots: Set<CodexSlotID> = []
     private var claudePrefetchInFlightSlots: Set<CodexSlotID> = []
     private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
+    private var inactiveProfileBackgroundRefreshLastAttemptAt: [String: Date] = [:]
+    private var codexInactiveRefreshCursor = 0
+    private var codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
+    private var claudeInactiveRefreshCursor = 0
+    private var claudeInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
     private var didRunClaudeAutoCaptureCompaction = false
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
@@ -894,6 +899,7 @@ final class AppViewModel {
         codexSlots = codexSlotStore.remove(slotID: slotID)
         codexPrefetchAttemptedIdentity.removeValue(forKey: slotID)
         codexPrefetchInFlightSlots.remove(slotID)
+        codexInactiveRefreshRetryState.remove(slotID: slotID)
         setCodexSwitchFeedback(nil, for: slotID)
     }
 
@@ -979,6 +985,7 @@ final class AppViewModel {
         claudeSlots = claudeSlotStore.remove(slotID: slotID)
         claudePrefetchAttemptedIdentity.removeValue(forKey: slotID)
         claudePrefetchInFlightSlots.remove(slotID)
+        claudeInactiveRefreshRetryState.remove(slotID: slotID)
         setClaudeSwitchFeedback(nil, for: slotID)
     }
 
@@ -1078,10 +1085,15 @@ final class AppViewModel {
         codexSwitchingSlots.removeAll()
         codexPrefetchInFlightSlots.removeAll()
         codexPrefetchAttemptedIdentity.removeAll()
+        codexInactiveRefreshCursor = 0
+        codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
         codexSwitchFeedback.removeAll()
         claudeSwitchingSlots.removeAll()
         claudePrefetchInFlightSlots.removeAll()
         claudePrefetchAttemptedIdentity.removeAll()
+        claudeInactiveRefreshCursor = 0
+        claudeInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
+        inactiveProfileBackgroundRefreshLastAttemptAt.removeAll()
         didRunClaudeAutoCaptureCompaction = false
         claudeSwitchFeedback.removeAll()
         snapshots.removeAll()
@@ -2061,6 +2073,13 @@ final class AppViewModel {
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
             lastUpdatedAt = Date()
+            if descriptor.family == .official {
+                if forceRefresh {
+                    await refreshOfficialProfileCardsAfterManualRefresh(for: descriptor)
+                } else {
+                    await refreshOfficialInactiveProfileCardInBackgroundIfNeeded(for: descriptor)
+                }
+            }
 
             handleLowRemainingAlerts(for: descriptor, snapshot: snapshot)
 
@@ -2402,10 +2421,190 @@ final class AppViewModel {
         codexProfiles = codexProfileStore.captureCurrentAuthIfNeeded(
             authJSON: codexDesktopAuthService.currentAuthJSON()
         )
+        codexInactiveRefreshRetryState.prune(keeping: Set(codexProfiles.map(\.slotID)))
     }
 
     private func codexMenuTitle(for slotID: CodexSlotID) -> String {
         "Codex \(slotID.rawValue)"
+    }
+
+    private enum InactiveProfileRefreshResult {
+        case success
+        case failed
+        case skipped
+    }
+
+    private func refreshOfficialInactiveProfileCardInBackgroundIfNeeded(for descriptor: ProviderDescriptor) async {
+        guard descriptor.family == .official else { return }
+        switch descriptor.type {
+        case .codex:
+            await refreshCodexInactiveProfileCardInBackground(descriptor: descriptor)
+        case .claude:
+            await refreshClaudeInactiveProfileCardInBackground(descriptor: descriptor)
+        case .relay, .open, .dragon, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+            break
+        }
+    }
+
+    private func refreshCodexInactiveProfileCardInBackground(descriptor: ProviderDescriptor) async {
+        syncCodexProfilesCurrentState()
+        let orderedProfiles = codexProfiles.sorted { $0.slotID < $1.slotID }
+        let orderedSlotIDs = orderedProfiles.map(\.slotID)
+        let visibleSlotIDs = Set(orderedSlotIDs)
+        codexInactiveRefreshRetryState.prune(keeping: visibleSlotIDs)
+        guard !orderedSlotIDs.isEmpty else { return }
+
+        let now = Date()
+        guard InactiveProfileRefreshPlanner.shouldAttemptProviderRefresh(
+            lastAttemptAt: inactiveProfileBackgroundRefreshLastAttemptAt[descriptor.id],
+            minimumInterval: TimeInterval(descriptor.pollIntervalSec),
+            now: now
+        ) else {
+            return
+        }
+
+        let activeSlotIDs = Set(codexSlots.filter(\.isActive).map(\.slotID))
+        guard let selection = InactiveProfileRefreshPlanner.selectNextSlot(
+            orderedSlotIDs: orderedSlotIDs,
+            activeSlotIDs: activeSlotIDs,
+            inFlightSlotIDs: codexPrefetchInFlightSlots,
+            retryNotBefore: codexInactiveRefreshRetryState.retryNotBefore,
+            cursor: codexInactiveRefreshCursor,
+            now: now
+        ) else {
+            return
+        }
+
+        codexInactiveRefreshCursor = selection.nextCursor
+        inactiveProfileBackgroundRefreshLastAttemptAt[descriptor.id] = now
+
+        guard let profile = orderedProfiles.first(where: { $0.slotID == selection.slotID }) else {
+            return
+        }
+
+        let result = await refreshCodexProfileSnapshotSlot(profile, descriptor: descriptor)
+        switch result {
+        case .success:
+            codexInactiveRefreshRetryState.markSuccess(slotID: selection.slotID)
+        case .failed:
+            codexInactiveRefreshRetryState.markFailure(
+                slotID: selection.slotID,
+                baseInterval: descriptor.pollIntervalSec,
+                now: Date()
+            )
+        case .skipped:
+            break
+        }
+    }
+
+    private func refreshClaudeInactiveProfileCardInBackground(descriptor: ProviderDescriptor) async {
+        syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
+        let orderedProfiles = claudeProfiles.sorted { $0.slotID < $1.slotID }
+        let orderedSlotIDs = orderedProfiles.map(\.slotID)
+        let visibleSlotIDs = Set(orderedSlotIDs)
+        claudeInactiveRefreshRetryState.prune(keeping: visibleSlotIDs)
+        guard !orderedSlotIDs.isEmpty else { return }
+
+        let now = Date()
+        guard InactiveProfileRefreshPlanner.shouldAttemptProviderRefresh(
+            lastAttemptAt: inactiveProfileBackgroundRefreshLastAttemptAt[descriptor.id],
+            minimumInterval: TimeInterval(descriptor.pollIntervalSec),
+            now: now
+        ) else {
+            return
+        }
+
+        let activeSlotIDs = Set(claudeSlots.filter(\.isActive).map(\.slotID))
+        guard let selection = InactiveProfileRefreshPlanner.selectNextSlot(
+            orderedSlotIDs: orderedSlotIDs,
+            activeSlotIDs: activeSlotIDs,
+            inFlightSlotIDs: claudePrefetchInFlightSlots,
+            retryNotBefore: claudeInactiveRefreshRetryState.retryNotBefore,
+            cursor: claudeInactiveRefreshCursor,
+            now: now
+        ) else {
+            return
+        }
+
+        claudeInactiveRefreshCursor = selection.nextCursor
+        inactiveProfileBackgroundRefreshLastAttemptAt[descriptor.id] = now
+
+        guard let profile = orderedProfiles.first(where: { $0.slotID == selection.slotID }) else {
+            return
+        }
+
+        let result = await refreshClaudeProfileSnapshotSlot(profile, descriptor: descriptor)
+        switch result {
+        case .success:
+            claudeInactiveRefreshRetryState.markSuccess(slotID: selection.slotID)
+        case .failed:
+            claudeInactiveRefreshRetryState.markFailure(
+                slotID: selection.slotID,
+                baseInterval: descriptor.pollIntervalSec,
+                now: Date()
+            )
+        case .skipped:
+            break
+        }
+    }
+
+    private func refreshOfficialProfileCardsAfterManualRefresh(for descriptor: ProviderDescriptor) async {
+        guard descriptor.family == .official else { return }
+        switch descriptor.type {
+        case .codex:
+            await refreshCodexProfileCardsAfterManualRefresh(descriptor: descriptor)
+        case .claude:
+            await refreshClaudeProfileCardsAfterManualRefresh(descriptor: descriptor)
+        case .relay, .open, .dragon, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+            break
+        }
+    }
+
+    private func refreshCodexProfileCardsAfterManualRefresh(descriptor: ProviderDescriptor) async {
+        syncCodexProfilesCurrentState()
+        let activeSlotIDs = Set(codexSlots.filter(\.isActive).map(\.slotID))
+        for profile in codexProfiles.sorted(by: { $0.slotID < $1.slotID }) where !activeSlotIDs.contains(profile.slotID) {
+            _ = await refreshCodexProfileSnapshotSlot(profile, descriptor: descriptor)
+        }
+    }
+
+    private func refreshCodexProfileSnapshotSlot(
+        _ profile: CodexAccountProfile,
+        descriptor: ProviderDescriptor
+    ) async -> InactiveProfileRefreshResult {
+        if codexPrefetchInFlightSlots.contains(profile.slotID) {
+            return .skipped
+        }
+        codexPrefetchInFlightSlots.insert(profile.slotID)
+        defer { codexPrefetchInFlightSlots.remove(profile.slotID) }
+
+        guard let result = try? await codexProfileSnapshotService.fetchSnapshot(
+            profile: profile,
+            descriptor: descriptor
+        ) else {
+            return .failed
+        }
+
+        if let refreshedAuthJSON = result.refreshedAuthJSON, !refreshedAuthJSON.isEmpty {
+            _ = codexProfileStore.updateStoredAuthJSON(
+                slotID: profile.slotID,
+                authJSON: refreshedAuthJSON
+            )
+            syncCodexProfilesCurrentState()
+        }
+
+        let snapshot = boundedSnapshot(
+            markCodexSnapshotActive(
+                result.snapshot,
+                preferredSlotID: profile.slotID,
+                isActive: false
+            )
+        )
+        codexSlots = codexSlotStore.upsertInactive(
+            snapshot: snapshot,
+            preferredSlotID: profile.slotID
+        )
+        return .success
     }
 
     private func triggerCodexProfileSnapshotPrefetchIfNeeded() {
@@ -2424,27 +2623,10 @@ final class AppViewModel {
             }
 
             codexPrefetchAttemptedIdentity[profile.slotID] = identityKey
-            codexPrefetchInFlightSlots.insert(profile.slotID)
 
             Task { [weak self] in
                 guard let self else { return }
-                defer { self.codexPrefetchInFlightSlots.remove(profile.slotID) }
-
-                guard let fetched = try? await self.codexProfileSnapshotService.fetchSnapshot(
-                    profile: profile,
-                    descriptor: descriptor
-                ) else {
-                    return
-                }
-                let snapshot = self.markCodexSnapshotActive(
-                    fetched,
-                    preferredSlotID: profile.slotID,
-                    isActive: false
-                )
-                self.codexSlots = self.codexSlotStore.upsertInactive(
-                    snapshot: snapshot,
-                    preferredSlotID: profile.slotID
-                )
+                _ = await self.refreshCodexProfileSnapshotSlot(profile, descriptor: descriptor)
             }
         }
     }
@@ -2759,6 +2941,7 @@ final class AppViewModel {
         let visibleSlotIDs = Set(claudeProfiles.map(\.slotID))
         claudePrefetchAttemptedIdentity = claudePrefetchAttemptedIdentity.filter { visibleSlotIDs.contains($0.key) }
         claudePrefetchInFlightSlots = claudePrefetchInFlightSlots.intersection(visibleSlotIDs)
+        claudeInactiveRefreshRetryState.prune(keeping: visibleSlotIDs)
 
         if triggerPrefetchOnChange,
            previousProfileSetIdentity != claudeProfileSetIdentity(claudeProfiles) {
@@ -2768,6 +2951,53 @@ final class AppViewModel {
 
     private func claudeMenuTitle(for slotID: CodexSlotID) -> String {
         "Claude \(slotID.rawValue)"
+    }
+
+    private func refreshClaudeProfileCardsAfterManualRefresh(descriptor: ProviderDescriptor) async {
+        syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
+        let activeSlotIDs = Set(claudeSlots.filter(\.isActive).map(\.slotID))
+        for profile in claudeProfiles.sorted(by: { $0.slotID < $1.slotID }) where !activeSlotIDs.contains(profile.slotID) {
+            _ = await refreshClaudeProfileSnapshotSlot(profile, descriptor: descriptor)
+        }
+    }
+
+    private func refreshClaudeProfileSnapshotSlot(
+        _ profile: ClaudeAccountProfile,
+        descriptor: ProviderDescriptor
+    ) async -> InactiveProfileRefreshResult {
+        if claudePrefetchInFlightSlots.contains(profile.slotID) {
+            return .skipped
+        }
+        claudePrefetchInFlightSlots.insert(profile.slotID)
+        defer { claudePrefetchInFlightSlots.remove(profile.slotID) }
+
+        guard let result = try? await claudeProfileSnapshotService.fetchSnapshot(
+            profile: profile,
+            descriptor: descriptor
+        ) else {
+            return .failed
+        }
+
+        if let refreshed = result.refreshedCredentialsJSON, !refreshed.isEmpty {
+            _ = claudeProfileStore.updateStoredCredentials(
+                slotID: profile.slotID,
+                credentialsJSON: refreshed
+            )
+            syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
+        }
+
+        let snapshot = boundedSnapshot(
+            markClaudeSnapshotActive(
+                result.snapshot,
+                preferredSlotID: profile.slotID,
+                isActive: false
+            )
+        )
+        claudeSlots = claudeSlotStore.upsertInactive(
+            snapshot: snapshot,
+            preferredSlotID: profile.slotID
+        )
+        return .success
     }
 
     private func triggerClaudeProfileSnapshotPrefetchIfNeeded() {
@@ -2807,38 +3037,10 @@ final class AppViewModel {
                 continue
             }
             claudePrefetchAttemptedIdentity[candidate.slotID] = candidate.identityKey
-            claudePrefetchInFlightSlots.insert(candidate.slotID)
 
             Task { [weak self] in
                 guard let self else { return }
-                defer { self.claudePrefetchInFlightSlots.remove(profile.slotID) }
-
-                guard let result = try? await self.claudeProfileSnapshotService.fetchSnapshot(
-                    profile: profile,
-                    descriptor: descriptor
-                ) else {
-                    return
-                }
-
-                if let refreshed = result.refreshedCredentialsJSON, !refreshed.isEmpty {
-                    _ = self.claudeProfileStore.updateStoredCredentials(
-                        slotID: profile.slotID,
-                        credentialsJSON: refreshed
-                    )
-                    self.syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
-                }
-
-                let snapshot = self.boundedSnapshot(
-                    self.markClaudeSnapshotActive(
-                        result.snapshot,
-                        preferredSlotID: profile.slotID,
-                        isActive: false
-                    )
-                )
-                self.claudeSlots = self.claudeSlotStore.upsertInactive(
-                    snapshot: snapshot,
-                    preferredSlotID: profile.slotID
-                )
+                _ = await self.refreshClaudeProfileSnapshotSlot(profile, descriptor: descriptor)
             }
         }
     }
@@ -2850,6 +3052,7 @@ final class AppViewModel {
             claudeSlots = claudeSlotStore.remove(slotID: slotID)
             claudePrefetchAttemptedIdentity.removeValue(forKey: slotID)
             claudePrefetchInFlightSlots.remove(slotID)
+            claudeInactiveRefreshRetryState.remove(slotID: slotID)
             claudeSwitchFeedback.removeValue(forKey: slotID)
         }
     }

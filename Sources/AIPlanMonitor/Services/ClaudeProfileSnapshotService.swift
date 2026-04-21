@@ -26,9 +26,10 @@ actor ClaudeProfileSnapshotService {
             }
         }
 
-        let root = try await requestOAuthUsage(accessToken: parsed.accessToken)
+        let (root, usageResponse) = try await requestOAuthUsage(accessToken: parsed.accessToken)
         var snapshot = try ClaudeProvider.parseClaudeSnapshot(
             root: root,
+            response: usageResponse,
             descriptor: descriptor,
             sourceLabel: "Profile",
             accountLabel: parsed.accountEmail ?? profile.accountEmail,
@@ -62,7 +63,7 @@ actor ClaudeProfileSnapshotService {
         )
     }
 
-    private func requestOAuthUsage(accessToken: String) async throws -> [String: Any] {
+    private func requestOAuthUsage(accessToken: String) async throws -> ([String: Any], HTTPURLResponse) {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
@@ -88,7 +89,7 @@ actor ClaudeProfileSnapshotService {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.invalidResponse("oauth usage decode failed")
         }
-        return json
+        return (json, http)
     }
 
     private func needsRefresh(expiresAtMs: Double?) -> Bool {
