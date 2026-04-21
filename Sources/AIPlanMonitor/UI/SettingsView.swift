@@ -4449,7 +4449,7 @@ struct SettingsView: View {
                             )
                         }
 
-                        officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                        officialConfigHintText(officialSourceHintText(for: provider))
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
@@ -4461,7 +4461,7 @@ struct SettingsView: View {
                             )
                         }
 
-                        officialConfigHintText(viewModel.text(.officialAutoDiscoveryHint))
+                        officialConfigHintText(officialSourceHintText(for: provider))
                     }
                 }
 
@@ -5790,6 +5790,16 @@ struct SettingsView: View {
         case .cli: return "CLI"
         case .web: return "Web"
         }
+    }
+
+    private func officialSourceHintText(for provider: ProviderDescriptor) -> String {
+        if provider.type == .kiro {
+            return viewModel.localizedText(
+                "默认会自动发现本地 CLI 或 Kiro IDE 登录态；当 CLI 不可用时会回退读取 IDE 缓存。",
+                "Local Kiro CLI sessions are auto-discovered by default. When CLI is unavailable, the app falls back to Kiro IDE cache."
+            )
+        }
+        return viewModel.text(.officialAutoDiscoveryHint)
     }
 
     private func webModeLabel(_ mode: OfficialWebMode) -> String {

@@ -1011,6 +1011,88 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.sourceLabel, "CLI")
     }
 
+    func testKiroIDEStateParsesCreditsAndBonus() throws {
+        let stateJSON = """
+        {
+          "kiro.resourceNotifications.usageState": {
+            "usageBreakdowns": [
+              {
+                "resourceType": "CREDIT",
+                "currentUsage": 10,
+                "usageLimit": 50,
+                "nextDateReset": "2026-05-01T00:00:00Z",
+                "displayName": "Credits",
+                "freeTrialInfo": {
+                  "currentUsage": 100,
+                  "usageLimit": 500,
+                  "freeTrialStatus": "ACTIVE",
+                  "freeTrialExpiry": "2026-05-03T00:00:00Z"
+                }
+              }
+            ],
+            "timestamp": 1777770000000
+          }
+        }
+        """
+
+        let snapshot = try KiroProvider.parseIDESnapshot(
+            stateJSON: stateJSON,
+            descriptor: ProviderDescriptor.defaultOfficialKiro(),
+            accountLabel: "kiro@example.com"
+        )
+
+        XCTAssertEqual(snapshot.sourceLabel, "IDE")
+        XCTAssertEqual(snapshot.accountLabel, "kiro@example.com")
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Credits" })?.remainingPercent ?? -1, 80, accuracy: 0.001)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Bonus" })?.remainingPercent ?? -1, 80, accuracy: 0.001)
+    }
+
+    func testKiroIDEAccountLabelExtractsFromJWTAndProfileFallback() throws {
+        let jwtPayload = try JSONSerialization.data(withJSONObject: ["email": "kiro@example.com"])
+        let tokenPayload = jwtPayload
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let idToken = "header.\(tokenPayload).signature"
+
+        XCTAssertEqual(
+            KiroProvider.extractIDEAccountLabel(
+                token: ["idToken": idToken],
+                profile: ["name": "Kiro IDE User"]
+            ),
+            "kiro@example.com"
+        )
+        XCTAssertEqual(
+            KiroProvider.extractIDEAccountLabel(
+                token: nil,
+                profile: ["name": "Kiro IDE User"]
+            ),
+            "Kiro IDE User"
+        )
+    }
+
+    func testKiroIDEStateDatabasePathsIncludeVariantDirectories() {
+        let paths = KiroProvider.ideStateDatabasePaths(
+            homeDirectory: "/Users/demo",
+            appSupportEntries: [
+                "Kiro",
+                "Kiro - Insiders",
+                "Kiro Preview",
+                "kiro-next",
+                "NotKiro"
+            ]
+        )
+
+        XCTAssertTrue(paths.contains("/Users/demo/Library/Application Support/Kiro/User/globalStorage/state.vscdb"))
+        XCTAssertTrue(paths.contains("/Users/demo/Library/Application Support/Kiro - Insiders/User/globalStorage/state.vscdb"))
+        XCTAssertTrue(paths.contains("/Users/demo/Library/Application Support/Kiro Preview/User/globalStorage/state.vscdb"))
+        XCTAssertTrue(paths.contains("/Users/demo/Library/Application Support/kiro-next/User/globalStorage/state.vscdb"))
+        XCTAssertFalse(paths.contains("/Users/demo/Library/Application Support/NotKiro/User/globalStorage/state.vscdb"))
+        XCTAssertEqual(paths.count, Set(paths).count)
+    }
+
     func testWindsurfResponseParsesDailyAndWeekly() throws {
         let json = """
         {
