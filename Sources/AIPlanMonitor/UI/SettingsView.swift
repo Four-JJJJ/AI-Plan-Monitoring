@@ -37,18 +37,22 @@ struct SettingsView: View {
     @State private var officialQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
     @State private var officialCookieInputs: [String: String] = [:]
     @State private var codexProfileJSONInputs: [String: String] = [:]
+    @State private var codexProfileNoteInputs: [String: String] = [:]
     @State private var codexProfileResult: [String: String] = [:]
     @State private var codexProfilePendingDelete: CodexSlotID?
     @State private var codexProfileEditor: CodexProfileEditorState?
     @State private var codexProfileEditorJSON = ""
+    @State private var codexProfileEditorNote = ""
     @State private var claudeProfileJSONInputs: [String: String] = [:]
     @State private var claudeProfileConfigDirInputs: [String: String] = [:]
+    @State private var claudeProfileNoteInputs: [String: String] = [:]
     @State private var claudeProfileResult: [String: String] = [:]
     @State private var claudeProfilePendingDelete: CodexSlotID?
     @State private var claudeProfileEditor: ClaudeProfileEditorState?
     @State private var claudeProfileEditorSource: ClaudeProfileSource = .configDir
     @State private var claudeProfileEditorConfigDir = ""
     @State private var claudeProfileEditorJSON = ""
+    @State private var claudeProfileEditorNote = ""
     @State private var permissionPrompt: PermissionPrompt?
     @State private var permissionResultMessage: [String: String] = [:]
     @State private var permissionResultIsError: [String: Bool] = [:]
@@ -4767,6 +4771,11 @@ struct SettingsView: View {
         let trailingInfo = viewModel.language == .zhHans
             ? "更新于 \(settingsElapsedText(from: updatedAt))"
             : "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: updatedAt))"
+        let subtitle = profileEmailWithNote(
+            email: profile.accountEmail,
+            note: profile.note,
+            fallback: viewModel.text(.codexProfileEmailUnknown)
+        )
 
         return officialAccountMonitorCard(
             highlightColor: hasError ? Color(hex: 0xD05757) : nil
@@ -4780,7 +4789,7 @@ struct SettingsView: View {
                             title: "Codex \(profile.slotID.rawValue)",
                             planType: planType
                         )
-                        Text(profile.accountEmail ?? viewModel.text(.codexProfileEmailUnknown))
+                        Text(subtitle)
                             .font(.system(size: 10, weight: .regular))
                             .foregroundStyle(settingsHintColor)
                             .lineLimit(1)
@@ -4976,7 +4985,11 @@ struct SettingsView: View {
         let trailingInfo = viewModel.language == .zhHans
             ? "更新于 \(settingsElapsedText(from: updatedAt))"
             : "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: updatedAt))"
-        let subtitle = profile.accountEmail ?? viewModel.localizedText("未识别账号", "Account unavailable")
+        let subtitle = profileEmailWithNote(
+            email: profile.accountEmail,
+            note: profile.note,
+            fallback: viewModel.localizedText("未识别账号", "Account unavailable")
+        )
 
         return officialAccountMonitorCard(
             highlightColor: hasError ? Color(hex: 0xD05757) : nil
@@ -5125,6 +5138,7 @@ struct SettingsView: View {
         claudeProfileEditorSource = existingProfile?.source ?? .configDir
         claudeProfileEditorConfigDir = claudeProfileConfigDirInputs[key] ?? existingProfile?.configDir ?? ""
         claudeProfileEditorJSON = claudeProfileJSONInputs[key] ?? existingProfile?.credentialsJSON ?? ""
+        claudeProfileEditorNote = claudeProfileNoteInputs[key] ?? existingProfile?.note ?? ""
         claudeProfileEditor = ClaudeProfileEditorState(
             slotID: slotID,
             title: viewModel.claudeSettingsTitle(for: slotID),
@@ -5137,9 +5151,11 @@ struct SettingsView: View {
         let key = editor.slotID.rawValue
         claudeProfileConfigDirInputs[key] = claudeProfileEditorConfigDir
         claudeProfileJSONInputs[key] = claudeProfileEditorJSON
+        claudeProfileNoteInputs[key] = claudeProfileEditorNote
         claudeProfileResult[key] = viewModel.saveClaudeProfile(
             slotID: editor.slotID,
             displayName: "Claude \(editor.slotID.rawValue)",
+            note: claudeProfileEditorNote,
             source: claudeProfileEditorSource,
             configDir: claudeProfileEditorConfigDir,
             credentialsJSON: claudeProfileEditorJSON
@@ -5147,6 +5163,7 @@ struct SettingsView: View {
         claudeProfileEditor = nil
         claudeProfileEditorConfigDir = ""
         claudeProfileEditorJSON = ""
+        claudeProfileEditorNote = ""
         claudeProfileEditorSource = .configDir
     }
 
@@ -5162,6 +5179,32 @@ struct SettingsView: View {
                     .foregroundStyle(settingsHintColor)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .center, spacing: 10) {
+                    Text(viewModel.localizedText("备注", "Note"))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsBodyColor)
+                        .frame(width: 60, alignment: .leading)
+
+                    TextField(
+                        "",
+                        text: $claudeProfileEditorNote,
+                        prompt: settingsInputPrompt(viewModel.localizedText("例如：工作 / 个人", "e.g. Work / Personal"))
+                    )
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsBodyColor)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(settingsInputFillColor)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+                }
 
                 officialSegmentControl(
                     selection: $claudeProfileEditorSource,
@@ -5218,6 +5261,7 @@ struct SettingsView: View {
                     claudeProfileEditor = nil
                     claudeProfileEditorConfigDir = ""
                     claudeProfileEditorJSON = ""
+                    claudeProfileEditorNote = ""
                     claudeProfileEditorSource = .configDir
                 }
                 settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
@@ -5366,6 +5410,7 @@ struct SettingsView: View {
     private func openCodexProfileEditor(slotID: CodexSlotID, existingProfile: CodexAccountProfile?) {
         let key = slotID.rawValue
         codexProfileEditorJSON = codexProfileJSONInputs[key] ?? existingProfile?.authJSON ?? ""
+        codexProfileEditorNote = codexProfileNoteInputs[key] ?? existingProfile?.note ?? ""
         codexProfileEditor = CodexProfileEditorState(
             slotID: slotID,
             title: viewModel.codexSettingsTitle(for: slotID),
@@ -5377,13 +5422,16 @@ struct SettingsView: View {
         guard let editor = codexProfileEditor else { return }
         let key = editor.slotID.rawValue
         codexProfileJSONInputs[key] = codexProfileEditorJSON
+        codexProfileNoteInputs[key] = codexProfileEditorNote
         codexProfileResult[key] = viewModel.saveCodexProfile(
             slotID: editor.slotID,
             displayName: "Codex \(editor.slotID.rawValue)",
+            note: codexProfileEditorNote,
             authJSON: codexProfileEditorJSON
         )
         codexProfileEditor = nil
         codexProfileEditorJSON = ""
+        codexProfileEditorNote = ""
     }
 
     private var codexProfileEditorDialog: some View {
@@ -5398,6 +5446,32 @@ struct SettingsView: View {
                     .foregroundStyle(settingsHintColor)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .center, spacing: 10) {
+                    Text(viewModel.localizedText("备注", "Note"))
+                        .font(settingsLabelFont)
+                        .foregroundStyle(settingsBodyColor)
+                        .frame(width: 60, alignment: .leading)
+
+                    TextField(
+                        "",
+                        text: $codexProfileEditorNote,
+                        prompt: settingsInputPrompt(viewModel.localizedText("例如：工作 / 个人", "e.g. Work / Personal"))
+                    )
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(settingsBodyColor)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(settingsInputFillColor)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+                }
 
                 TextEditor(text: $codexProfileEditorJSON)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -5419,6 +5493,7 @@ struct SettingsView: View {
                 settingsCapsuleButton(viewModel.text(.permissionCancel)) {
                     codexProfileEditor = nil
                     codexProfileEditorJSON = ""
+                    codexProfileEditorNote = ""
                 }
                 settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                     saveCodexProfileEditor()
@@ -5445,6 +5520,16 @@ struct SettingsView: View {
             return editor.isNewSlot ? "添加 \(editor.title) auth.json" : "编辑 \(editor.title) auth.json"
         }
         return editor.isNewSlot ? "Add \(editor.title) auth.json" : "Edit \(editor.title) auth.json"
+    }
+
+    private func profileEmailWithNote(email: String?, note: String?, fallback: String) -> String {
+        let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedEmail = (trimmedEmail?.isEmpty == false ? trimmedEmail! : fallback)
+        guard let trimmedNote, !trimmedNote.isEmpty else {
+            return resolvedEmail
+        }
+        return "\(resolvedEmail) · \(trimmedNote)"
     }
 
     private func codexSlotStatus(snapshot: UsageSnapshot?) -> (text: String, color: Color) {

@@ -422,6 +422,7 @@ struct CodexSlotViewModel: Identifiable, Equatable {
     var isActive: Bool
     var lastSeenAt: Date
     var displayName: String
+    var note: String?
     var isSwitching: Bool = false
     var canSwitch: Bool = false
     var isCurrentSystemAccount: Bool = false
@@ -434,6 +435,7 @@ struct CodexAccountProfile: Codable, Equatable, Identifiable {
     var id: String { slotID.rawValue }
     var slotID: CodexSlotID
     var displayName: String
+    var note: String?
     var authJSON: String
     var accountId: String?
     var accountEmail: String?
@@ -465,6 +467,7 @@ struct ClaudeSlotViewModel: Identifiable, Equatable {
     var isActive: Bool
     var lastSeenAt: Date
     var displayName: String
+    var note: String?
     var source: ClaudeProfileSource?
     var isSwitching: Bool = false
     var canSwitch: Bool = false
@@ -478,6 +481,7 @@ struct ClaudeAccountProfile: Codable, Equatable, Identifiable {
     var id: String { slotID.rawValue }
     var slotID: CodexSlotID
     var displayName: String
+    var note: String?
     var source: ClaudeProfileSource
     var configDir: String?
     var credentialsJSON: String?
