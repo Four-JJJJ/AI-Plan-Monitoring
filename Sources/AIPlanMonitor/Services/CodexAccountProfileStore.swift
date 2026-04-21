@@ -72,12 +72,13 @@ final class CodexAccountProfileStore {
     func saveProfile(
         slotID: CodexSlotID,
         displayName: String,
+        note: String?,
         authJSON: String,
         currentFingerprint: String?
     ) throws -> CodexAccountProfile {
         var items = load()
         let payload = try Self.parseAuthJSON(authJSON)
-        var profile = try Self.makeProfile(slotID: slotID, displayName: displayName, authJSON: authJSON)
+        var profile = try Self.makeProfile(slotID: slotID, displayName: displayName, note: note, authJSON: authJSON)
         profile.isCurrentSystemAccount = profile.credentialFingerprint == currentFingerprint
         profile = normalizedProfile(profile, payload: payload)
         var ignoredFingerprints = loadIgnoredFingerprints()
@@ -190,6 +191,7 @@ final class CodexAccountProfileStore {
             CodexAccountProfile(
                 slotID: slotID,
                 displayName: "Codex \(slotID.rawValue)",
+                note: nil,
                 authJSON: trimmed,
                 accountId: payload.accountId,
                 accountEmail: payload.accountEmail,
@@ -212,15 +214,18 @@ final class CodexAccountProfileStore {
     static func makeProfile(
         slotID: CodexSlotID,
         displayName: String,
+        note: String?,
         authJSON: String,
         importedAt: Date = Date()
     ) throws -> CodexAccountProfile {
         let payload = try parseAuthJSON(authJSON)
         let identity = CodexIdentity.from(payload: payload)
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
         return CodexAccountProfile(
             slotID: slotID,
             displayName: trimmedName.isEmpty ? "Codex \(slotID.rawValue)" : trimmedName,
+            note: (trimmedNote?.isEmpty ?? true) ? nil : trimmedNote,
             authJSON: authJSON.trimmingCharacters(in: .whitespacesAndNewlines),
             accountId: payload.accountId,
             accountEmail: payload.accountEmail,
@@ -331,6 +336,7 @@ final class CodexAccountProfileStore {
     ) -> CodexAccountProfile {
         var updated = profile
         let parsedPayload = payload ?? (try? Self.parseAuthJSON(profile.authJSON))
+        updated.note = CodexIdentity.trimmed(updated.note)
 
         if CodexIdentity.trimmed(updated.accountId) == nil {
             updated.accountId = parsedPayload?.accountId

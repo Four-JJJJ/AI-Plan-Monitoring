@@ -78,6 +78,7 @@ final class ClaudeAccountProfileStore {
     func saveProfile(
         slotID: CodexSlotID,
         displayName: String,
+        note: String?,
         source: ClaudeProfileSource,
         configDir: String?,
         credentialsJSON: String?,
@@ -98,6 +99,7 @@ final class ClaudeAccountProfileStore {
         var profile = ClaudeAccountProfile(
             slotID: slotID,
             displayName: Self.fallbackDisplayName(displayName, slotID: slotID),
+            note: Self.normalizedNote(note),
             source: source,
             configDir: resolvedConfigDir,
             credentialsJSON: source == .manualCredentials ? resolvedCredentialsJSON : resolvedCredentialsJSON,
@@ -322,6 +324,7 @@ final class ClaudeAccountProfileStore {
             ClaudeAccountProfile(
                 slotID: slotID,
                 displayName: "Claude \(slotID.rawValue)",
+                note: nil,
                 source: .configDir,
                 configDir: normalizedConfigDir,
                 credentialsJSON: trimmed,
@@ -526,6 +529,13 @@ final class ClaudeAccountProfileStore {
         return trimmed.isEmpty ? "Claude \(slotID.rawValue)" : trimmed
     }
 
+    private static func normalizedNote(_ note: String?) -> String? {
+        guard let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     private static func normalizedFingerprint(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
@@ -695,6 +705,7 @@ final class ClaudeAccountProfileStore {
         var updated = profile
         updated.configDir = Self.normalizedConfigDirectory(updated.configDir)
         updated.displayName = Self.fallbackDisplayName(updated.displayName, slotID: updated.slotID)
+        updated.note = Self.normalizedNote(updated.note)
         if let credentialsJSON = updated.credentialsJSON?.trimmingCharacters(in: .whitespacesAndNewlines),
            !credentialsJSON.isEmpty,
            let payload = try? Self.parseCredentialsJSON(credentialsJSON) {

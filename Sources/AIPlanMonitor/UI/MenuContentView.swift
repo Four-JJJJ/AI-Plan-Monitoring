@@ -453,6 +453,7 @@ struct MenuContentView: View {
             subtitle: officialAccountSubtitle(
                 providerType: provider.type,
                 snapshot: slot.snapshot,
+                note: slot.note,
                 codexTeamAliases: codexTeamAliases
             ),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
@@ -488,7 +489,11 @@ struct MenuContentView: View {
             planType: monitorPlanType(for: provider, snapshot: slot.snapshot),
             iconName: iconName(for: provider),
             iconFallback: fallbackIcon(for: provider),
-            subtitle: officialAccountSubtitle(providerType: provider.type, snapshot: slot.snapshot),
+            subtitle: officialAccountSubtitle(
+                providerType: provider.type,
+                snapshot: slot.snapshot,
+                note: slot.note
+            ),
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
             metrics: buildPercentageMetricDisplays(
                 from: visibleMetrics,
@@ -515,22 +520,38 @@ struct MenuContentView: View {
     private func officialAccountSubtitle(
         providerType: ProviderType,
         snapshot: UsageSnapshot?,
+        note: String? = nil,
         codexTeamAliases: [String: String] = [:]
     ) -> String? {
-        guard viewModel.showOfficialAccountEmailInMenuBar else { return nil }
-        guard let value = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else {
-            return nil
-        }
+        let accountValue: String? = {
+            guard viewModel.showOfficialAccountEmailInMenuBar,
+                  let value = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else {
+                return nil
+            }
+            return value
+        }()
+        let accountText = joinedSubtitleParts([accountValue, note])
 
         guard providerType == .codex else {
-            return value
+            return accountText
         }
 
         guard let teamAlias = codexTeamAlias(for: snapshot, aliases: codexTeamAliases) else {
-            return value
+            return accountText
         }
-        return "\(value) · \(teamAlias)"
+        return joinedSubtitleParts([accountText, teamAlias])
+    }
+
+    private func joinedSubtitleParts(_ parts: [String?]) -> String? {
+        let values = parts.compactMap { raw -> String? in
+            guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+                return nil
+            }
+            return trimmed
+        }
+        guard !values.isEmpty else { return nil }
+        return values.joined(separator: " · ")
     }
 
     private func relaySecondaryText(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {

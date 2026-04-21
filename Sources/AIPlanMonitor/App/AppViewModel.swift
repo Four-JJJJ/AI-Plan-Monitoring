@@ -848,6 +848,7 @@ final class AppViewModel {
                     isActive: slot.isActive,
                     lastSeenAt: slot.lastSeenAt,
                     displayName: profile?.displayName ?? slot.displayName,
+                    note: profile?.note,
                     isSwitching: codexSwitchingSlots.contains(slot.slotID),
                     canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
                     isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
@@ -871,11 +872,12 @@ final class AppViewModel {
         "Codex \(slotID.rawValue)"
     }
 
-    func saveCodexProfile(slotID: CodexSlotID, displayName: String, authJSON: String) -> String {
+    func saveCodexProfile(slotID: CodexSlotID, displayName: String, note: String?, authJSON: String) -> String {
         do {
             _ = try codexProfileStore.saveProfile(
                 slotID: slotID,
                 displayName: displayName,
+                note: note,
                 authJSON: authJSON,
                 currentFingerprint: codexDesktopAuthService.currentCredentialFingerprint()
             )
@@ -921,6 +923,7 @@ final class AppViewModel {
                     isActive: slot.isActive,
                     lastSeenAt: slot.lastSeenAt,
                     displayName: profile?.displayName ?? slot.displayName,
+                    note: profile?.note,
                     source: profile?.source,
                     isSwitching: claudeSwitchingSlots.contains(slot.slotID),
                     canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
@@ -948,6 +951,7 @@ final class AppViewModel {
     func saveClaudeProfile(
         slotID: CodexSlotID,
         displayName: String,
+        note: String?,
         source: ClaudeProfileSource,
         configDir: String?,
         credentialsJSON: String?
@@ -956,6 +960,7 @@ final class AppViewModel {
             _ = try claudeProfileStore.saveProfile(
                 slotID: slotID,
                 displayName: displayName,
+                note: note,
                 source: source,
                 configDir: configDir,
                 credentialsJSON: credentialsJSON,
