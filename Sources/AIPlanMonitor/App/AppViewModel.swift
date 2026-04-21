@@ -6,6 +6,8 @@ import UserNotifications
 @MainActor
 @Observable
 final class AppViewModel {
+    static let statusBarDisplayConfigDidChangeNotification = Notification.Name("AIPlanMonitor.StatusBarDisplayConfigDidChange")
+
     private let configStore = ConfigStore()
     private let keychain = KeychainService()
     private let thirdPartyBalanceBaselineStore = ThirdPartyBalanceBaselineStore()
@@ -260,6 +262,10 @@ final class AppViewModel {
         config.statusBarDisplayStyle
     }
 
+    var statusBarAppearanceMode: StatusBarAppearanceMode {
+        config.statusBarAppearanceMode
+    }
+
     var showOfficialAccountEmailInMenuBar: Bool {
         config.showOfficialAccountEmailInMenuBar
     }
@@ -336,12 +342,21 @@ final class AppViewModel {
         }
         normalizeStatusBarSelections()
         try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
     }
 
     func setStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
         guard config.statusBarDisplayStyle != style else { return }
         config.statusBarDisplayStyle = style
         try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
+    }
+
+    func setStatusBarAppearanceMode(_ mode: StatusBarAppearanceMode) {
+        guard config.statusBarAppearanceMode != mode else { return }
+        config.statusBarAppearanceMode = mode
+        try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
     }
 
     func setStatusBarDisplayEnabled(_ enabled: Bool, providerID: String) {
@@ -364,6 +379,7 @@ final class AppViewModel {
             }
             normalizeStatusBarSelections()
             try? configStore.save(config)
+            notifyStatusBarDisplayConfigChanged()
             return
         }
 
@@ -389,6 +405,7 @@ final class AppViewModel {
         config.statusBarProviderID = normalized
         normalizeStatusBarSelections()
         try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
     }
 
     func setShowOfficialAccountEmailInMenuBar(_ enabled: Bool) {
@@ -828,8 +845,10 @@ final class AppViewModel {
     }
 
     func codexSlotViewModels() -> [CodexSlotViewModel] {
-        syncCodexProfilesCurrentState()
-        codexSlots = codexSlotStore.visibleSlots()
+        let latestCodexSlots = codexSlotStore.visibleSlots()
+        if latestCodexSlots != codexSlots {
+            codexSlots = latestCodexSlots
+        }
         triggerCodexProfileSnapshotPrefetchIfNeeded()
         let now = Date()
         return mergedCodexSlotsForMenu()
@@ -904,8 +923,10 @@ final class AppViewModel {
     }
 
     func claudeSlotViewModels() -> [ClaudeSlotViewModel] {
-        syncClaudeProfilesCurrentState()
-        claudeSlots = claudeSlotStore.visibleSlots()
+        let latestClaudeSlots = claudeSlotStore.visibleSlots()
+        if latestClaudeSlots != claudeSlots {
+            claudeSlots = latestClaudeSlots
+        }
         triggerClaudeProfileSnapshotPrefetchIfNeeded()
         let now = Date()
         return mergedClaudeSlotsForMenu()
@@ -2417,6 +2438,13 @@ final class AppViewModel {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
+    private func notifyStatusBarDisplayConfigChanged() {
+        NotificationCenter.default.post(
+            name: Self.statusBarDisplayConfigDidChangeNotification,
+            object: nil
+        )
+    }
+
     private func boundedSnapshot(_ snapshot: UsageSnapshot) -> UsageSnapshot {
         var copy = snapshot
         copy.note = RuntimeBoundedState.boundedSnapshotNote(copy.note)
@@ -2454,10 +2482,13 @@ final class AppViewModel {
     }
 
     private func syncCodexProfilesCurrentState() {
-        codexProfiles = codexProfileStore.captureCurrentAuthIfNeeded(
+        let latestProfiles = codexProfileStore.captureCurrentAuthIfNeeded(
             authJSON: codexDesktopAuthService.currentAuthJSON()
         )
-        codexInactiveRefreshRetryState.prune(keeping: Set(codexProfiles.map(\.slotID)))
+        if latestProfiles != codexProfiles {
+            codexProfiles = latestProfiles
+        }
+        codexInactiveRefreshRetryState.prune(keeping: Set(latestProfiles.map(\.slotID)))
     }
 
     private func codexMenuTitle(for slotID: CodexSlotID) -> String {
@@ -2891,7 +2922,6 @@ final class AppViewModel {
     }
 
     private func matchedCodexProfile(for snapshot: UsageSnapshot) -> CodexAccountProfile? {
-        syncCodexProfilesCurrentState()
         guard let index = CodexAccountProfileStore.matchingIndex(for: snapshot, in: codexProfiles) else {
             return nil
         }
@@ -2969,18 +2999,21 @@ final class AppViewModel {
 
     private func syncClaudeProfilesCurrentState(triggerPrefetchOnChange: Bool = true) {
         let previousProfileSetIdentity = claudeProfileSetIdentity(claudeProfiles)
-        claudeProfiles = claudeProfileStore.captureCurrentCredentialsIfNeeded(
+        let latestProfiles = claudeProfileStore.captureCurrentCredentialsIfNeeded(
             credentialsJSON: claudeDesktopAuthService.currentCredentialsJSON(),
             defaultConfigDir: claudeDesktopAuthService.currentSystemConfigDirectory()
         )
+        if latestProfiles != claudeProfiles {
+            claudeProfiles = latestProfiles
+        }
 
-        let visibleSlotIDs = Set(claudeProfiles.map(\.slotID))
+        let visibleSlotIDs = Set(latestProfiles.map(\.slotID))
         claudePrefetchAttemptedIdentity = claudePrefetchAttemptedIdentity.filter { visibleSlotIDs.contains($0.key) }
         claudePrefetchInFlightSlots = claudePrefetchInFlightSlots.intersection(visibleSlotIDs)
         claudeInactiveRefreshRetryState.prune(keeping: visibleSlotIDs)
 
         if triggerPrefetchOnChange,
-           previousProfileSetIdentity != claudeProfileSetIdentity(claudeProfiles) {
+           previousProfileSetIdentity != claudeProfileSetIdentity(latestProfiles) {
             triggerClaudeProfileSnapshotPrefetchIfNeeded()
         }
     }
@@ -3229,7 +3262,6 @@ final class AppViewModel {
     }
 
     private func matchedClaudeProfile(for snapshot: UsageSnapshot) -> ClaudeAccountProfile? {
-        syncClaudeProfilesCurrentState()
         guard let index = ClaudeAccountProfileStore.matchingIndex(for: snapshot, in: claudeProfiles) else {
             return nil
         }

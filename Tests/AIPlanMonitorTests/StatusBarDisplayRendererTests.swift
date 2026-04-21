@@ -77,6 +77,34 @@ final class StatusBarDisplayRendererTests: XCTestCase {
         )
     }
 
+    func testDarkForegroundStyleColorMapping() {
+        let full = rgba(from: StatusBarForegroundStyle.dark.color())
+        XCTAssertLessThan(full.red, 0.01)
+        XCTAssertLessThan(full.green, 0.01)
+        XCTAssertLessThan(full.blue, 0.01)
+        XCTAssertEqual(full.alpha, 1.0, accuracy: 0.001)
+
+        let alpha = rgba(from: StatusBarForegroundStyle.dark.color(opacity: 0.30))
+        XCTAssertLessThan(alpha.red, 0.01)
+        XCTAssertLessThan(alpha.green, 0.01)
+        XCTAssertLessThan(alpha.blue, 0.01)
+        XCTAssertEqual(alpha.alpha, 0.30, accuracy: 0.01)
+    }
+
+    func testLightForegroundStyleColorMapping() {
+        let full = rgba(from: StatusBarForegroundStyle.light.color())
+        XCTAssertGreaterThan(full.red, 0.99)
+        XCTAssertGreaterThan(full.green, 0.99)
+        XCTAssertGreaterThan(full.blue, 0.99)
+        XCTAssertEqual(full.alpha, 1.0, accuracy: 0.001)
+
+        let alpha = rgba(from: StatusBarForegroundStyle.light.color(opacity: 0.80))
+        XCTAssertGreaterThan(alpha.red, 0.99)
+        XCTAssertGreaterThan(alpha.green, 0.99)
+        XCTAssertGreaterThan(alpha.blue, 0.99)
+        XCTAssertEqual(alpha.alpha, 0.80, accuracy: 0.01)
+    }
+
     private func collectAttachments(from attributed: NSAttributedString) -> [NSTextAttachment] {
         var result: [NSTextAttachment] = []
         attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length)) { value, _, _ in
@@ -137,5 +165,15 @@ final class StatusBarDisplayRendererTests: XCTestCase {
             }
         }
         return false
+    }
+
+    private func rgba(from color: NSColor) -> (red: Double, green: Double, blue: Double, alpha: Double) {
+        let resolved = color.usingColorSpace(.deviceRGB) ?? color
+        return (
+            red: Double(resolved.redComponent),
+            green: Double(resolved.greenComponent),
+            blue: Double(resolved.blueComponent),
+            alpha: Double(resolved.alphaComponent)
+        )
     }
 }

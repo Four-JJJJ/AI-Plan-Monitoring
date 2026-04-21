@@ -1,6 +1,20 @@
 import AppKit
 import Foundation
 
+private enum SingleInstanceActivationBridge {
+    static let distributedNotificationName = Notification.Name("com.aiplanmonitor.activate-existing-instance")
+
+    @MainActor
+    static func notifyExistingInstance() {
+        DistributedNotificationCenter.default().postNotificationName(
+            distributedNotificationName,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+    }
+}
+
 @MainActor
 final class SingleInstanceLock {
     static let shared = SingleInstanceLock()
@@ -37,8 +51,10 @@ final class SingleInstanceLock {
     }
 }
 
+@MainActor
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
+    private var activationObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app stays menu-bar only even if started from terminal context.
@@ -46,11 +62,17 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         if !SingleInstanceLock.shared.acquire() {
+            SingleInstanceActivationBridge.notifyExistingInstance()
             NSApp.terminate(nil)
             return
         }
 
+        startActivationBridgeObservation()
         statusBarController = StatusBarController(viewModel: AppViewModel())
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        stopActivationBridgeObservation()
     }
 
     @MainActor
@@ -69,5 +91,29 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         }
         icon.size = NSSize(width: 256, height: 256)
         NSApp.applicationIconImage = icon
+    }
+
+    @MainActor
+    private func startActivationBridgeObservation() {
+        stopActivationBridgeObservation()
+        let center = DistributedNotificationCenter.default()
+        activationObserver = center.addObserver(
+            forName: SingleInstanceActivationBridge.distributedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                NSRunningApplication.current.activate(options: [])
+                self.statusBarController?.showSettingsWindow()
+            }
+        }
+    }
+
+    @MainActor
+    private func stopActivationBridgeObservation() {
+        guard let activationObserver else { return }
+        DistributedNotificationCenter.default().removeObserver(activationObserver)
+        self.activationObserver = nil
     }
 }

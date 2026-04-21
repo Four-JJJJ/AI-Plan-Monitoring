@@ -8,12 +8,19 @@ final class StatusBarController: NSObject {
     private var menuPanel: NSPanel?
     private var menuHostingController: NSHostingController<MenuContentView>?
     private var refreshTimer: Timer?
+    private var wallpaperProbeTimer: Timer?
+    private var wallpaperFollowUpWorkItems: [DispatchWorkItem] = []
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
+    private var workspaceNotificationObservers: [NSObjectProtocol] = []
+    private var defaultNotificationObservers: [NSObjectProtocol] = []
+    private var distributedNotificationObservers: [NSObjectProtocol] = []
     private let statusIconSize: CGFloat = 16
     private let popoverWidth: CGFloat = 316
     private let popoverMinHeight: CGFloat = 60
     private let popoverGapBelowStatusIcon: CGFloat = 1
+    private let wallpaperProbeInterval: TimeInterval = 0.5
+    private let wallpaperLuminanceCacheLimit = 12
     private let protectedOutsideClickBundleIDs: Set<String> = [
         "com.apple.securityagent",
         "com.apple.systemsettings",
@@ -27,6 +34,9 @@ final class StatusBarController: NSObject {
         alpha: 1.0
     )
     private var providerStatusImageCache: [String: NSImage] = [:]
+    private var wallpaperLuminanceCache: [String: Double] = [:]
+    private var wallpaperLuminanceCacheOrder: [String] = []
+    private var lastRenderedForegroundStyle: StatusBarForegroundStyle?
     private lazy var appStatusImage: NSImage? = {
         if let image = NSApp.applicationIconImage?.copy() as? NSImage, image.isValid {
             image.size = NSSize(width: statusIconSize, height: statusIconSize)
@@ -68,6 +78,7 @@ final class StatusBarController: NSObject {
         super.init()
         configureStatusItem()
         configureMenuPanel()
+        startWorkspaceObservation()
         viewModel.start()
         refreshStatusDisplay()
         startRefreshTimer()
@@ -120,13 +131,32 @@ final class StatusBarController: NSObject {
 
     private func refreshStatusDisplay() {
         guard let button = statusItem.button else { return }
+        let foregroundStyle = resolvedForegroundStyle(for: button.window?.screen)
+        lastRenderedForegroundStyle = foregroundStyle
         let displayProviders = viewModel.statusBarProvidersForDisplay()
-        let entries = displayProviders.map(statusDisplayEntry(for:))
+        let entries = displayProviders.map { statusDisplayEntry(for: $0, foregroundStyle: foregroundStyle) }
+        if entries.isEmpty {
+            if let fallback = appStatusImage {
+                button.image = fallback
+                button.imagePosition = .imageOnly
+            } else {
+                let fallback = NSImage(systemSymbolName: "app.badge", accessibilityDescription: "AI Plan Monitor")
+                fallback?.isTemplate = true
+                button.image = fallback
+                button.imagePosition = .imageOnly
+            }
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            updatePopoverContentSizeIfNeeded()
+            return
+        }
         button.image = nil
         button.title = ""
+        button.imagePosition = .imageLeading
         button.attributedTitle = StatusBarDisplayRenderer.attributedString(
             entries: entries,
-            style: viewModel.statusBarDisplayStyle
+            style: viewModel.statusBarDisplayStyle,
+            foregroundStyle: foregroundStyle
         )
         updatePopoverContentSizeIfNeeded()
     }
@@ -223,11 +253,105 @@ final class StatusBarController: NSObject {
 
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshStatusDisplay()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    private func startWorkspaceObservation() {
+        stopWorkspaceObservation()
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let workspaceNames: [Notification.Name] = [
+            NSWorkspace.activeSpaceDidChangeNotification
+        ]
+        for name in workspaceNames {
+            let observer = workspaceCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleWallpaperContextDidChange()
+                }
+            }
+            workspaceNotificationObservers.append(observer)
+        }
+
+        let screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.clearWallpaperLuminanceCache()
+                self?.refreshStatusDisplay()
+            }
+        }
+        defaultNotificationObservers.append(screenObserver)
+
+        let displayConfigObserver = NotificationCenter.default.addObserver(
+            forName: AppViewModel.statusBarDisplayConfigDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshStatusDisplay()
+                self?.refreshWallpaperProbeState()
+            }
+        }
+        defaultNotificationObservers.append(displayConfigObserver)
+
+        let distributedCenter = DistributedNotificationCenter.default()
+        let wallpaperNames: [Notification.Name] = [
+            Notification.Name("com.apple.desktop"),
+            Notification.Name("com.apple.desktop.changed")
+        ]
+        for name in wallpaperNames {
+            let observer = distributedCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleWallpaperContextDidChange()
+                }
+            }
+            distributedNotificationObservers.append(observer)
+        }
+
+        refreshWallpaperProbeState()
+    }
+
+    private func stopWorkspaceObservation() {
+        guard
+            !workspaceNotificationObservers.isEmpty
+            || !defaultNotificationObservers.isEmpty
+            || !distributedNotificationObservers.isEmpty
+        else {
+            return
+        }
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let defaultCenter = NotificationCenter.default
+        let distributedCenter = DistributedNotificationCenter.default()
+        for observer in workspaceNotificationObservers {
+            workspaceCenter.removeObserver(observer)
+        }
+        for observer in defaultNotificationObservers {
+            defaultCenter.removeObserver(observer)
+        }
+        for observer in distributedNotificationObservers {
+            distributedCenter.removeObserver(observer)
+        }
+        workspaceNotificationObservers.removeAll()
+        defaultNotificationObservers.removeAll()
+        distributedNotificationObservers.removeAll()
+        stopWallpaperProbeTimer()
+        cancelWallpaperFollowUpRefreshes()
     }
 
     private func showInitialPopoverIfNeeded() {
@@ -326,9 +450,12 @@ final class StatusBarController: NSObject {
         return preferredPercent(from: snapshot, provider: provider)
     }
 
-    private func statusDisplayEntry(for provider: ProviderDescriptor) -> StatusBarDisplayEntry {
+    private func statusDisplayEntry(
+        for provider: ProviderDescriptor,
+        foregroundStyle: StatusBarForegroundStyle
+    ) -> StatusBarDisplayEntry {
         StatusBarDisplayEntry(
-            icon: image(for: provider),
+            icon: image(for: provider, foregroundStyle: foregroundStyle),
             name: statusDisplayName(for: provider),
             valueText: statusText(for: provider),
             percent: statusPercent(for: provider)
@@ -425,14 +552,189 @@ final class StatusBarController: NSObject {
         return String(format: "%.2f", value)
     }
 
-    private func image(for provider: ProviderDescriptor?) -> NSImage? {
+    private func resolvedForegroundStyle(for screen: NSScreen?) -> StatusBarForegroundStyle {
+        if viewModel.statusBarAppearanceMode == .followWallpaper,
+           let style = foregroundStyleFromStatusItemAppearance() {
+            return style
+        }
+        let luminance = wallpaperLuminance(for: screen)
+        return StatusBarAppearanceResolver.resolvedForegroundStyle(
+            mode: viewModel.statusBarAppearanceMode,
+            wallpaperLuminance: luminance
+        )
+    }
+
+    private func foregroundStyleFromStatusItemAppearance() -> StatusBarForegroundStyle? {
+        guard let button = statusItem.button else { return nil }
+        let appearance = button.effectiveAppearance
+        let names: [NSAppearance.Name] = [
+            .darkAqua,
+            .vibrantDark,
+            .aqua,
+            .vibrantLight
+        ]
+        guard let matched = appearance.bestMatch(from: names) else {
+            return nil
+        }
+        switch matched {
+        case .darkAqua, .vibrantDark:
+            return .light
+        case .aqua, .vibrantLight:
+            return .dark
+        default:
+            return nil
+        }
+    }
+
+    private func wallpaperLuminance(for screen: NSScreen?) -> Double? {
+        guard viewModel.statusBarAppearanceMode == .followWallpaper else {
+            return nil
+        }
+        guard
+            let resolvedScreen = screen ?? NSScreen.main,
+            let wallpaperURL = NSWorkspace.shared.desktopImageURL(for: resolvedScreen)
+        else {
+            return nil
+        }
+        let centerRatio = statusItemHorizontalCenterRatio(on: resolvedScreen)
+        let cacheKey = wallpaperCacheKey(
+            for: resolvedScreen,
+            wallpaperURL: wallpaperURL,
+            horizontalCenterRatio: centerRatio
+        )
+        if let cached = wallpaperLuminanceCache[cacheKey] {
+            return cached
+        }
+        guard let wallpaper = NSImage(contentsOf: wallpaperURL) else {
+            return nil
+        }
+        let luminance = StatusBarAppearanceResolver.wallpaperTopStripLuminance(
+            from: wallpaper,
+            horizontalCenterRatio: centerRatio
+        )
+        if let luminance {
+            cacheWallpaperLuminance(luminance, forKey: cacheKey)
+        }
+        return luminance
+    }
+
+    private func wallpaperCacheKey(
+        for screen: NSScreen,
+        wallpaperURL: URL,
+        horizontalCenterRatio: Double
+    ) -> String {
+        let screenID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue ?? "main"
+        let ratioBucket = Int((horizontalCenterRatio * 1000).rounded())
+        return "\(screenID)|\(ratioBucket)|\(wallpaperURL.path)"
+    }
+
+    private func cacheWallpaperLuminance(_ value: Double, forKey key: String) {
+        if wallpaperLuminanceCache[key] == nil {
+            wallpaperLuminanceCacheOrder.append(key)
+            if wallpaperLuminanceCacheOrder.count > wallpaperLuminanceCacheLimit {
+                let evicted = wallpaperLuminanceCacheOrder.removeFirst()
+                wallpaperLuminanceCache.removeValue(forKey: evicted)
+            }
+        }
+        wallpaperLuminanceCache[key] = value
+    }
+
+    private func clearWallpaperLuminanceCache() {
+        wallpaperLuminanceCache.removeAll(keepingCapacity: true)
+        wallpaperLuminanceCacheOrder.removeAll(keepingCapacity: true)
+    }
+
+    private func refreshWallpaperProbeState() {
+        if viewModel.statusBarAppearanceMode == .followWallpaper {
+            startWallpaperProbeTimer()
+        } else {
+            stopWallpaperProbeTimer()
+            cancelWallpaperFollowUpRefreshes()
+            clearWallpaperLuminanceCache()
+        }
+    }
+
+    private func startWallpaperProbeTimer() {
+        guard wallpaperProbeTimer == nil else { return }
+        let timer = Timer(timeInterval: wallpaperProbeInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshWallpaperAppearanceIfNeeded()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        wallpaperProbeTimer = timer
+    }
+
+    private func stopWallpaperProbeTimer() {
+        wallpaperProbeTimer?.invalidate()
+        wallpaperProbeTimer = nil
+    }
+
+    private func refreshWallpaperAppearanceIfNeeded() {
+        guard viewModel.statusBarAppearanceMode == .followWallpaper else { return }
+        guard let button = statusItem.button else { return }
+        let style = resolvedForegroundStyle(for: button.window?.screen)
+        guard style != lastRenderedForegroundStyle else { return }
+        refreshStatusDisplay()
+    }
+
+    private func handleWallpaperContextDidChange() {
+        clearWallpaperLuminanceCache()
+        refreshStatusDisplay()
+        scheduleWallpaperFollowUpRefreshes()
+    }
+
+    private func scheduleWallpaperFollowUpRefreshes() {
+        cancelWallpaperFollowUpRefreshes()
+        guard viewModel.statusBarAppearanceMode == .followWallpaper else { return }
+        let delays: [TimeInterval] = [0.12, 0.35, 0.8]
+        for delay in delays {
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.clearWallpaperLuminanceCache()
+                self.refreshWallpaperAppearanceIfNeeded()
+            }
+            wallpaperFollowUpWorkItems.append(workItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        }
+    }
+
+    private func cancelWallpaperFollowUpRefreshes() {
+        wallpaperFollowUpWorkItems.forEach { $0.cancel() }
+        wallpaperFollowUpWorkItems.removeAll(keepingCapacity: true)
+    }
+
+    private func statusItemHorizontalCenterRatio(on screen: NSScreen) -> Double {
+        guard
+            let button = statusItem.button,
+            let window = button.window
+        else {
+            return 0.5
+        }
+        let rectInWindow = button.convert(button.bounds, to: nil)
+        let rectOnScreen = window.convertToScreen(rectInWindow)
+        guard screen.frame.width > 0 else {
+            return 0.5
+        }
+        let normalized = (rectOnScreen.midX - screen.frame.minX) / screen.frame.width
+        return min(max(Double(normalized), 0), 1)
+    }
+
+    func showSettingsWindow() {
+        SettingsWindowController.shared.show(viewModel: viewModel)
+    }
+
+    private func image(
+        for provider: ProviderDescriptor?,
+        foregroundStyle: StatusBarForegroundStyle
+    ) -> NSImage? {
         guard let provider else {
             if let appStatusImage { return appStatusImage }
             let fallback = NSImage(systemSymbolName: "app.badge", accessibilityDescription: "AI Plan Monitor")
             fallback?.isTemplate = true
             return fallback
         }
-        if let providerIcon = providerStatusImage(for: provider) {
+        if let providerIcon = providerStatusImage(for: provider, foregroundStyle: foregroundStyle) {
             return providerIcon
         }
         switch provider.type {
@@ -451,18 +753,33 @@ final class StatusBarController: NSObject {
         }
     }
 
-    private func providerStatusImage(for provider: ProviderDescriptor) -> NSImage? {
-        let iconName = menuIconName(for: provider)
-        if let cached = providerStatusImageCache[iconName] {
-            return cached
-        }
-        if let image = bundledImage(named: iconName, ext: "png") ?? bundledImage(named: iconName, ext: "svg") {
-            image.size = NSSize(width: statusIconSize, height: statusIconSize)
-            image.isTemplate = false
-            providerStatusImageCache[iconName] = image
-            return image
+    private func providerStatusImage(
+        for provider: ProviderDescriptor,
+        foregroundStyle: StatusBarForegroundStyle
+    ) -> NSImage? {
+        let baseIconName = menuIconName(for: provider)
+        let candidates = iconNameCandidates(baseIconName: baseIconName, foregroundStyle: foregroundStyle)
+        for iconName in candidates {
+            if let cached = providerStatusImageCache[iconName] {
+                return cached
+            }
+            if let image = bundledImage(named: iconName, ext: "png") ?? bundledImage(named: iconName, ext: "svg") {
+                image.size = NSSize(width: statusIconSize, height: statusIconSize)
+                image.isTemplate = false
+                providerStatusImageCache[iconName] = image
+                return image
+            }
         }
         return nil
+    }
+
+    private func iconNameCandidates(baseIconName: String, foregroundStyle: StatusBarForegroundStyle) -> [String] {
+        switch foregroundStyle {
+        case .light:
+            return [baseIconName]
+        case .dark:
+            return ["\(baseIconName)_dark", baseIconName]
+        }
     }
 
     private func menuIconName(for provider: ProviderDescriptor) -> String {

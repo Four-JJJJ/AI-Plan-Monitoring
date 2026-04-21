@@ -38,6 +38,14 @@ enum StatusBarDisplayStyle: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum StatusBarAppearanceMode: String, Codable, CaseIterable, Identifiable, Equatable {
+    case followWallpaper
+    case dark
+    case light
+
+    var id: String { rawValue }
+}
+
 enum AuthKind: String, Codable {
     case none
     case bearer
@@ -506,6 +514,7 @@ struct AppConfig: Codable, Equatable {
     var statusBarProviderID: String?
     var statusBarMultiUsageEnabled: Bool
     var statusBarMultiProviderIDs: [String]
+    var statusBarAppearanceMode: StatusBarAppearanceMode
     var statusBarDisplayStyle: StatusBarDisplayStyle
     var providers: [ProviderDescriptor]
 
@@ -517,6 +526,7 @@ struct AppConfig: Codable, Equatable {
         statusBarProviderID: String? = nil,
         statusBarMultiUsageEnabled: Bool = false,
         statusBarMultiProviderIDs: [String]? = nil,
+        statusBarAppearanceMode: StatusBarAppearanceMode = .followWallpaper,
         statusBarDisplayStyle: StatusBarDisplayStyle = .iconPercent,
         providers: [ProviderDescriptor]
     ) {
@@ -534,6 +544,7 @@ struct AppConfig: Codable, Equatable {
             decodedMultiProviderIDs,
             providers: normalizedProviders
         )
+        self.statusBarAppearanceMode = statusBarAppearanceMode
         self.statusBarDisplayStyle = statusBarDisplayStyle
         self.providers = normalizedProviders
     }
@@ -565,6 +576,7 @@ struct AppConfig: Codable, Equatable {
         case statusBarProviderID
         case statusBarMultiUsageEnabled
         case statusBarMultiProviderIDs
+        case statusBarAppearanceMode
         case statusBarDisplayStyle
         case providers
     }
@@ -587,6 +599,8 @@ struct AppConfig: Codable, Equatable {
             decodedMultiProviderIDs,
             providers: providers
         )
+        self.statusBarAppearanceMode = try container.decodeIfPresent(StatusBarAppearanceMode.self, forKey: .statusBarAppearanceMode)
+            ?? .followWallpaper
         self.statusBarDisplayStyle = try container.decodeIfPresent(StatusBarDisplayStyle.self, forKey: .statusBarDisplayStyle)
             ?? .iconPercent
     }

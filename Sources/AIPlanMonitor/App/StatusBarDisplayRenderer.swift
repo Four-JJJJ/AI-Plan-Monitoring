@@ -7,13 +7,35 @@ struct StatusBarDisplayEntry {
     var percent: Double?
 }
 
+enum StatusBarForegroundStyle: Equatable {
+    case light
+    case dark
+
+    var baseColor: NSColor {
+        switch self {
+        case .light:
+            return .white
+        case .dark:
+            return .black
+        }
+    }
+
+    func color(opacity: CGFloat = 1.0) -> NSColor {
+        baseColor.withAlphaComponent(opacity)
+    }
+}
+
 enum StatusBarDisplayRenderer {
-    static func attributedString(entries: [StatusBarDisplayEntry], style: StatusBarDisplayStyle) -> NSAttributedString {
+    static func attributedString(
+        entries: [StatusBarDisplayEntry],
+        style: StatusBarDisplayStyle,
+        foregroundStyle: StatusBarForegroundStyle = .light
+    ) -> NSAttributedString {
         switch style {
         case .iconPercent:
-            return IconPercentRenderer.attributedString(entries: entries)
+            return IconPercentRenderer.attributedString(entries: entries, foregroundStyle: foregroundStyle)
         case .barNamePercent:
-            return BarNamePercentRenderer.attributedString(entries: entries)
+            return BarNamePercentRenderer.attributedString(entries: entries, foregroundStyle: foregroundStyle)
         }
     }
 
@@ -32,10 +54,9 @@ enum StatusBarDisplayRenderer {
         private static let entryYOffset: CGFloat = -4
         private static let textBandYOffset: CGFloat = 0
         private static var textFont: NSFont { NSFont.systemFont(ofSize: 12, weight: .semibold) }
-        private static var textColor: NSColor { .white }
         private static let groupSpacing: CGFloat = 4
 
-        static func attributedString(entries: [StatusBarDisplayEntry]) -> NSAttributedString {
+        static func attributedString(entries: [StatusBarDisplayEntry], foregroundStyle: StatusBarForegroundStyle) -> NSAttributedString {
             guard !entries.isEmpty else { return NSAttributedString(string: "") }
 
             let result = NSMutableAttributedString()
@@ -43,7 +64,7 @@ enum StatusBarDisplayRenderer {
                 if index > 0 {
                     result.append(interGroupSpacingAttachment())
                 }
-                result.append(entryAttachment(entry))
+                result.append(entryAttachment(entry, foregroundStyle: foregroundStyle))
             }
             return result
         }
@@ -57,11 +78,11 @@ enum StatusBarDisplayRenderer {
             )
         }
 
-        private static func entryAttachment(_ entry: StatusBarDisplayEntry) -> NSAttributedString {
+        private static func entryAttachment(_ entry: StatusBarDisplayEntry, foregroundStyle: StatusBarForegroundStyle) -> NSAttributedString {
             let valueText = StatusBarDisplayRenderer.normalizedValueText(entry.valueText)
             let valueAttributes: [NSAttributedString.Key: Any] = [
                 .font: textFont,
-                .foregroundColor: textColor
+                .foregroundColor: foregroundStyle.color()
             ]
             let valueSize = StatusBarDisplayRenderer.ceilTextSize((valueText as NSString).size(withAttributes: valueAttributes))
             let size = NSSize(
@@ -107,15 +128,15 @@ enum StatusBarDisplayRenderer {
         private static let contentSpacing: CGFloat = 4
         private static let barOuterCornerRadius: CGFloat = 3
         private static let barInnerCornerRadius: CGFloat = 2
-        private static var barOuterColor: NSColor { NSColor.white.withAlphaComponent(0.30) }
-        private static var barInnerColor: NSColor { .white }
+        private static func barOuterColor(_ foregroundStyle: StatusBarForegroundStyle) -> NSColor { foregroundStyle.color(opacity: 0.30) }
+        private static func barInnerColor(_ foregroundStyle: StatusBarForegroundStyle) -> NSColor { foregroundStyle.color() }
         private static var nameFont: NSFont { NSFont.systemFont(ofSize: 10, weight: .regular) }
-        private static var nameColor: NSColor { NSColor.white.withAlphaComponent(0.80) }
+        private static func nameColor(_ foregroundStyle: StatusBarForegroundStyle) -> NSColor { foregroundStyle.color(opacity: 0.80) }
         private static var valueFont: NSFont { NSFont.systemFont(ofSize: 10, weight: .semibold) }
-        private static var valueColor: NSColor { .white }
+        private static func valueColor(_ foregroundStyle: StatusBarForegroundStyle) -> NSColor { foregroundStyle.color() }
         private static let textVerticalOffset: CGFloat = -2
 
-        static func attributedString(entries: [StatusBarDisplayEntry]) -> NSAttributedString {
+        static func attributedString(entries: [StatusBarDisplayEntry], foregroundStyle: StatusBarForegroundStyle) -> NSAttributedString {
             guard !entries.isEmpty else { return NSAttributedString(string: "") }
 
             let result = NSMutableAttributedString()
@@ -123,7 +144,7 @@ enum StatusBarDisplayRenderer {
                 if index > 0 {
                     result.append(interGroupSpacingAttachment())
                 }
-                result.append(entryAttachment(entry))
+                result.append(entryAttachment(entry, foregroundStyle: foregroundStyle))
             }
             return result
         }
@@ -144,16 +165,16 @@ enum StatusBarDisplayRenderer {
             )
         }
 
-        private static func entryAttachment(_ entry: StatusBarDisplayEntry) -> NSAttributedString {
+        private static func entryAttachment(_ entry: StatusBarDisplayEntry, foregroundStyle: StatusBarForegroundStyle) -> NSAttributedString {
             let nameText = StatusBarDisplayRenderer.normalizedNameText(entry.name)
             let valueText = StatusBarDisplayRenderer.normalizedValueText(entry.valueText)
             let nameAttributes: [NSAttributedString.Key: Any] = [
                 .font: nameFont,
-                .foregroundColor: nameColor
+                .foregroundColor: nameColor(foregroundStyle)
             ]
             let valueAttributes: [NSAttributedString.Key: Any] = [
                 .font: valueFont,
-                .foregroundColor: valueColor
+                .foregroundColor: valueColor(foregroundStyle)
             ]
             let nameSize = StatusBarDisplayRenderer.ceilTextSize((nameText as NSString).size(withAttributes: nameAttributes))
             let valueSize = StatusBarDisplayRenderer.ceilTextSize((valueText as NSString).size(withAttributes: valueAttributes))
@@ -173,7 +194,7 @@ enum StatusBarDisplayRenderer {
                 xRadius: barOuterCornerRadius,
                 yRadius: barOuterCornerRadius
             )
-            barOuterColor.setFill()
+            barOuterColor(foregroundStyle).setFill()
             outerPath.fill()
 
             let fillHeight = barFillHeight(percent: entry.percent)
@@ -189,7 +210,7 @@ enum StatusBarDisplayRenderer {
                     xRadius: barInnerCornerRadius,
                     yRadius: barInnerCornerRadius
                 )
-                barInnerColor.setFill()
+                barInnerColor(foregroundStyle).setFill()
                 fillPath.fill()
             }
 

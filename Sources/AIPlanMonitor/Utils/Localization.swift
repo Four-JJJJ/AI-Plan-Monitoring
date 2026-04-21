@@ -120,6 +120,10 @@ enum L10nKey {
     case connectionFailed
     case advancedSettings
     case statusBarDisplayProvider
+    case statusBarAppearanceMode
+    case statusBarAppearanceFollowWallpaper
+    case statusBarAppearanceDark
+    case statusBarAppearanceLight
     case statusBarDisplayStyle
     case statusBarStyleIconPercent
     case statusBarStyleBarNamePercent
@@ -323,6 +327,10 @@ enum Localizer {
             case .connectionFailed: return "连接失败"
             case .advancedSettings: return "高级设置"
             case .statusBarDisplayProvider: return "在状态栏展示该模型"
+            case .statusBarAppearanceMode: return "外观模式"
+            case .statusBarAppearanceFollowWallpaper: return "跟随壁纸"
+            case .statusBarAppearanceDark: return "深色"
+            case .statusBarAppearanceLight: return "浅色"
             case .statusBarDisplayStyle: return "展示样式"
             case .statusBarStyleIconPercent: return "图标+百分比"
             case .statusBarStyleBarNamePercent: return "柱状图+文字"
@@ -522,6 +530,10 @@ enum Localizer {
             case .connectionFailed: return "Connection failed"
             case .advancedSettings: return "Advanced settings"
             case .statusBarDisplayProvider: return "Show this provider in menu bar"
+            case .statusBarAppearanceMode: return "Appearance"
+            case .statusBarAppearanceFollowWallpaper: return "Wallpaper"
+            case .statusBarAppearanceDark: return "Dark"
+            case .statusBarAppearanceLight: return "Light"
             case .statusBarDisplayStyle: return "Display Style"
             case .statusBarStyleIconPercent: return "Icon + Percent"
             case .statusBarStyleBarNamePercent: return "Bar + Text"

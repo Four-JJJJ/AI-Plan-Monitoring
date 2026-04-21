@@ -1209,6 +1209,11 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 24)
 
+            statusBarAppearanceModeSection
+
+            Spacer()
+                .frame(height: 24)
+
             statusBarDisplayStyleSection
 
             Spacer()
@@ -1272,6 +1277,55 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 410, alignment: .leading)
+    }
+
+    private var statusBarAppearanceModeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(settingsStatusBarAppearanceModeTitle)
+                    .font(settingsLabelFont)
+                    .foregroundStyle(settingsBodyColor)
+                    .frame(width: 48, alignment: .leading)
+
+                statusBarAppearanceModeSegmentControl
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: 410, height: 24, alignment: .leading)
+        }
+        .frame(width: 410, alignment: .leading)
+    }
+
+    private var statusBarAppearanceModeSegmentControl: some View {
+        HStack(spacing: 0) {
+            statusBarAppearanceModeSegmentButton(mode: .followWallpaper, title: settingsStatusBarAppearanceFollowWallpaper)
+            statusBarAppearanceModeSegmentButton(mode: .dark, title: settingsStatusBarAppearanceDark)
+            statusBarAppearanceModeSegmentButton(mode: .light, title: settingsStatusBarAppearanceLight)
+        }
+        .padding(1)
+        .frame(width: 240, height: 24)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.15))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func statusBarAppearanceModeSegmentButton(mode: StatusBarAppearanceMode, title: String) -> some View {
+        let isSelected = viewModel.statusBarAppearanceMode == mode
+        return Button {
+            viewModel.setStatusBarAppearanceMode(mode)
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private var statusBarDisplayStyleSegmentControl: some View {
@@ -1836,6 +1890,22 @@ struct SettingsView: View {
 
     private var settingsStatusBarDisplayStyleTitle: String {
         viewModel.text(.statusBarDisplayStyle)
+    }
+
+    private var settingsStatusBarAppearanceModeTitle: String {
+        viewModel.text(.statusBarAppearanceMode)
+    }
+
+    private var settingsStatusBarAppearanceFollowWallpaper: String {
+        viewModel.text(.statusBarAppearanceFollowWallpaper)
+    }
+
+    private var settingsStatusBarAppearanceDark: String {
+        viewModel.text(.statusBarAppearanceDark)
+    }
+
+    private var settingsStatusBarAppearanceLight: String {
+        viewModel.text(.statusBarAppearanceLight)
     }
 
     private var settingsStatusBarStyleIconPercent: String {
