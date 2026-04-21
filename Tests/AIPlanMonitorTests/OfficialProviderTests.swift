@@ -11,6 +11,7 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "claude-official" && $0.family == .official }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "gemini-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "copilot-official" && $0.family == .official && !$0.enabled }))
+        XCTAssertTrue(migrated.providers.contains(where: { $0.id == "microsoft-copilot-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "zai-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "amp-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "cursor-official" && $0.family == .official && !$0.enabled }))
@@ -782,6 +783,122 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.count, 2)
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "Premium" })?.remainingPercent ?? -1, 80, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "pro")
+        XCTAssertEqual(snapshot.sourceLabel, "GitHub API")
+    }
+
+    func testCopilotResponseDerivesPercentAndFiltersPlaceholderAndUndefinedPlan() throws {
+        let json = """
+        {
+          "copilot_plan": " undefined ",
+          "login": "octocat",
+          "quota_snapshots": {
+            "placeholder_window": { "percent_remaining": "0", "entitlement": "0", "remaining": "0" },
+            "premium_interactions": { "entitlement": "300", "remaining": "240" },
+            "chat_messages": { "entitlement": "200", "remaining": "180" }
+          }
+        }
+        """
+
+        let snapshot = try CopilotProvider.parseSnapshot(
+            data: Data(json.utf8),
+            descriptor: ProviderDescriptor.defaultOfficialCopilot()
+        )
+
+        XCTAssertEqual(snapshot.accountLabel, "octocat")
+        XCTAssertNil(snapshot.extras["planType"])
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.title == "Premium" })?.remainingPercent ?? -1,
+            80,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.title == "Chat" })?.remainingPercent ?? -1,
+            90,
+            accuracy: 0.001
+        )
+    }
+
+    func testCopilotResponseFallsBackToLimitedAndMonthlyWhenSnapshotsMissingPercent() throws {
+        let json = """
+        {
+          "quota_snapshots": {
+            "chat_v2": { "remaining": "0", "entitlement": "0" }
+          },
+          "limited_user_reset_date": "2026-05-01",
+          "limited_user_quotas": {
+            "chat": "475",
+            "completions": "90"
+          },
+          "monthly_quotas": {
+            "chat": "500",
+            "completions": "100"
+          }
+        }
+        """
+
+        let snapshot = try CopilotProvider.parseSnapshot(
+            data: Data(json.utf8),
+            descriptor: ProviderDescriptor.defaultOfficialCopilot()
+        )
+
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.title == "Chat" })?.remainingPercent ?? -1,
+            95,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            snapshot.quotaWindows.first(where: { $0.title == "Completions" })?.remainingPercent ?? -1,
+            90,
+            accuracy: 0.001
+        )
+    }
+
+    func testMicrosoftCopilotResponseParsesD7AndD30Summaries() throws {
+        let d7Root: [String: Any] = [
+            "value": [
+                ["reportPeriod": 7, "anyAppActiveUsers": 12, "anyAppEnabledUsers": 20]
+            ]
+        ]
+        let d30Root: [String: Any] = [
+            "value": [
+                ["reportPeriod": 30, "anyAppActiveUsers": 30, "anyAppEnabledUsers": 40]
+            ]
+        ]
+
+        let snapshot = try MicrosoftCopilotProvider.parseSnapshot(
+            d7Root: d7Root,
+            d30Root: d30Root,
+            descriptor: ProviderDescriptor.defaultOfficialMicrosoftCopilot()
+        )
+
+        XCTAssertEqual(snapshot.quotaWindows.count, 2)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "D7" })?.remainingPercent ?? -1, 60, accuracy: 0.001)
+        XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.title == "D30" })?.remainingPercent ?? -1, 75, accuracy: 0.001)
+        XCTAssertEqual(snapshot.sourceLabel, "Graph API")
+        XCTAssertEqual(snapshot.extras["planType"], "M365")
+    }
+
+    func testMicrosoftCopilotResponseThrowsWhenEnabledUsersMissingOrZero() {
+        let d7Root: [String: Any] = [
+            "value": [
+                ["reportPeriod": 7, "anyAppActiveUsers": 12, "anyAppEnabledUsers": 0]
+            ]
+        ]
+        let d30Root: [String: Any] = [
+            "value": [
+                ["reportPeriod": 30, "anyAppActiveUsers": 30, "anyAppEnabledUsers": 40]
+            ]
+        ]
+
+        XCTAssertThrowsError(
+            try MicrosoftCopilotProvider.parseSnapshot(
+                d7Root: d7Root,
+                d30Root: d30Root,
+                descriptor: ProviderDescriptor.defaultOfficialMicrosoftCopilot()
+            )
+        )
     }
 
     func testZaiResponseParsesSessionWeeklyAndWeb() throws {

@@ -12,7 +12,7 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
     func fetch() async throws -> UsageSnapshot {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .copilot)
         guard official.sourceMode == .auto || official.sourceMode == .api else {
-            throw ProviderError.unavailable("Copilot 官方来源当前仅支持 API 检测")
+            throw ProviderError.unavailable("GitHub Copilot 官方来源当前仅支持 API 检测")
         }
 
         let token = try resolveToken()
@@ -68,67 +68,86 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.invalidResponse("Copilot usage decode failed")
         }
 
-        let plan = OfficialValueParser.string(root["copilot_plan"] ?? root["access_type_sku"]) ?? "unknown"
-        let paidReset = OfficialValueParser.isoDate(OfficialValueParser.string(root["quota_reset_date"] ?? root["quota_reset_date_utc"]))
+        let plan = OfficialValueParser.nonPlaceholderString(root["copilot_plan"] ?? root["access_type_sku"])
+        let accountLabel = resolveAccountLabel(root)
+        let paidReset = OfficialValueParser.isoDate(
+            OfficialValueParser.string(root["quota_reset_date"] ?? root["quota_reset_date_utc"])
+        )
         let freeReset = parseDateOnly(OfficialValueParser.string(root["limited_user_reset_date"]))
-        let snapshots = root["quota_snapshots"] as? [String: Any]
         let limitedUser = root["limited_user_quotas"] as? [String: Any]
         let monthly = root["monthly_quotas"] as? [String: Any]
 
+        var windowsByKind: [String: UsageQuotaWindow] = [:]
+        var fallbackWindows: [UsageQuotaWindow] = []
+
+        for candidate in quotaSnapshotCandidates(raw: root["quota_snapshots"]) {
+            let quotaKey = quotaKeyHint(from: candidate.key)
+            let percent = remainingPercent(
+                from: candidate.value,
+                quotaKeyHint: quotaKey,
+                limitedUser: limitedUser,
+                monthly: monthly
+            )
+            guard let percent,
+                  !isPlaceholderSnapshot(candidate.value, remainingPercent: percent) else {
+                continue
+            }
+
+            let title = quotaTitle(for: candidate.key)
+            let id = "\(descriptor.id)-\(windowIdentifier(from: candidate.key))"
+            let window = UsageQuotaWindow(
+                id: id,
+                title: title,
+                remainingPercent: percent,
+                usedPercent: max(0, 100 - percent),
+                resetAt: paidReset,
+                kind: .custom
+            )
+
+            if let canonical = canonicalSnapshotKind(for: candidate.key), windowsByKind[canonical] == nil {
+                windowsByKind[canonical] = window
+            } else {
+                fallbackWindows.append(window)
+            }
+        }
+
+        if windowsByKind["chat"] == nil,
+           let percent = percentFromLimitedMonthly(quotaKey: "chat", limitedUser: limitedUser, monthly: monthly) {
+            windowsByKind["chat"] = UsageQuotaWindow(
+                id: "\(descriptor.id)-chat",
+                title: "Chat",
+                remainingPercent: percent,
+                usedPercent: max(0, 100 - percent),
+                resetAt: freeReset,
+                kind: .custom
+            )
+        }
+
+        if windowsByKind["completions"] == nil,
+           let percent = percentFromLimitedMonthly(quotaKey: "completions", limitedUser: limitedUser, monthly: monthly) {
+            windowsByKind["completions"] = UsageQuotaWindow(
+                id: "\(descriptor.id)-completions",
+                title: "Completions",
+                remainingPercent: percent,
+                usedPercent: max(0, 100 - percent),
+                resetAt: freeReset,
+                kind: .custom
+            )
+        }
+
         var windows: [UsageQuotaWindow] = []
-        if let premium = snapshots?["premium_interactions"] as? [String: Any],
-           let remainingPercent = OfficialValueParser.double(premium["percent_remaining"]) {
-            windows.append(
-                UsageQuotaWindow(
-                    id: "\(descriptor.id)-premium",
-                    title: "Premium",
-                    remainingPercent: remainingPercent,
-                    usedPercent: max(0, 100 - remainingPercent),
-                    resetAt: paidReset,
-                    kind: .custom
-                )
-            )
+        if let premium = windowsByKind["premium"] { windows.append(premium) }
+        if let chat = windowsByKind["chat"], windows.contains(where: { $0.id == chat.id }) == false { windows.append(chat) }
+        if let completions = windowsByKind["completions"], windows.count < 2,
+           windows.contains(where: { $0.id == completions.id }) == false {
+            windows.append(completions)
         }
-        if let chat = snapshots?["chat"] as? [String: Any],
-           let remainingPercent = OfficialValueParser.double(chat["percent_remaining"]) {
-            windows.append(
-                UsageQuotaWindow(
-                    id: "\(descriptor.id)-chat",
-                    title: "Chat",
-                    remainingPercent: remainingPercent,
-                    usedPercent: max(0, 100 - remainingPercent),
-                    resetAt: paidReset,
-                    kind: .custom
-                )
-            )
+        if windows.isEmpty, let firstFallback = fallbackWindows.first {
+            windows.append(firstFallback)
         }
-        if let remaining = OfficialValueParser.double(limitedUser?["chat"]),
-           let total = OfficialValueParser.double(monthly?["chat"]), total > 0 {
-            let percent = remaining / total * 100
-            windows.append(
-                UsageQuotaWindow(
-                    id: "\(descriptor.id)-chat-free",
-                    title: "Chat",
-                    remainingPercent: percent,
-                    usedPercent: max(0, 100 - percent),
-                    resetAt: freeReset,
-                    kind: .custom
-                )
-            )
-        }
-        if let remaining = OfficialValueParser.double(limitedUser?["completions"]),
-           let total = OfficialValueParser.double(monthly?["completions"]), total > 0 {
-            let percent = remaining / total * 100
-            windows.append(
-                UsageQuotaWindow(
-                    id: "\(descriptor.id)-completions",
-                    title: "Completions",
-                    remainingPercent: percent,
-                    usedPercent: max(0, 100 - percent),
-                    resetAt: freeReset,
-                    kind: .custom
-                )
-            )
+        if windows.count == 1,
+           let second = fallbackWindows.first(where: { $0.id != windows[0].id }) {
+            windows.append(second)
         }
 
         guard !windows.isEmpty else {
@@ -136,6 +155,14 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
         }
 
         let remaining = windows.map(\.remainingPercent).min() ?? 0
+        let summary = windows.map { "\($0.title) \(Int($0.remainingPercent.rounded()))%" }.joined(separator: " | ")
+        let notePrefix = plan.map { "Plan \($0)" } ?? "GitHub Copilot"
+
+        var extras: [String: String] = [:]
+        if let plan {
+            extras["planType"] = plan
+        }
+
         return UsageSnapshot(
             source: descriptor.id,
             status: remaining <= descriptor.threshold.lowRemaining ? .warning : .ok,
@@ -144,13 +171,175 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
             limit: 100,
             unit: "%",
             updatedAt: Date(),
-            note: "Plan \(plan) | " + windows.map { "\($0.title) \(Int($0.remainingPercent.rounded()))%" }.joined(separator: " | "),
+            note: "\(notePrefix) | \(summary)",
             quotaWindows: windows,
-            sourceLabel: "API",
-            accountLabel: nil,
-            extras: ["planType": plan],
+            sourceLabel: "GitHub API",
+            accountLabel: accountLabel,
+            extras: extras,
             rawMeta: [:]
         )
+    }
+
+    private static func resolveAccountLabel(_ root: [String: Any]) -> String? {
+        let user = root["user"] as? [String: Any]
+        return OfficialValueParser.nonPlaceholderString(root["login"])
+            ?? OfficialValueParser.nonPlaceholderString(user?["login"])
+            ?? OfficialValueParser.nonPlaceholderString(root["github_login"])
+            ?? OfficialValueParser.nonPlaceholderString(user?["email"])
+            ?? OfficialValueParser.nonPlaceholderString(root["email"])
+    }
+
+    private static func quotaSnapshotCandidates(raw: Any?) -> [(key: String, value: [String: Any])] {
+        if let object = raw as? [String: Any] {
+            return object.compactMap { key, value in
+                guard let payload = value as? [String: Any] else { return nil }
+                return (key: key, value: payload)
+            }
+        }
+
+        if let array = raw as? [Any] {
+            var output: [(key: String, value: [String: Any])] = []
+            output.reserveCapacity(array.count)
+            for (index, item) in array.enumerated() {
+                guard let payload = item as? [String: Any] else { continue }
+                let key = OfficialValueParser.string(payload["key"] ?? payload["name"] ?? payload["id"]) ?? "window_\(index)"
+                output.append((key: key, value: payload))
+            }
+            return output
+        }
+
+        return []
+    }
+
+    private static func remainingPercent(
+        from window: [String: Any],
+        quotaKeyHint: String?,
+        limitedUser: [String: Any]?,
+        monthly: [String: Any]?
+    ) -> Double? {
+        if let percent = OfficialValueParser.double(window["percent_remaining"] ?? window["remaining_percent"] ?? window["percentRemaining"]) {
+            return clampPercent(percent)
+        }
+
+        if let remaining = OfficialValueParser.double(window["remaining"] ?? window["remaining_quota"] ?? window["remainingQuota"]),
+           let total = OfficialValueParser.double(window["entitlement"] ?? window["quota"] ?? window["total"]),
+           total > 0 {
+            return clampPercent(remaining / total * 100)
+        }
+
+        if let quotaKeyHint,
+           let percent = percentFromLimitedMonthly(quotaKey: quotaKeyHint, limitedUser: limitedUser, monthly: monthly) {
+            return percent
+        }
+
+        for key in ["chat", "completions"] {
+            if let percent = percentFromLimitedMonthly(quotaKey: key, limitedUser: limitedUser, monthly: monthly) {
+                return percent
+            }
+        }
+
+        return nil
+    }
+
+    private static func percentFromLimitedMonthly(
+        quotaKey: String,
+        limitedUser: [String: Any]?,
+        monthly: [String: Any]?
+    ) -> Double? {
+        guard let remaining = OfficialValueParser.double(limitedUser?[quotaKey]),
+              let total = OfficialValueParser.double(monthly?[quotaKey]),
+              total > 0 else {
+            return nil
+        }
+        return clampPercent(remaining / total * 100)
+    }
+
+    private static func isPlaceholderSnapshot(_ window: [String: Any], remainingPercent: Double) -> Bool {
+        let remaining = OfficialValueParser.double(window["remaining"] ?? window["remaining_quota"] ?? window["remainingQuota"])
+        let entitlement = OfficialValueParser.double(window["entitlement"] ?? window["quota"] ?? window["total"])
+        if let remaining, let entitlement, remaining == 0, entitlement == 0 {
+            return true
+        }
+
+        if let name = OfficialValueParser.string(window["name"] ?? window["title"]),
+           name.lowercased().contains("placeholder") {
+            return true
+        }
+
+        return !remainingPercent.isFinite
+    }
+
+    private static func canonicalSnapshotKind(for key: String) -> String? {
+        let normalized = normalizeKey(key)
+        if normalized.contains("premium") || normalized.contains("interaction") {
+            return "premium"
+        }
+        if normalized.contains("chat") || normalized.contains("message") {
+            return "chat"
+        }
+        if normalized.contains("completion") || normalized.contains("code") {
+            return "completions"
+        }
+        return nil
+    }
+
+    private static func quotaKeyHint(from key: String) -> String? {
+        let normalized = normalizeKey(key)
+        if normalized.contains("chat") || normalized.contains("message") {
+            return "chat"
+        }
+        if normalized.contains("completion") || normalized.contains("code") {
+            return "completions"
+        }
+        return nil
+    }
+
+    private static func quotaTitle(for key: String) -> String {
+        if let canonical = canonicalSnapshotKind(for: key) {
+            switch canonical {
+            case "premium": return "Premium"
+            case "chat": return "Chat"
+            case "completions": return "Completions"
+            default: break
+            }
+        }
+        return humanizedKey(key)
+    }
+
+    private static func humanizedKey(_ key: String) -> String {
+        let words = key
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { part -> String in
+                let lower = part.lowercased()
+                if lower == "d7" || lower == "d30" {
+                    return lower.uppercased()
+                }
+                return lower.capitalized
+            }
+        let joined = words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? "Quota" : joined
+    }
+
+    private static func windowIdentifier(from key: String) -> String {
+        key.lowercased().map { character in
+            if character.isLetter || character.isNumber {
+                return String(character)
+            }
+            return "-"
+        }.joined()
+            .replacingOccurrences(of: "--", with: "-")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            .ifEmpty("quota")
+    }
+
+    private static func normalizeKey(_ key: String) -> String {
+        key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func clampPercent(_ raw: Double) -> Double {
+        max(0, min(100, raw))
     }
 
     private static func parseDateOnly(_ raw: String?) -> Date? {
@@ -163,3 +352,8 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
     }
 }
 
+private extension String {
+    func ifEmpty(_ fallback: String) -> String {
+        isEmpty ? fallback : self
+    }
+}

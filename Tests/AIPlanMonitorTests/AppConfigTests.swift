@@ -46,6 +46,15 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(trae?.baseURL, "https://api-sg-central.trae.ai")
     }
 
+    func testDefaultProvidersIncludeMicrosoftCopilotOfficialDescriptor() {
+        let microsoft = AppConfig.default.providers.first(where: { $0.id == "microsoft-copilot-official" })
+        XCTAssertEqual(microsoft?.family, .official)
+        XCTAssertEqual(microsoft?.type, .microsoftCopilot)
+        XCTAssertEqual(microsoft?.baseURL, "https://graph.microsoft.com")
+        XCTAssertEqual(microsoft?.officialConfig?.sourceMode, .auto)
+        XCTAssertEqual(microsoft?.officialConfig?.webMode, .disabled)
+    }
+
     func testDefaultOfficialClaudeUsesUsedQuotaDisplayMode() {
         XCTAssertEqual(
             ProviderDescriptor.defaultOfficialClaude().officialConfig?.quotaDisplayMode,

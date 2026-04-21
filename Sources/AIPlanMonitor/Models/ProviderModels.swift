@@ -10,6 +10,7 @@ enum ProviderType: String, Codable, CaseIterable {
     case claude
     case gemini
     case copilot
+    case microsoftCopilot
     case zai
     case amp
     case cursor
@@ -544,6 +545,7 @@ struct AppConfig: Codable, Equatable {
             .defaultOfficialClaude(),
             .defaultOfficialGemini(),
             .defaultOfficialCopilot(),
+            .defaultOfficialMicrosoftCopilot(),
             .defaultOfficialZai(),
             .defaultOfficialAmp(),
             .defaultOfficialCursor(),
@@ -613,7 +615,7 @@ extension ProviderDescriptor {
         switch type {
         case .relay, .open, .dragon:
             return true
-        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             return false
         }
     }
@@ -626,7 +628,7 @@ extension ProviderDescriptor {
         }
 
         switch copy.type {
-        case .codex, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
             copy.family = .official
             if copy.officialConfig == nil {
                 copy.officialConfig = Self.defaultOfficialConfig(type: copy.type)
@@ -738,6 +740,8 @@ extension ProviderDescriptor {
             return "https://cloudcode-pa.googleapis.com"
         case .copilot:
             return "https://api.github.com"
+        case .microsoftCopilot:
+            return "https://graph.microsoft.com"
         case .zai:
             return "https://api.z.ai"
         case .amp:
@@ -784,6 +788,13 @@ extension ProviderDescriptor {
                 autoDiscoveryEnabled: true
             )
         case .copilot:
+            return OfficialProviderConfig(
+                sourceMode: .auto,
+                webMode: .disabled,
+                manualCookieAccount: nil,
+                autoDiscoveryEnabled: true
+            )
+        case .microsoftCopilot:
             return OfficialProviderConfig(
                 sourceMode: .auto,
                 webMode: .disabled,
@@ -1227,6 +1238,21 @@ extension ProviderDescriptor {
         )
     }
 
+    static func defaultOfficialMicrosoftCopilot() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "microsoft-copilot-official",
+            name: "Microsoft Copilot",
+            family: .official,
+            type: .microsoftCopilot,
+            enabled: false,
+            pollIntervalSec: 120,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: .none,
+            baseURL: "https://graph.microsoft.com",
+            officialConfig: defaultOfficialConfig(type: .microsoftCopilot)
+        )
+    }
+
     static func defaultOfficialZai() -> ProviderDescriptor {
         ProviderDescriptor(
             id: "zai-official",
@@ -1481,7 +1507,7 @@ extension ProviderDescriptor {
             return [.auto, .api, .cli, .web]
         case .kiro:
             return [.auto, .cli]
-        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae:
+        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae:
             return [.auto, .api]
         case .relay, .open, .dragon:
             return []
@@ -1493,7 +1519,7 @@ extension ProviderDescriptor {
         switch type {
         case .codex, .claude:
             return [.disabled, .autoImport, .manual]
-        case .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             return [.disabled]
         case .relay, .open, .dragon:
             return []

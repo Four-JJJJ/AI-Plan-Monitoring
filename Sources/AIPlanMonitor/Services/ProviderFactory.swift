@@ -30,6 +30,8 @@ final class ProviderFactory {
             return GeminiProvider(descriptor: descriptor)
         case .copilot:
             return CopilotProvider(descriptor: descriptor)
+        case .microsoftCopilot:
+            return MicrosoftCopilotProvider(descriptor: descriptor)
         case .zai:
             return ZaiProvider(descriptor: descriptor)
         case .amp:

@@ -246,6 +246,10 @@ enum SecurityCredentialReader {
 }
 
 enum OfficialValueParser {
+    private static let placeholderValues: Set<String> = [
+        "-", "--", "unknown", "undefined", "null", "nil", "none", "n/a", "na", "(null)", "(unknown)"
+    ]
+
     static func double(_ value: Any?) -> Double? {
         if let value = value as? Double { return value }
         if let value = value as? NSNumber { return value.doubleValue }
@@ -266,6 +270,11 @@ enum OfficialValueParser {
             return trimmed.isEmpty ? nil : trimmed
         }
         return nil
+    }
+
+    static func nonPlaceholderString(_ value: Any?) -> String? {
+        guard let text = string(value) else { return nil }
+        return placeholderValues.contains(text.lowercased()) ? nil : text
     }
 
     static func isoDate(_ raw: String?) -> Date? {

@@ -4292,9 +4292,7 @@ struct SettingsView: View {
 
     private func officialMonitorSubtitle(snapshot: UsageSnapshot?) -> String? {
         guard viewModel.showOfficialAccountEmailInMenuBar else { return nil }
-        guard let label = snapshot?.accountLabel?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !label.isEmpty else {
+        guard let label = OfficialValueParser.nonPlaceholderString(snapshot?.accountLabel) else {
             return nil
         }
         return label
@@ -5585,7 +5583,8 @@ struct SettingsView: View {
             windows = snapshot.quotaWindows
                 .sorted { codexQuotaRank($0.kind) < codexQuotaRank($1.kind) }
         } else {
-            if provider.type == .trae {
+            switch provider.type {
+            case .trae:
                 windows = [
                     UsageQuotaWindow(
                         id: "\(provider.id)-placeholder-dollar",
@@ -5604,7 +5603,45 @@ struct SettingsView: View {
                         kind: .custom
                     )
                 ]
-            } else {
+            case .copilot:
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-premium",
+                        title: "Premium",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    ),
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-chat",
+                        title: "Chat",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    )
+                ]
+            case .microsoftCopilot:
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-d7",
+                        title: "D7",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    ),
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-d30",
+                        title: "D30",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .custom
+                    )
+                ]
+            default:
                 windows = [
                     UsageQuotaWindow(
                         id: "codex-placeholder-session",
@@ -6731,7 +6768,9 @@ struct SettingsView: View {
         case .gemini:
             return "Gemini"
         case .copilot:
-            return "Copilot"
+            return "GitHub Copilot"
+        case .microsoftCopilot:
+            return "Microsoft Copilot"
         case .zai:
             return "Z.ai"
         case .amp:
@@ -6762,7 +6801,9 @@ struct SettingsView: View {
         case .gemini:
             return "menu_gemini_icon"
         case .copilot:
-            return "menu_copilot_icon"
+            return "menu_github_copilot_icon"
+        case .microsoftCopilot:
+            return "menu_microsoft_copilot_icon"
         case .zai:
             return "menu_zai_icon"
         case .amp:
@@ -6837,6 +6878,8 @@ struct SettingsView: View {
             return "sparkles"
         case .copilot:
             return "chevron.left.forwardslash.chevron.right"
+        case .microsoftCopilot:
+            return "building.2.crop.circle"
         case .zai:
             return "z.square.fill"
         case .amp:

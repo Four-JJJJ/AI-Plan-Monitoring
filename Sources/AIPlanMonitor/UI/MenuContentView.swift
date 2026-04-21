@@ -525,8 +525,7 @@ struct MenuContentView: View {
     ) -> String? {
         let accountValue: String? = {
             guard viewModel.showOfficialAccountEmailInMenuBar,
-                  let value = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !value.isEmpty else {
+                  let value = OfficialValueParser.nonPlaceholderString(snapshot?.accountLabel) else {
                 return nil
             }
             return value
@@ -856,7 +855,9 @@ struct MenuContentView: View {
         case .gemini:
             return "Gemini"
         case .copilot:
-            return "Copilot"
+            return "GitHub Copilot"
+        case .microsoftCopilot:
+            return "Microsoft Copilot"
         case .zai:
             return "Z.ai"
         case .amp:
@@ -888,7 +889,9 @@ struct MenuContentView: View {
         case .gemini:
             return "menu_gemini_icon"
         case .copilot:
-            return "menu_copilot_icon"
+            return "menu_github_copilot_icon"
+        case .microsoftCopilot:
+            return "menu_microsoft_copilot_icon"
         case .zai:
             return "menu_zai_icon"
         case .amp:
@@ -960,6 +963,8 @@ struct MenuContentView: View {
             return "sparkles"
         case .copilot:
             return "chevron.left.forwardslash.chevron.right"
+        case .microsoftCopilot:
+            return "building.2.crop.circle"
         case .zai:
             return "z.square.fill"
         case .amp:
@@ -1010,6 +1015,11 @@ struct MenuContentView: View {
             return [
                 QuotaMetric(id: "\(provider.id)-placeholder-premium", title: "Premium", displayPercent: 0, healthPercent: 0, resetAt: nil),
                 QuotaMetric(id: "\(provider.id)-placeholder-chat", title: "Chat", displayPercent: 0, healthPercent: 0, resetAt: nil)
+            ]
+        case .microsoftCopilot:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-d7", title: "D7", displayPercent: 0, healthPercent: 0, resetAt: nil),
+                QuotaMetric(id: "\(provider.id)-placeholder-d30", title: "D30", displayPercent: 0, healthPercent: 0, resetAt: nil)
             ]
         case .zai:
             return [

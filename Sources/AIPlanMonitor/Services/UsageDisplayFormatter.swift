@@ -168,7 +168,7 @@ enum PlanTypeDisplayFormatter {
     ]
 
     private static let hiddenValues: Set<String> = [
-        "-", "unknown", "n/a", "na", "none", "null"
+        "-", "unknown", "undefined", "n/a", "na", "none", "null"
     ]
 
     static func supportsPlanType(providerType: ProviderType) -> Bool {

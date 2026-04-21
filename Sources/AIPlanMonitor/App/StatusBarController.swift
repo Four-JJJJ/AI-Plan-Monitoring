@@ -286,7 +286,9 @@ final class StatusBarController: NSObject {
         case .gemini:
             return "Gemini"
         case .copilot:
-            return "Copilot"
+            return "GitHub Copilot"
+        case .microsoftCopilot:
+            return "Microsoft Copilot"
         case .zai:
             return "Z.ai"
         case .amp:
@@ -442,7 +444,7 @@ final class StatusBarController: NSObject {
             let fallback = NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: "Kimi")
             fallback?.isTemplate = true
             return fallback
-        case .relay, .open, .dragon, .claude, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
+        case .relay, .open, .dragon, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
             let fallback = NSImage(systemSymbolName: "globe", accessibilityDescription: "Relay")
             fallback?.isTemplate = true
             return fallback
@@ -472,7 +474,9 @@ final class StatusBarController: NSObject {
         case .gemini:
             return "menu_gemini_icon"
         case .copilot:
-            return "menu_copilot_icon"
+            return "menu_github_copilot_icon"
+        case .microsoftCopilot:
+            return "menu_microsoft_copilot_icon"
         case .zai:
             return "menu_zai_icon"
         case .amp:

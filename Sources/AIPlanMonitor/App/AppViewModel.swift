@@ -1919,7 +1919,9 @@ final class AppViewModel {
         case .gemini:
             return "Gemini"
         case .copilot:
-            return "Copilot"
+            return "GitHub Copilot"
+        case .microsoftCopilot:
+            return "Microsoft Copilot"
         case .zai:
             return "Z.ai"
         case .amp:
@@ -2111,36 +2113,23 @@ final class AppViewModel {
             errors[descriptor.id] = error.localizedDescription
             consecutiveFailures[descriptor.id, default: 0] += 1
             let health = classifyFetchHealth(error)
-            if descriptor.isRelay {
+            if descriptor.isRelay || descriptor.family == .official {
                 if var previous = snapshots[descriptor.id] {
                     previous.fetchHealth = health
                     previous.valueFreshness = .cachedFallback
                     previous.updatedAt = Date()
-                    previous.diagnosticCode = diagnosticCode(for: health)
+                    previous.diagnosticCode = Self.diagnosticCode(for: health)
                     previous.note = RuntimeBoundedState.appendSnapshotNote(
                         existing: previous.note,
                         appending: error.localizedDescription
                     )
                     snapshots[descriptor.id] = boundedSnapshot(previous)
-                } else {
-                    snapshots[descriptor.id] = boundedSnapshot(
-                        UsageSnapshot(
-                            source: descriptor.id,
-                            status: .error,
-                            fetchHealth: health,
-                        valueFreshness: .empty,
-                        remaining: nil,
-                        used: nil,
-                        limit: nil,
-                        unit: descriptor.relayViewConfig?.accountBalance?.unit ?? "quota",
-                        updatedAt: Date(),
-                            note: error.localizedDescription,
-                            sourceLabel: "Third-Party",
-                            accountLabel: nil,
-                            authSourceLabel: nil,
-                            diagnosticCode: diagnosticCode(for: health)
-                        )
-                    )
+                } else if let emptySnapshot = Self.emptySnapshotForFetchFailure(
+                    descriptor: descriptor,
+                    health: health,
+                    message: error.localizedDescription
+                ) {
+                    snapshots[descriptor.id] = boundedSnapshot(emptySnapshot)
                 }
             }
 
@@ -2247,7 +2236,7 @@ final class AppViewModel {
         return .unreachable
     }
 
-    private func diagnosticCode(for health: FetchHealth) -> String {
+    nonisolated static func diagnosticCode(for health: FetchHealth) -> String {
         switch health {
         case .ok:
             return "ok"
@@ -2260,6 +2249,53 @@ final class AppViewModel {
         case .unreachable:
             return "unreachable"
         }
+    }
+
+    nonisolated static func emptySnapshotForFetchFailure(
+        descriptor: ProviderDescriptor,
+        health: FetchHealth,
+        message: String,
+        now: Date = Date()
+    ) -> UsageSnapshot? {
+        if descriptor.isRelay {
+            return UsageSnapshot(
+                source: descriptor.id,
+                status: .error,
+                fetchHealth: health,
+                valueFreshness: .empty,
+                remaining: nil,
+                used: nil,
+                limit: nil,
+                unit: descriptor.relayViewConfig?.accountBalance?.unit ?? "quota",
+                updatedAt: now,
+                note: message,
+                sourceLabel: "Third-Party",
+                accountLabel: nil,
+                authSourceLabel: nil,
+                diagnosticCode: diagnosticCode(for: health)
+            )
+        }
+
+        guard descriptor.family == .official else {
+            return nil
+        }
+
+        return UsageSnapshot(
+            source: descriptor.id,
+            status: .error,
+            fetchHealth: health,
+            valueFreshness: .empty,
+            remaining: nil,
+            used: nil,
+            limit: nil,
+            unit: "%",
+            updatedAt: now,
+            note: message,
+            sourceLabel: "Official",
+            accountLabel: nil,
+            authSourceLabel: nil,
+            diagnosticCode: diagnosticCode(for: health)
+        )
     }
 
     private func handleLowRemainingAlerts(for descriptor: ProviderDescriptor, snapshot: UsageSnapshot) {
@@ -2441,7 +2477,7 @@ final class AppViewModel {
             await refreshCodexInactiveProfileCardInBackground(descriptor: descriptor)
         case .claude:
             await refreshClaudeInactiveProfileCardInBackground(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             break
         }
     }
@@ -2555,7 +2591,7 @@ final class AppViewModel {
             await refreshCodexProfileCardsAfterManualRefresh(descriptor: descriptor)
         case .claude:
             await refreshClaudeProfileCardsAfterManualRefresh(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
             break
         }
     }
