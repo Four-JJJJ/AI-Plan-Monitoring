@@ -2294,15 +2294,6 @@ struct SettingsView: View {
 
                 claudeProfileManagementSection()
                     .padding(.top, 12)
-
-                if snapshot != nil || error != nil {
-                    officialSingleAccountCardsSection(
-                        provider: provider,
-                        snapshot: snapshot,
-                        error: error
-                    )
-                        .padding(.top, 16)
-                }
             } else if snapshot != nil || error != nil {
                 dividerLine
                     .padding(.top, 24)
@@ -4991,9 +4982,8 @@ struct SettingsView: View {
         let trailingInfo = viewModel.language == .zhHans
             ? "更新于 \(settingsElapsedText(from: updatedAt))"
             : "\(viewModel.text(.updatedAgo)) \(settingsElapsedText(from: updatedAt))"
-        let subtitle = profileEmailWithNote(
-            email: profile.accountEmail,
-            note: profile.note,
+        let subtitle = claudeProfileSubtitle(
+            profile: profile,
             fallback: viewModel.localizedText("未识别账号", "Account unavailable")
         )
 
@@ -5180,7 +5170,7 @@ struct SettingsView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(settingsBodyColor)
 
-                Text(viewModel.localizedText("支持两种导入方式：绑定一个 CLAUDE_CONFIG_DIR 目录，或粘贴完整 .credentials.json。切换时会同步写回系统默认 Claude 登录。", "You can bind a CLAUDE_CONFIG_DIR directory or paste the full .credentials.json. Switching also writes to the system Claude credentials."))
+                Text(viewModel.localizedText("支持两种导入方式：绑定一个 CLAUDE_CONFIG_DIR 目录，或粘贴完整 .credentials.json。如果手动粘贴缺少 email，建议同时绑定目录读取 claude.json。切换时会同步写回系统默认 Claude 登录。", "You can bind a CLAUDE_CONFIG_DIR directory or paste the full .credentials.json. If manual JSON has no email, also bind the directory so claude.json can be used. Switching also writes to the system Claude credentials."))
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(settingsHintColor)
                     .lineSpacing(3)
@@ -5536,6 +5526,28 @@ struct SettingsView: View {
             return resolvedEmail
         }
         return "\(resolvedEmail) · \(trimmedNote)"
+    }
+
+    private func claudeProfileSubtitle(profile: ClaudeAccountProfile, fallback: String) -> String {
+        if let email = profile.accountEmail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            return email
+        }
+        if let note = profile.note?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !note.isEmpty {
+            return note
+        }
+        if let fingerprint = claudeShortFingerprint(profile.credentialFingerprint) {
+            return viewModel.localizedText("指纹 \(fingerprint)", "Fingerprint \(fingerprint)")
+        }
+        return fallback
+    }
+
+    private func claudeShortFingerprint(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(8)).lowercased()
     }
 
     private func codexSlotStatus(snapshot: UsageSnapshot?) -> (text: String, color: Color) {

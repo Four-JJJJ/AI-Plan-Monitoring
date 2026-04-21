@@ -22,6 +22,7 @@ final class CodexDesktopAuthServiceTests: XCTestCase {
         let profile = try CodexAccountProfileStore.makeProfile(
             slotID: .a,
             displayName: "Account A",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com")
         )
 

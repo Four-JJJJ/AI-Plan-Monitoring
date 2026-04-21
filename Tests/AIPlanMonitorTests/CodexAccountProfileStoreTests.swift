@@ -8,6 +8,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         let profile = try store.saveProfile(
             slotID: .a,
             displayName: "Main",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-1", email: "user@example.com"),
             currentFingerprint: nil
         )
@@ -27,6 +28,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
             try store.saveProfile(
                 slotID: .a,
                 displayName: "Broken",
+                note: nil,
                 authJSON: #"{"tokens":{"refresh_token":"x"}}"#,
                 currentFingerprint: nil
             )
@@ -38,12 +40,14 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-1", email: "a@example.com"),
             currentFingerprint: nil
         )
         _ = try store.saveProfile(
             slotID: CodexSlotID(rawValue: "C"),
             displayName: "C",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-3", email: "c@example.com"),
             currentFingerprint: nil
         )
@@ -170,6 +174,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "team-old", email: "old@example.com"),
             currentFingerprint: nil
         )
@@ -296,6 +301,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "Current",
+            note: nil,
             authJSON: authJSON,
             currentFingerprint: fingerprint
         )
@@ -310,12 +316,14 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "Codex A",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com"),
             currentFingerprint: nil
         )
         _ = try store.saveProfile(
             slotID: .b,
             displayName: "Codex B",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-b", email: "b@example.com"),
             currentFingerprint: nil
         )
@@ -323,6 +331,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: CodexSlotID(rawValue: "C"),
             displayName: "Codex C",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com", accessToken: "rotated-a"),
             currentFingerprint: nil
         )
@@ -340,6 +349,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "Current",
+            note: nil,
             authJSON: authJSON,
             currentFingerprint: fingerprint
         )
@@ -355,6 +365,7 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "Manual A",
+            note: nil,
             authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com"),
             currentFingerprint: nil
         )

@@ -90,7 +90,10 @@ final class ClaudeAccountProfileStore {
             configDir: resolvedConfigDir,
             credentialsJSON: credentialsJSON
         )
-        let payload = try Self.parseCredentialsJSON(resolvedCredentialsJSON)
+        let payload = Self.applyingAccountEmailFallback(
+            try Self.parseCredentialsJSON(resolvedCredentialsJSON),
+            configDir: resolvedConfigDir
+        )
 
         var items = load()
         var ignoredFingerprints = loadIgnoredFingerprints()
@@ -131,11 +134,12 @@ final class ClaudeAccountProfileStore {
     func updateStoredCredentials(slotID: CodexSlotID, credentialsJSON: String) -> ClaudeAccountProfile? {
         let trimmed = credentialsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard let payload = try? Self.parseCredentialsJSON(trimmed) else { return nil }
+        guard let parsedPayload = try? Self.parseCredentialsJSON(trimmed) else { return nil }
 
         var items = load()
         guard let index = items.firstIndex(where: { $0.slotID == slotID }) else { return nil }
         var profile = items[index]
+        let payload = Self.applyingAccountEmailFallback(parsedPayload, configDir: profile.configDir)
         profile.credentialsJSON = trimmed
         profile.accountId = payload.accountId
         profile.accountEmail = payload.accountEmail
@@ -239,10 +243,12 @@ final class ClaudeAccountProfileStore {
         }
 
         let trimmed = credentialsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedConfigDir = Self.normalizedConfigDirectory(defaultConfigDir) ?? Self.defaultClaudeConfigDirectory()
         guard !trimmed.isEmpty,
-              let payload = try? Self.parseCredentialsJSON(trimmed) else {
+              let parsedPayload = try? Self.parseCredentialsJSON(trimmed) else {
             return updateCurrentFingerprint(nil)
         }
+        let payload = Self.applyingAccountEmailFallback(parsedPayload, configDir: normalizedConfigDir)
 
         var items = load()
         let currentFingerprint = Self.normalizedFingerprint(payload.credentialFingerprint)
@@ -255,7 +261,6 @@ final class ClaudeAccountProfileStore {
             return items.sorted { $0.slotID < $1.slotID }
         }
 
-        let normalizedConfigDir = Self.normalizedConfigDirectory(defaultConfigDir) ?? Self.defaultClaudeConfigDirectory()
         if let existing = Self.autoCaptureMatchingIndex(
             for: payload,
             defaultConfigDir: normalizedConfigDir,
@@ -442,6 +447,12 @@ final class ClaudeAccountProfileStore {
             .path
     }
 
+    static func claudeConfigFilePath(configDirectory: String) -> String {
+        URL(fileURLWithPath: configDirectory, isDirectory: true)
+            .appendingPathComponent("claude.json")
+            .path
+    }
+
     static func loadCredentialsJSON(fromConfigDirectory configDirectory: String) throws -> String {
         let normalizedConfigDir = normalizedConfigDirectory(configDirectory)
         guard let normalizedConfigDir else {
@@ -458,6 +469,19 @@ final class ClaudeAccountProfileStore {
             throw ClaudeAccountProfileError.missingCredentialsFile(path)
         }
         return trimmed
+    }
+
+    static func loadClaudeConfigJSON(fromConfigDirectory configDirectory: String) -> [String: Any]? {
+        guard let normalizedConfigDir = normalizedConfigDirectory(configDirectory) else {
+            return nil
+        }
+        let path = claudeConfigFilePath(configDirectory: normalizedConfigDir)
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return root
     }
 
     static func matchingIndex(
@@ -506,6 +530,21 @@ final class ClaudeAccountProfileStore {
         }
     }
 
+    private static func applyingAccountEmailFallback(
+        _ payload: ClaudeParsedCredentialsPayload,
+        configDir: String?
+    ) -> ClaudeParsedCredentialsPayload {
+        if normalizedEmail(payload.accountEmail) != nil {
+            return payload
+        }
+        guard let email = accountEmailFromClaudeConfig(configDir: configDir) else {
+            return payload
+        }
+        var updated = payload
+        updated.accountEmail = email
+        return updated
+    }
+
     private static func extractAccountEmail(from json: [String: Any], oauth: [String: Any]) -> String? {
         if let email = OfficialValueParser.string(json["email"]) {
             return email
@@ -522,6 +561,78 @@ final class ClaudeAccountProfileStore {
             return oauthEmail
         }
         return nil
+    }
+
+    private static func accountEmailFromClaudeConfig(configDir: String?) -> String? {
+        guard let configDir = normalizedConfigDirectory(configDir),
+              let root = loadClaudeConfigJSON(fromConfigDirectory: configDir) else {
+            return nil
+        }
+        return extractAccountEmail(fromClaudeConfigRoot: root)
+    }
+
+    private static func extractAccountEmail(fromClaudeConfigRoot root: [String: Any]) -> String? {
+        let directPaths: [Any?] = [
+            root["email"],
+            (root["user"] as? [String: Any])?["email"],
+            (root["account"] as? [String: Any])?["email"],
+            (root["profile"] as? [String: Any])?["email"],
+            (root["auth"] as? [String: Any])?["email"],
+            (root["claudeAiOauth"] as? [String: Any])?["email"],
+            ((root["claudeAiOauth"] as? [String: Any])?["user"] as? [String: Any])?["email"]
+        ]
+        for candidate in directPaths {
+            if let email = normalizedEmailCandidate(candidate) {
+                return email
+            }
+        }
+        return firstEmailCandidate(in: root)
+    }
+
+    private static func firstEmailCandidate(in value: Any) -> String? {
+        if let email = normalizedEmailCandidate(value) {
+            return email
+        }
+        if let dict = value as? [String: Any] {
+            for (key, candidate) in dict where key.caseInsensitiveCompare("email") == .orderedSame {
+                if let email = normalizedEmailCandidate(candidate) {
+                    return email
+                }
+            }
+            for (key, candidate) in dict where key.localizedCaseInsensitiveContains("email") {
+                if let email = normalizedEmailCandidate(candidate) {
+                    return email
+                }
+            }
+            for candidate in dict.values {
+                if let email = firstEmailCandidate(in: candidate) {
+                    return email
+                }
+            }
+            return nil
+        }
+        if let array = value as? [Any] {
+            for item in array {
+                if let email = firstEmailCandidate(in: item) {
+                    return email
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedEmailCandidate(_ value: Any?) -> String? {
+        guard let raw = OfficialValueParser.string(value) else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("@"),
+              !trimmed.contains(" "),
+              !trimmed.contains("\n"),
+              !trimmed.contains("\t") else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func fallbackDisplayName(_ displayName: String, slotID: CodexSlotID) -> String {
@@ -708,7 +819,8 @@ final class ClaudeAccountProfileStore {
         updated.note = Self.normalizedNote(updated.note)
         if let credentialsJSON = updated.credentialsJSON?.trimmingCharacters(in: .whitespacesAndNewlines),
            !credentialsJSON.isEmpty,
-           let payload = try? Self.parseCredentialsJSON(credentialsJSON) {
+           let parsedPayload = try? Self.parseCredentialsJSON(credentialsJSON) {
+            let payload = Self.applyingAccountEmailFallback(parsedPayload, configDir: updated.configDir)
             if updated.accountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                 updated.accountId = payload.accountId
             }

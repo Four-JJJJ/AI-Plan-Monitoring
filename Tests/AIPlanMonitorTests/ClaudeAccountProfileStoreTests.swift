@@ -16,6 +16,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         let profile = try store.saveProfile(
             slotID: .a,
             displayName: "Dir A",
+            note: nil,
             source: .configDir,
             configDir: configDir,
             credentialsJSON: nil,
@@ -41,6 +42,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         let profile = try store.saveProfile(
             slotID: .a,
             displayName: "Manual A",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: credentials,
@@ -57,11 +59,86 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         )
     }
 
+    func testSaveProfileFallsBackToClaudeConfigEmailWhenCredentialsMissingEmail() throws {
+        let store = makeStore()
+        let configDir = makeConfigDirectory(
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-config-fallback",
+                email: nil,
+                accessToken: "access-config-fallback"
+            ),
+            claudeJSON: sampleClaudeConfigJSON(email: "config-fallback@example.com")
+        )
+
+        let profile = try store.saveProfile(
+            slotID: .a,
+            displayName: "Config Fallback",
+            note: nil,
+            source: .configDir,
+            configDir: configDir,
+            credentialsJSON: nil,
+            currentFingerprint: nil
+        )
+
+        XCTAssertEqual(profile.accountEmail, "config-fallback@example.com")
+    }
+
+    func testManualCredentialsWithConfigDirFallsBackToClaudeConfigEmail() throws {
+        let store = makeStore()
+        let configDir = makeConfigDirectory(
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-manual-config",
+                email: nil,
+                accessToken: "access-manual-config"
+            ),
+            claudeJSON: sampleClaudeConfigJSON(email: "manual-config@example.com")
+        )
+        let manualCredentials = sampleCredentialsJSON(
+            accountID: "acc-manual-config",
+            email: nil,
+            accessToken: "access-manual-config"
+        )
+
+        let profile = try store.saveProfile(
+            slotID: .a,
+            displayName: "Manual Config",
+            note: nil,
+            source: .manualCredentials,
+            configDir: configDir,
+            credentialsJSON: manualCredentials,
+            currentFingerprint: nil
+        )
+
+        XCTAssertEqual(profile.accountEmail, "manual-config@example.com")
+    }
+
+    func testManualCredentialsWithoutConfigDirDoesNotFallbackEmail() throws {
+        let store = makeStore()
+        let manualCredentials = sampleCredentialsJSON(
+            accountID: "acc-manual-only",
+            email: nil,
+            accessToken: "access-manual-only"
+        )
+
+        let profile = try store.saveProfile(
+            slotID: .a,
+            displayName: "Manual Only",
+            note: nil,
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: manualCredentials,
+            currentFingerprint: nil
+        )
+
+        XCTAssertNil(profile.accountEmail)
+    }
+
     func testNextAvailableSlotIDAdvancesPastImportedProfiles() throws {
         let store = makeStore()
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: sampleCredentialsJSON(
@@ -74,6 +151,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: CodexSlotID(rawValue: "C"),
             displayName: "C",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: sampleCredentialsJSON(
@@ -98,6 +176,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: shared,
@@ -106,6 +185,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .b,
             displayName: "B",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: shared,
@@ -122,6 +202,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: sampleCredentialsJSON(
@@ -134,6 +215,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .b,
             displayName: "B",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: sampleCredentialsJSON(
@@ -241,6 +323,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "A",
+            note: nil,
             source: .configDir,
             configDir: configDirA,
             credentialsJSON: nil,
@@ -249,6 +332,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .b,
             displayName: "B",
+            note: nil,
             source: .configDir,
             configDir: configDirB,
             credentialsJSON: nil,
@@ -280,6 +364,7 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         _ = try store.saveProfile(
             slotID: .a,
             displayName: "Current",
+            note: nil,
             source: .manualCredentials,
             configDir: nil,
             credentialsJSON: credentialsJSON,
@@ -294,18 +379,70 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         XCTAssertTrue(profiles.isEmpty)
     }
 
+    func testProfilesBackfillEmailFromClaudeConfigForLegacyStoredProfile() throws {
+        let storeFile = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("claude-profile-legacy-\(UUID().uuidString).json")
+        let configDir = makeConfigDirectory(
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-legacy",
+                email: nil,
+                accessToken: "legacy-access-token"
+            ),
+            claudeJSON: sampleClaudeConfigJSON(email: "legacy-backfilled@example.com")
+        )
+        let credentialsJSON = sampleCredentialsJSON(
+            accountID: "acc-legacy",
+            email: nil,
+            accessToken: "legacy-access-token"
+        )
+        let fingerprint = try ClaudeAccountProfileStore.parseCredentialsJSON(credentialsJSON).credentialFingerprint
+        let importedAt = Date(timeIntervalSince1970: 1_745_280_000)
+        let importedAtISO = ISO8601DateFormatter().string(from: importedAt)
+        let legacyRoot: [String: Any] = [
+            "profiles": [
+                [
+                    "slotID": "A",
+                    "displayName": "Claude A",
+                    "note": NSNull(),
+                    "source": "configDir",
+                    "configDir": configDir,
+                    "credentialsJSON": credentialsJSON,
+                    "accountId": "acc-legacy",
+                    "accountEmail": NSNull(),
+                    "credentialFingerprint": fingerprint,
+                    "lastImportedAt": importedAtISO,
+                    "isCurrentSystemAccount": false
+                ]
+            ]
+        ]
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyRoot, options: [.prettyPrinted, .sortedKeys])
+        try legacyData.write(to: storeFile, options: .atomic)
+
+        let store = ClaudeAccountProfileStore(fileURL: storeFile)
+        let profiles = store.profiles()
+
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.slotID, .a)
+        XCTAssertEqual(profiles.first?.accountEmail, "legacy-backfilled@example.com")
+        XCTAssertEqual(profiles.first?.credentialFingerprint, fingerprint)
+    }
+
     private func makeStore() -> ClaudeAccountProfileStore {
         let path = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("claude-profile-tests-\(UUID().uuidString).json")
         return ClaudeAccountProfileStore(fileURL: path)
     }
 
-    private func makeConfigDirectory(credentialsJSON: String) -> String {
+    private func makeConfigDirectory(credentialsJSON: String, claudeJSON: String? = nil) -> String {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("claude-profile-dir-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let credentialsURL = directory.appendingPathComponent(".credentials.json")
         try? credentialsJSON.data(using: .utf8)?.write(to: credentialsURL, options: .atomic)
+        if let claudeJSON {
+            let claudeConfigURL = directory.appendingPathComponent("claude.json")
+            try? claudeJSON.data(using: .utf8)?.write(to: claudeConfigURL, options: .atomic)
+        }
         return directory.path
     }
 
@@ -331,6 +468,19 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         if let email {
             root["email"] = email
         }
+        let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func sampleClaudeConfigJSON(email: String) -> String {
+        let root: [String: Any] = [
+            "user": [
+                "email": email
+            ],
+            "ui": [
+                "theme": "dark"
+            ]
+        ]
         let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         return String(data: data, encoding: .utf8)!
     }
