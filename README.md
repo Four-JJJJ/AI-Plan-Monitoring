@@ -8,22 +8,11 @@
 
 ### V1.5.0
 
-**账号与用量稳定性**
-增加 Codex/Claude 个人资料备注能力
-修复 Codex 使用趋势按账号归属与空态提示问题
-增加 Codex/Claude 非当前账号后台轮转刷新，倒计时校准更准确
-优化 Claude 账号识别与设置管理交互
-**官方模型能力扩展**
-Copilot 拆分为 GitHub Copilot 与 Microsoft Copilot，解析更稳
-Kiro 支持 IDE 变体路径发现与账号导入
-新增 OpenRouter 官方订阅监控：
-- OpenRouter Credits（/credits）
-- OpenRouter API（/key）
-新增 Ollama Cloud 官方监控（网页口径 /settings，支持手动 Cookie 与自动导入）
-**状态栏与设置页体验**
-状态栏新增“按壁纸明暗自动切换”外观能力，并优化即时刷新
-补齐深色图标资源
-设置页按钮/开关点击热区扩大，修复“只能点文字才响应”的交互问题
+1. 新增 OpenRouter 官方监控，拆分为 `OpenRouter Credits` 与 `OpenRouter API` 两个独立入口。
+2. 新增 `Ollama Cloud` 官方监控，支持网页登录态自动导入与手动 Cookie 两种方式。
+3. 官方来源与配置矩阵补齐，OpenRouter/Ollama 可独立启停、轮询与错误态识别。
+4. 设置页交互优化：按钮与开关可点击热区扩大，修复“仅文字可点击”的问题。
+5. 持续优化账号识别、状态栏刷新与官方/本地使用统计稳定性。
 
 ## 这是什么
 
