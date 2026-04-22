@@ -285,6 +285,11 @@ struct SettingsView: View {
             resetProviderReorderState()
             syncSelection()
         }
+        .onChange(of: selectedSettingsTab) { _, newValue in
+            if newValue == .models {
+                viewModel.refreshSettingsProfileState()
+            }
+        }
         .alert(
             viewModel.text(.codexDeleteProfileTitle),
             isPresented: Binding(
@@ -531,6 +536,7 @@ struct SettingsView: View {
                     Capsule(style: .continuous)
                         .fill(background)
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -562,6 +568,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.8) : Color.white.opacity(0.15))
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -596,6 +603,9 @@ struct SettingsView: View {
                     .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(settingsHintColor)
                     .lineLimit(1)
+                    .padding(.horizontal, 4)
+                    .frame(height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(viewModel.updateCheckInFlight || viewModel.updateDownloadInFlight || viewModel.updateInstallBufferingInFlight || viewModel.updateInstallationInFlight)
@@ -610,6 +620,9 @@ struct SettingsView: View {
                     fallbackIcon: "chevron.left.forwardslash.chevron.right",
                     textColor: settingsHintColor
                 )
+                .padding(.horizontal, 4)
+                .frame(height: 24)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .layoutPriority(1)
@@ -648,6 +661,9 @@ struct SettingsView: View {
                         .foregroundStyle(settingsTopUpdateStatusColor(for: statusTone))
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 4)
+                        .frame(height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!viewModel.isUpdateActionEnabled)
@@ -667,6 +683,9 @@ struct SettingsView: View {
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(settingsTopUpdateStatusColor(for: .negative))
                         .lineLimit(1)
+                        .padding(.horizontal, 4)
+                        .frame(height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.isRetryEnabled)
@@ -838,6 +857,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.15))
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -918,6 +938,7 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.white.opacity(0.30), lineWidth: 1)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1177,22 +1198,28 @@ struct SettingsView: View {
                 .frame(height: 24)
 
             VStack(alignment: .leading, spacing: 8) {
+                let launchAtLoginBinding = Binding(
+                    get: { viewModel.launchAtLoginEnabled },
+                    set: { viewModel.setLaunchAtLoginEnabled($0) }
+                )
                 HStack(spacing: 12) {
                     Text(settingsLaunchTitle)
                         .font(settingsLabelFont)
                         .foregroundStyle(settingsBodyColor)
                     Toggle(
                         "",
-                        isOn: Binding(
-                            get: { viewModel.launchAtLoginEnabled },
-                            set: { viewModel.setLaunchAtLoginEnabled($0) }
-                        )
+                        isOn: launchAtLoginBinding
                     )
                     .toggleStyle(FigmaSwitchToggleStyle())
                     .labelsHidden()
+                    .allowsHitTesting(false)
                     Spacer(minLength: 0)
                 }
                 .frame(height: 24)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    launchAtLoginBinding.wrappedValue.toggle()
+                }
 
                 Text(settingsLaunchHint)
                     .font(settingsHintFont)
@@ -1225,6 +1252,10 @@ struct SettingsView: View {
 
     private var statusBarMultiUsageSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            let multiUsageBinding = Binding(
+                get: { viewModel.statusBarMultiUsageEnabled },
+                set: { viewModel.setStatusBarMultiUsageEnabled($0) }
+            )
             HStack(spacing: 12) {
                 Text(settingsStatusBarMultiUsageTitle)
                     .font(settingsLabelFont)
@@ -1233,17 +1264,19 @@ struct SettingsView: View {
 
                 Toggle(
                     "",
-                    isOn: Binding(
-                        get: { viewModel.statusBarMultiUsageEnabled },
-                        set: { viewModel.setStatusBarMultiUsageEnabled($0) }
-                    )
+                    isOn: multiUsageBinding
                 )
                 .toggleStyle(FigmaSwitchToggleStyle())
                 .labelsHidden()
+                .allowsHitTesting(false)
 
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                multiUsageBinding.wrappedValue.toggle()
+            }
 
             Text(settingsStatusBarMultiUsageHint)
                 .font(settingsHintFont)
@@ -1324,6 +1357,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1355,6 +1389,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1750,6 +1785,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.8) : Color.clear)
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1783,6 +1819,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(borderOpacity, 0.35) : borderOpacity)), lineWidth: 1)
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -2204,18 +2241,20 @@ struct SettingsView: View {
     }
 
     private func providerSettingsHeader(_ provider: ProviderDescriptor) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let enabledBinding = Binding(
+            get: { provider.enabled },
+            set: { viewModel.setEnabled($0, providerID: provider.id) }
+        )
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Text(sidebarDisplayName(for: provider))
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(settingsTitleColor)
 
-                Toggle("", isOn: Binding(
-                    get: { provider.enabled },
-                    set: { viewModel.setEnabled($0, providerID: provider.id) }
-                ))
+                Toggle("", isOn: enabledBinding)
                 .toggleStyle(FigmaSwitchToggleStyle())
                 .labelsHidden()
+                .allowsHitTesting(false)
 
                 Spacer(minLength: 0)
             }
@@ -2223,6 +2262,10 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
             .padding(.top, 14)
             .padding(.bottom, 14)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                enabledBinding.wrappedValue.toggle()
+            }
 
             dividerLine
                 .frame(maxWidth: .infinity)
@@ -2304,10 +2347,15 @@ struct SettingsView: View {
             Toggle("", isOn: isOn)
                 .toggleStyle(FigmaSwitchToggleStyle())
                 .labelsHidden()
+                .allowsHitTesting(false)
 
             Spacer(minLength: 0)
         }
         .frame(height: 24)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isOn.wrappedValue.toggle()
+        }
     }
 
     private func officialProviderSettingsCard(
@@ -2460,6 +2508,7 @@ struct SettingsView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.80))
                         .frame(width: 32, height: 12)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
@@ -2475,6 +2524,7 @@ struct SettingsView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.80))
                         .frame(width: 32, height: 11)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -3654,6 +3704,7 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .popover(
@@ -3714,6 +3765,7 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(option.id == selectedID ? Color.white.opacity(0.12) : Color.clear)
                     )
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -4411,6 +4463,7 @@ struct SettingsView: View {
         let supportedSourceModes = provider.supportedOfficialSourceModes
         let supportedWebModes = provider.supportedOfficialWebModes
         let supportsManualInput = provider.supportsOfficialManualCookieInput
+        let supportsBearerCredentialInput = supportsOfficialBearerCredentialInput(provider)
         let quotaDisplayBinding: Binding<OfficialQuotaDisplayMode> = Binding(
             get: {
                 officialQuotaDisplayModeInputs[provider.id]
@@ -4498,6 +4551,58 @@ struct SettingsView: View {
                                 }
                             }
                         )
+                    }
+                }
+            } else if supportsBearerCredentialInput {
+                VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
+                    HStack(spacing: 8) {
+                        let hasSavedToken = viewModel.hasToken(for: provider)
+                        let savedTokenLength = viewModel.savedTokenLength(for: provider)
+
+                        Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
+                            .font(settingsLabelFont)
+                            .foregroundStyle(settingsBodyColor)
+                            .frame(width: 60, alignment: .leading)
+
+                        relayProminentSecureField(
+                            hasSavedToken
+                            ? maskedSecretDots(length: savedTokenLength)
+                            : viewModel.localizedText("粘贴 API Key", "Paste API Key"),
+                            text: Binding(
+                                get: { officialCookieInputs[provider.id, default: ""] },
+                                set: { officialCookieInputs[provider.id] = $0 }
+                            )
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                        settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
+                            let raw = officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !raw.isEmpty {
+                                _ = viewModel.saveToken(raw, for: provider)
+                            }
+                            viewModel.updateOfficialProviderSettings(
+                                providerID: provider.id,
+                                sourceMode: sourceBinding.wrappedValue,
+                                webMode: webBinding.wrappedValue,
+                                quotaDisplayMode: nil
+                            )
+                            officialCookieInputs[provider.id] = ""
+                            viewModel.restartPolling()
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        officialConfigRow(title: viewModel.text(.sourceMode)) {
+                            officialSegmentControl(
+                                selection: sourceBinding,
+                                options: supportedSourceModes,
+                                label: sourceModeLabel
+                            )
+                        }
+                        officialConfigHintText(officialSourceHintText(for: provider))
                     }
                 }
             } else {
@@ -4801,7 +4906,7 @@ struct SettingsView: View {
         // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
         let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.codexProfilesForSettings()
-        let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.codexSlotViewModels().map { ($0.slotID, $0) })
+        let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.codexSlotViewModelsForSettings().map { ($0.slotID, $0) })
         let teamDisplayBySlotID = codexTeamDisplayInfoBySlotID(profiles: profiles)
 
         VStack(alignment: .leading, spacing: 8) {
@@ -5021,7 +5126,7 @@ struct SettingsView: View {
         // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
         let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.claudeProfilesForSettings()
-        let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.claudeSlotViewModels().map { ($0.slotID, $0) })
+        let slotsByID = Dictionary(uniqueKeysWithValues: viewModel.claudeSlotViewModelsForSettings().map { ($0.slotID, $0) })
 
         VStack(alignment: .leading, spacing: 8) {
             ForEach(profiles, id: \.slotID.rawValue) { profile in
@@ -5711,6 +5816,47 @@ struct SettingsView: View {
                         kind: .custom
                     )
                 ]
+            case .openrouterCredits:
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-credits",
+                        title: "Credits",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .credits
+                    )
+                ]
+            case .openrouterAPI:
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-limit",
+                        title: "Limit",
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .credits
+                    )
+                ]
+            case .ollamaCloud:
+                windows = [
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-session",
+                        title: viewModel.localizedText("会话", "Session"),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .session
+                    ),
+                    UsageQuotaWindow(
+                        id: "\(provider.id)-placeholder-weekly",
+                        title: viewModel.text(.quotaWeekly),
+                        remainingPercent: 0,
+                        usedPercent: 100,
+                        resetAt: nil,
+                        kind: .weekly
+                    )
+                ]
             default:
                 windows = [
                     UsageQuotaWindow(
@@ -5761,6 +5907,9 @@ struct SettingsView: View {
         }
         switch window.kind {
         case .session:
+            if provider.type == .ollamaCloud {
+                return viewModel.localizedText("会话", "Session")
+            }
             return viewModel.text(.quotaFiveHour)
         case .weekly, .modelWeekly:
             return viewModel.text(.quotaWeekly)
@@ -5869,7 +6018,36 @@ struct SettingsView: View {
                 "Local Kiro CLI sessions are auto-discovered by default. When CLI is unavailable, the app falls back to Kiro IDE cache."
             )
         }
+        if provider.type == .openrouterCredits {
+            return viewModel.localizedText(
+                "OpenRouter Credits 需要管理密钥（Management Key），用于读取 /credits 的总额度数据。",
+                "OpenRouter Credits requires a Management Key to read total credit usage from /credits."
+            )
+        }
+        if provider.type == .openrouterAPI {
+            return viewModel.localizedText(
+                "OpenRouter API 使用普通 API Key，读取 /key 的 limit 与 remaining。",
+                "OpenRouter API uses a regular API key to read limit and remaining from /key."
+            )
+        }
+        if provider.type == .ollamaCloud {
+            return viewModel.localizedText(
+                "默认从浏览器自动导入 ollama.com 的 __Secure-session Cookie，也可切到手动模式粘贴。",
+                "By default, __Secure-session is auto-imported from ollama.com browser cookies. You can switch to manual mode and paste it."
+            )
+        }
         return viewModel.text(.officialAutoDiscoveryHint)
+    }
+
+    private func supportsOfficialBearerCredentialInput(_ provider: ProviderDescriptor) -> Bool {
+        guard provider.family == .official else { return false }
+        guard provider.auth.kind == .bearer else { return false }
+        switch provider.type {
+        case .openrouterCredits, .openrouterAPI:
+            return true
+        default:
+            return false
+        }
     }
 
     private func webModeLabel(_ mode: OfficialWebMode) -> String {
@@ -6341,6 +6519,7 @@ struct SettingsView: View {
                         .foregroundStyle(settingsBodyColor)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -6377,9 +6556,14 @@ struct SettingsView: View {
                         Toggle("", isOn: tokenChannelBinding)
                             .toggleStyle(FigmaSwitchToggleStyle())
                             .labelsHidden()
+                            .allowsHitTesting(false)
                         Spacer(minLength: 0)
                     }
                     .frame(height: 24)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        tokenChannelBinding.wrappedValue.toggle()
+                    }
 
                     let accountChannelBinding = Binding(
                         get: { accountEnabledInputs[provider.id] ?? accountChannelEnabled },
@@ -6393,9 +6577,14 @@ struct SettingsView: View {
                         Toggle("", isOn: accountChannelBinding)
                             .toggleStyle(FigmaSwitchToggleStyle())
                             .labelsHidden()
+                            .allowsHitTesting(false)
                         Spacer(minLength: 0)
                     }
                     .frame(height: 24)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        accountChannelBinding.wrappedValue.toggle()
+                    }
 
                     HStack(spacing: 8) {
                         relayCompactTextField(viewModel.text(.authHeader), text: Binding(
@@ -6867,6 +7056,12 @@ struct SettingsView: View {
             return provider.family == .official ? "Kimi Coding" : "Kimi"
         case .trae:
             return "Trae SOLO"
+        case .openrouterCredits:
+            return "OpenRouter Credits"
+        case .openrouterAPI:
+            return "OpenRouter API"
+        case .ollamaCloud:
+            return "Ollama Cloud"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -6899,6 +7094,8 @@ struct SettingsView: View {
         case .kimi:
             return "menu_kimi_icon"
         case .trae:
+            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
             return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
@@ -6952,7 +7149,7 @@ struct SettingsView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .trae, .relay, .open, .dragon:
+        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"
@@ -7679,6 +7876,8 @@ private struct FigmaSwitchToggleStyle: ToggleStyle {
                     .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 0)
                     .padding(.horizontal, 2)
             }
+            .frame(width: 64, height: 28, alignment: .center)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -7700,6 +7899,8 @@ private struct SettingsModelCheckboxToggleStyle: ToggleStyle {
                         .foregroundStyle(Color.black)
                 }
             }
+            .frame(width: 20, height: 20, alignment: .center)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -418,16 +418,20 @@ final class CodexLocalUsageService {
         let startEpoch = Int64(startOfLast30Days.timeIntervalSince1970)
         let query = """
         SELECT ts, feedback_log_body
-        FROM logs
-        WHERE ts IS NOT NULL
-          AND ts >= ?
-          AND feedback_log_body IS NOT NULL
-          AND (
-            ltrim(feedback_log_body) LIKE 'event.name=codex.sse_event%'
-            OR ltrim(feedback_log_body) LIKE 'event.name="codex.sse_event"%'
-          )
-        ORDER BY ts DESC
-        LIMIT ?;
+        FROM (
+            SELECT ts, feedback_log_body
+            FROM logs
+            WHERE ts IS NOT NULL
+              AND ts >= ?
+              AND feedback_log_body IS NOT NULL
+              AND (
+                ltrim(feedback_log_body) LIKE 'event.name=codex.sse_event%'
+                OR ltrim(feedback_log_body) LIKE 'event.name="codex.sse_event"%'
+              )
+            ORDER BY ts DESC
+            LIMIT ?
+        )
+        ORDER BY ts ASC;
         """
 
         var database: OpaquePointer?
@@ -477,9 +481,15 @@ final class CodexLocalUsageService {
         sqlite3_bind_int64(statement, 1, startEpoch)
         sqlite3_bind_int(statement, 2, Int32(maxRowCount))
 
-        var rows: [IdentityLogRow] = []
-        rows.reserveCapacity(min(maxRowCount, 4096))
         var matchedRows = 0
+        var dedupedEvents: [String: ParsedTokenEvent] = [:]
+        var parsedEvents = 0
+        var latestParsedEventAt: Date?
+        var recoveredByConversationResponses = 0
+        var recoveredByConversationTokens = 0
+        var unattributedResponses = 0
+        var unattributedTokens = 0
+        var conversationIdentity: [String: ConversationIdentity] = [:]
 
         while true {
             let stepResult = sqlite3_step(statement)
@@ -495,22 +505,10 @@ final class CodexLocalUsageService {
                 continue
             }
             if rowEventAt < startOfLast30Days {
-                break
+                continue
             }
-            rows.append(IdentityLogRow(eventAt: rowEventAt, body: body))
-        }
 
-        var dedupedEvents: [String: ParsedTokenEvent] = [:]
-        var parsedEvents = 0
-        var latestParsedEventAt: Date?
-        var recoveredByConversationResponses = 0
-        var recoveredByConversationTokens = 0
-        var unattributedResponses = 0
-        var unattributedTokens = 0
-        var conversationIdentity: [String: ConversationIdentity] = [:]
-
-        for row in rows.reversed() {
-            guard let metadata = Self.parseCodexSSEMetadata(from: row.body) else {
+            guard let metadata = Self.parseCodexSSEMetadata(from: body) else {
                 continue
             }
 
@@ -526,7 +524,7 @@ final class CodexLocalUsageService {
                 continue
             }
 
-            guard var event = Self.parseCompletedEvent(from: row.body, fallbackEventAt: row.eventAt) else {
+            guard var event = Self.parseCompletedEvent(from: body, fallbackEventAt: rowEventAt) else {
                 continue
             }
             parsedEvents += 1
@@ -1328,11 +1326,6 @@ private struct SessionTokenScannerState {
 private struct IdentityLogScanResult {
     var events: [ParsedTokenEvent]
     var diagnostics: CodexLocalUsageDiagnostics
-}
-
-private struct IdentityLogRow {
-    var eventAt: Date
-    var body: String
 }
 
 private struct ParsedTokenEvent {

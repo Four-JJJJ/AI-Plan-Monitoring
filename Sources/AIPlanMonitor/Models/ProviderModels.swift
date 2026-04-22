@@ -18,6 +18,9 @@ enum ProviderType: String, Codable, CaseIterable {
     case kiro
     case windsurf
     case trae
+    case openrouterCredits
+    case openrouterAPI
+    case ollamaCloud
     case relay
     case open
     case dragon
@@ -564,7 +567,10 @@ struct AppConfig: Codable, Equatable {
             .defaultOfficialKiro(),
             .defaultOfficialWindsurf(),
             .defaultOfficialKimi(),
-            .defaultOfficialTrae()
+            .defaultOfficialTrae(),
+            .defaultOfficialOpenRouterCredits(),
+            .defaultOfficialOpenRouterAPI(),
+            .defaultOfficialOllamaCloud()
         ]
     )
 
@@ -581,13 +587,73 @@ struct AppConfig: Codable, Equatable {
         case providers
     }
 
+    private struct LossyProviderDescriptorArray: Decodable {
+        let values: [ProviderDescriptor]
+
+        init(from decoder: Decoder) throws {
+            var container = try decoder.unkeyedContainer()
+            var decoded: [ProviderDescriptor] = []
+            while !container.isAtEnd {
+                let startIndex = container.currentIndex
+                if let provider = try? container.decode(ProviderDescriptor.self) {
+                    decoded.append(provider)
+                    continue
+                }
+                guard (try? container.decode(JSONDiscardValue.self)) != nil,
+                      container.currentIndex > startIndex else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container,
+                        debugDescription: "Unable to skip invalid provider entry at index \(startIndex)"
+                    )
+                }
+            }
+            values = decoded
+        }
+    }
+
+    private struct JSONDiscardValue: Decodable {
+        init(from decoder: Decoder) throws {
+            if var unkeyed = try? decoder.unkeyedContainer() {
+                while !unkeyed.isAtEnd {
+                    _ = try? unkeyed.decode(JSONDiscardValue.self)
+                }
+                return
+            }
+
+            if let keyed = try? decoder.container(keyedBy: AnyCodingKey.self) {
+                for key in keyed.allKeys {
+                    _ = try? keyed.decode(JSONDiscardValue.self, forKey: key)
+                }
+                return
+            }
+
+            _ = try? decoder.singleValueContainer()
+        }
+    }
+
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            self.intValue = nil
+        }
+
+        init?(intValue: Int) {
+            self.stringValue = "\(intValue)"
+            self.intValue = intValue
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
         self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
         self.simplifiedRelayConfig = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig) ?? true
         self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
-        let decodedProviders = try container.decodeIfPresent([ProviderDescriptor].self, forKey: .providers) ?? AppConfig.default.providers
+        let decodedProviders = try container.decodeIfPresent(LossyProviderDescriptorArray.self, forKey: .providers)?.values
+            ?? AppConfig.default.providers
         self.providers = decodedProviders.map { $0.normalized() }
         let resolvedStatusProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)
             ?? Self.defaultStatusBarProviderID(from: providers)
@@ -629,7 +695,7 @@ extension ProviderDescriptor {
         switch type {
         case .relay, .open, .dragon:
             return true
-        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
             return false
         }
     }
@@ -642,7 +708,7 @@ extension ProviderDescriptor {
         }
 
         switch copy.type {
-        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
             copy.family = .official
             if copy.officialConfig == nil {
                 copy.officialConfig = Self.defaultOfficialConfig(type: copy.type)
@@ -772,6 +838,10 @@ extension ProviderDescriptor {
             return "https://api.kimi.com"
         case .trae:
             return "https://api-sg-central.trae.ai"
+        case .openrouterCredits, .openrouterAPI:
+            return "https://openrouter.ai/api/v1"
+        case .ollamaCloud:
+            return "https://ollama.com"
         case .relay, .open, .dragon:
             return ""
         }
@@ -869,6 +939,20 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .disabled,
                 manualCookieAccount: nil,
+                autoDiscoveryEnabled: true
+            )
+        case .openrouterCredits, .openrouterAPI:
+            return OfficialProviderConfig(
+                sourceMode: .auto,
+                webMode: .disabled,
+                manualCookieAccount: nil,
+                autoDiscoveryEnabled: true
+            )
+        case .ollamaCloud:
+            return OfficialProviderConfig(
+                sourceMode: .auto,
+                webMode: .autoImport,
+                manualCookieAccount: "official/ollama/session-cookie",
                 autoDiscoveryEnabled: true
             )
         case .relay, .open, .dragon:
@@ -1391,6 +1475,59 @@ extension ProviderDescriptor {
         )
     }
 
+    static func defaultOfficialOpenRouterCredits() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "openrouter-credits-official",
+            name: "OpenRouter Credits",
+            family: .official,
+            type: .openrouterCredits,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(
+                kind: .bearer,
+                keychainService: KeychainService.defaultServiceName,
+                keychainAccount: "official/openrouter/credits-api-key"
+            ),
+            baseURL: "https://openrouter.ai/api/v1",
+            officialConfig: defaultOfficialConfig(type: .openrouterCredits)
+        )
+    }
+
+    static func defaultOfficialOpenRouterAPI() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "openrouter-api-official",
+            name: "OpenRouter API",
+            family: .official,
+            type: .openrouterAPI,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(
+                kind: .bearer,
+                keychainService: KeychainService.defaultServiceName,
+                keychainAccount: "official/openrouter/api-key"
+            ),
+            baseURL: "https://openrouter.ai/api/v1",
+            officialConfig: defaultOfficialConfig(type: .openrouterAPI)
+        )
+    }
+
+    static func defaultOfficialOllamaCloud() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "ollama-cloud-official",
+            name: "Ollama Cloud",
+            family: .official,
+            type: .ollamaCloud,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: .none,
+            baseURL: "https://ollama.com",
+            officialConfig: defaultOfficialConfig(type: .ollamaCloud)
+        )
+    }
+
     static func defaultOpenAilinyu() -> ProviderDescriptor {
         ProviderDescriptor(
             id: "open-ailinyu",
@@ -1521,7 +1658,9 @@ extension ProviderDescriptor {
             return [.auto, .api, .cli, .web]
         case .kiro:
             return [.auto, .cli]
-        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae:
+        case .ollamaCloud:
+            return [.auto, .web]
+        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI:
             return [.auto, .api]
         case .relay, .open, .dragon:
             return []
@@ -1533,7 +1672,9 @@ extension ProviderDescriptor {
         switch type {
         case .codex, .claude:
             return [.disabled, .autoImport, .manual]
-        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .ollamaCloud:
+            return [.disabled, .autoImport, .manual]
+        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI:
             return [.disabled]
         case .relay, .open, .dragon:
             return []

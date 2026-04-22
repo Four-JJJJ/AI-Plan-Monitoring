@@ -46,6 +46,14 @@ final class ProviderFactory {
             return WindsurfProvider(descriptor: descriptor)
         case .trae:
             return TraeProvider(descriptor: descriptor, keychain: keychain)
+        case .openrouterCredits, .openrouterAPI:
+            return OpenRouterProvider(descriptor: descriptor, keychain: keychain)
+        case .ollamaCloud:
+            return OllamaCloudProvider(
+                descriptor: descriptor,
+                keychain: keychain,
+                browserCookieService: browserCookieService
+            )
         case .relay, .open, .dragon:
             return RelayProvider(
                 descriptor: descriptor,

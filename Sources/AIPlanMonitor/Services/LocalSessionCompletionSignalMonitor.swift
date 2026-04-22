@@ -410,7 +410,7 @@ final class LocalSessionRefreshCoordinator {
             return signalSource.latestCodexCompletionAt()
         case .claude:
             return signalSource.latestClaudeCompletionAt()
-        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .relay, .open, .dragon:
+        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .relay, .open, .dragon:
             return nil
         }
     }

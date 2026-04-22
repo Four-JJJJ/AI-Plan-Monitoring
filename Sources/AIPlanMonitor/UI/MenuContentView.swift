@@ -874,6 +874,12 @@ struct MenuContentView: View {
             return provider.family == .official ? "Kimi Coding" : "KIMI"
         case .trae:
             return "Trae SOLO"
+        case .openrouterCredits:
+            return "OpenRouter Credits"
+        case .openrouterAPI:
+            return "OpenRouter API"
+        case .ollamaCloud:
+            return "Ollama Cloud"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -907,6 +913,8 @@ struct MenuContentView: View {
         case .kimi:
             return "menu_kimi_icon"
         case .trae:
+            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
             return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
@@ -957,7 +965,7 @@ struct MenuContentView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .trae, .relay, .open, .dragon:
+        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"
@@ -1067,6 +1075,31 @@ struct MenuContentView: View {
                     resetAt: nil
                 )
             ]
+        case .openrouterCredits:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-credits", title: "Credits", displayPercent: 0, healthPercent: 0, resetAt: nil)
+            ]
+        case .openrouterAPI:
+            return [
+                QuotaMetric(id: "\(provider.id)-placeholder-limit", title: "Limit", displayPercent: 0, healthPercent: 0, resetAt: nil)
+            ]
+        case .ollamaCloud:
+            return [
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-session",
+                    title: placeholderMetricTitle(viewModel.localizedText("会话", "Session"), provider: provider),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                ),
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-weekly",
+                    title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                )
+            ]
         case .relay, .open, .dragon:
             return []
         }
@@ -1091,7 +1124,11 @@ struct MenuContentView: View {
         let baseTitle: String
         switch window.kind {
         case .session:
-            baseTitle = viewModel.text(.quotaFiveHour)
+            if provider.type == .ollamaCloud {
+                baseTitle = viewModel.localizedText("会话", "Session")
+            } else {
+                baseTitle = viewModel.text(.quotaFiveHour)
+            }
         case .weekly:
             baseTitle = viewModel.text(.quotaWeekly)
         default:

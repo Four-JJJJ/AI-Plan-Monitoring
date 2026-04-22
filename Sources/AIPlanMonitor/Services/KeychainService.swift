@@ -2,7 +2,7 @@ import Foundation
 import LocalAuthentication
 import Security
 
-final class KeychainService {
+final class KeychainService: @unchecked Sendable {
     static let defaultServiceName = "AI Plan Monitor"
     static let legacyServiceName = "AIPlanMonitor"
     private static let vaultAccount = "__credential_vault__"
@@ -36,6 +36,14 @@ final class KeychainService {
         "\(normalizedServiceName(service))::\(account)"
     }
 
+    func cachedToken(service: String, account: String) -> String? {
+        let normalizedService = normalizedServiceName(service)
+        let key = cacheKey(service: normalizedService, account: account)
+        lock.lock()
+        defer { lock.unlock() }
+        return tokenCache[key]
+    }
+
     func readToken(service: String, account: String) -> String? {
         let normalizedService = normalizedServiceName(service)
         let key = cacheKey(service: normalizedService, account: account)
@@ -56,9 +64,6 @@ final class KeychainService {
             token = readFromDisk(service: normalizedService, account: account)
         } else {
             guard hasPreparedSecureStoreAccess else {
-                lock.lock()
-                missingCache.insert(key)
-                lock.unlock()
                 return nil
             }
             token = readFromVault(service: normalizedService, account: account)
@@ -157,11 +162,17 @@ final class KeychainService {
         loadSecureVaultIfNeeded(interactive: true)
         migrateLegacyServiceOnceIfNeeded(interactive: true)
         if readVaultSnapshotFromSecureStore(interactive: true) != nil {
+            lock.lock()
+            missingCache.removeAll()
+            lock.unlock()
             defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
             return true
         }
         let ok = persistSecureSnapshot(tokenCache, interactive: true)
         if ok {
+            lock.lock()
+            missingCache.removeAll()
+            lock.unlock()
             defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
         }
         return ok

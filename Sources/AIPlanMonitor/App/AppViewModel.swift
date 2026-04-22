@@ -75,6 +75,7 @@ final class AppViewModel {
     private var hasStarted = false
     private var lastPermissionStatusRefreshAt = Date.distantPast
     private var notificationPermissionPollingTask: Task<Void, Never>?
+    @ObservationIgnored private var permissionRefreshTask: Task<Void, Never>?
     private var preparedUpdate: PreparedAppUpdate?
     private var updateFlowVersionInFlight: String?
     private var updateInstallBufferTask: Task<Void, Never>?
@@ -82,6 +83,9 @@ final class AppViewModel {
     private var updateCheckStatusClearTask: Task<Void, Never>?
     private let updateCheckStatusClearDelaySeconds: TimeInterval
     @ObservationIgnored private var localSessionMonitorTask: Task<Void, Never>?
+    @ObservationIgnored private var credentialLookupInFlight: Set<String> = []
+    @ObservationIgnored private var credentialLookupMissingKeys: Set<String> = []
+    private(set) var credentialLookupVersion: Int = 0
 
     init(
         appUpdateService: any AppUpdateServicing = AppUpdateService(),
@@ -91,10 +95,20 @@ final class AppViewModel {
         self.appUpdateService = appUpdateService
         self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
         self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
-        var loadedConfig = (try? configStore.load()) ?? .default
+        let shouldPersistConfigDuringBootstrap: Bool
+        var loadedConfig: AppConfig
+        do {
+            loadedConfig = try configStore.load()
+            shouldPersistConfigDuringBootstrap = true
+        } catch {
+            loadedConfig = .default
+            shouldPersistConfigDuringBootstrap = false
+        }
         if loadedConfig.simplifiedRelayConfig == false {
             loadedConfig.simplifiedRelayConfig = true
-            try? configStore.save(loadedConfig)
+            if shouldPersistConfigDuringBootstrap {
+                try? configStore.save(loadedConfig)
+            }
         }
         self.config = loadedConfig
         self.currentAppVersion = Self.detectCurrentAppVersion()
@@ -110,13 +124,15 @@ final class AppViewModel {
         let preNormalizedConfig = self.config
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
-        if self.config != preNormalizedConfig {
+        if shouldPersistConfigDuringBootstrap && self.config != preNormalizedConfig {
             try? configStore.save(self.config)
         }
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
-            try? configStore.save(self.config)
+            if shouldPersistConfigDuringBootstrap {
+                try? configStore.save(self.config)
+            }
         }
         syncCodexProfilesCurrentState()
         bootstrapClaudeProfileState()
@@ -845,47 +861,15 @@ final class AppViewModel {
     }
 
     func codexSlotViewModels() -> [CodexSlotViewModel] {
-        let latestCodexSlots = codexSlotStore.visibleSlots()
-        if latestCodexSlots != codexSlots {
-            codexSlots = latestCodexSlots
-        }
-        triggerCodexProfileSnapshotPrefetchIfNeeded()
-        let now = Date()
-        return mergedCodexSlotsForMenu()
-            .sorted { lhs, rhs in
-                if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
-                if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
-                return lhs.slotID < rhs.slotID
-            }
-            .map { slot in
-                let profile = matchedCodexProfile(for: slot)
-                let feedback = codexSwitchFeedback[slot.slotID]
-                let displaySnapshot = CodexQuotaDisplayNormalizer.normalize(
-                    snapshot: slot.lastSnapshot,
-                    isActive: slot.isActive,
-                    now: now
-                )
-                return CodexSlotViewModel(
-                    slotID: slot.slotID,
-                    title: codexMenuTitle(for: slot.slotID),
-                    snapshot: displaySnapshot,
-                    isActive: slot.isActive,
-                    lastSeenAt: slot.lastSeenAt,
-                    displayName: profile?.displayName ?? slot.displayName,
-                    note: profile?.note,
-                    isSwitching: codexSwitchingSlots.contains(slot.slotID),
-                    canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
-                    isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
-                    profileDisplayName: profile?.displayName,
-                    switchMessage: feedback?.message,
-                    switchMessageIsError: feedback?.isError ?? false
-                )
-            }
+        codexSlotViewModels(refreshFromStore: true, triggerPrefetch: true)
+    }
+
+    func codexSlotViewModelsForSettings() -> [CodexSlotViewModel] {
+        codexSlotViewModels(refreshFromStore: false, triggerPrefetch: false)
     }
 
     func codexProfilesForSettings() -> [CodexAccountProfile] {
-        syncCodexProfilesCurrentState()
-        return codexProfiles.sorted { $0.slotID < $1.slotID }
+        codexProfiles.sorted { $0.slotID < $1.slotID }
     }
 
     func nextCodexProfileSlotID() -> CodexSlotID {
@@ -923,11 +907,81 @@ final class AppViewModel {
     }
 
     func claudeSlotViewModels() -> [ClaudeSlotViewModel] {
-        let latestClaudeSlots = claudeSlotStore.visibleSlots()
-        if latestClaudeSlots != claudeSlots {
-            claudeSlots = latestClaudeSlots
+        claudeSlotViewModels(refreshFromStore: true, triggerPrefetch: true)
+    }
+
+    func claudeSlotViewModelsForSettings() -> [ClaudeSlotViewModel] {
+        claudeSlotViewModels(refreshFromStore: false, triggerPrefetch: false)
+    }
+
+    func claudeProfilesForSettings() -> [ClaudeAccountProfile] {
+        claudeProfiles.sorted { $0.slotID < $1.slotID }
+    }
+
+    func refreshSettingsProfileState() {
+        syncCodexProfilesCurrentState()
+        syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
+    }
+
+    private func codexSlotViewModels(
+        refreshFromStore: Bool,
+        triggerPrefetch: Bool
+    ) -> [CodexSlotViewModel] {
+        if refreshFromStore {
+            let latestCodexSlots = codexSlotStore.visibleSlots()
+            if latestCodexSlots != codexSlots {
+                codexSlots = latestCodexSlots
+            }
         }
-        triggerClaudeProfileSnapshotPrefetchIfNeeded()
+        if triggerPrefetch {
+            triggerCodexProfileSnapshotPrefetchIfNeeded()
+        }
+        let now = Date()
+        return mergedCodexSlotsForMenu()
+            .sorted { lhs, rhs in
+                if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
+                if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
+                return lhs.slotID < rhs.slotID
+            }
+            .map { slot in
+                let profile = matchedCodexProfile(for: slot)
+                let feedback = codexSwitchFeedback[slot.slotID]
+                let displaySnapshot = CodexQuotaDisplayNormalizer.normalize(
+                    snapshot: slot.lastSnapshot,
+                    isActive: slot.isActive,
+                    now: now
+                )
+                return CodexSlotViewModel(
+                    slotID: slot.slotID,
+                    title: codexMenuTitle(for: slot.slotID),
+                    snapshot: displaySnapshot,
+                    isActive: slot.isActive,
+                    lastSeenAt: slot.lastSeenAt,
+                    displayName: profile?.displayName ?? slot.displayName,
+                    note: profile?.note,
+                    isSwitching: codexSwitchingSlots.contains(slot.slotID),
+                    canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
+                    isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
+                    profileDisplayName: profile?.displayName,
+                    switchMessage: feedback?.message,
+                    switchMessageIsError: feedback?.isError ?? false
+                )
+            }
+    }
+
+    private func claudeSlotViewModels(
+        refreshFromStore: Bool,
+        triggerPrefetch: Bool
+    ) -> [ClaudeSlotViewModel] {
+        if refreshFromStore {
+            let latestClaudeSlots = claudeSlotStore.visibleSlots()
+            if latestClaudeSlots != claudeSlots {
+                claudeSlots = latestClaudeSlots
+            }
+        }
+        if triggerPrefetch {
+            triggerClaudeProfileSnapshotPrefetchIfNeeded()
+        }
         let now = Date()
         return mergedClaudeSlotsForMenu()
             .sorted { lhs, rhs in
@@ -960,11 +1014,6 @@ final class AppViewModel {
                     switchMessageIsError: feedback?.isError ?? false
                 )
             }
-    }
-
-    func claudeProfilesForSettings() -> [ClaudeAccountProfile] {
-        syncClaudeProfilesCurrentState()
-        return claudeProfiles.sorted { $0.slotID < $1.slotID }
     }
 
     func nextClaudeProfileSlotID() -> CodexSlotID {
@@ -1033,6 +1082,9 @@ final class AppViewModel {
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         SettingsWindowController.shared.show(viewModel: self)
         let ok = keychain.prepareSecureStoreAccess()
+        if ok {
+            invalidateCredentialLookupCache()
+        }
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first(where: { $0.isVisible })?.makeKeyAndOrderFront(nil)
@@ -1355,7 +1407,21 @@ final class AppViewModel {
             return
         }
         lastPermissionStatusRefreshAt = Date()
-        secureStorageReady = keychain.isSecureStoreReady()
+        permissionRefreshTask?.cancel()
+        let keychain = self.keychain
+        permissionRefreshTask = Task { [weak self, keychain] in
+            let ready = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(returning: keychain.isSecureStoreReady())
+                }
+            }
+            guard let self, !Task.isCancelled else { return }
+            let wasReady = self.secureStorageReady
+            self.secureStorageReady = ready
+            if ready && !wasReady {
+                self.invalidateCredentialLookupCache()
+            }
+        }
 
         let fullDiskProbe = probeFullDiskAccess()
         fullDiskAccessGranted = fullDiskProbe.isGranted
@@ -1501,7 +1567,7 @@ final class AppViewModel {
               let account = descriptor.auth.keychainAccount else {
             return false
         }
-        return keychain.readToken(service: service, account: account)?.isEmpty == false
+        return cachedCredentialExists(service: service, account: account)
     }
 
     func savedTokenLength(for descriptor: ProviderDescriptor) -> Int? {
@@ -1516,7 +1582,7 @@ final class AppViewModel {
               let account = auth.keychainAccount else {
             return false
         }
-        return keychain.readToken(service: service, account: account)?.isEmpty == false
+        return cachedCredentialExists(service: service, account: account)
     }
 
     func savedTokenLength(auth: AuthConfig) -> Int? {
@@ -1533,7 +1599,11 @@ final class AppViewModel {
         }
         let normalized = normalizedCredential(token, kind: descriptor.auth.kind)
         guard !normalized.isEmpty else { return false }
-        return keychain.saveToken(normalized, service: service, account: account)
+        let ok = keychain.saveToken(normalized, service: service, account: account)
+        if ok {
+            markCredentialLookupCached(service: service, account: account)
+        }
+        return ok
     }
 
     func saveToken(_ token: String, auth: AuthConfig) -> Bool {
@@ -1543,7 +1613,11 @@ final class AppViewModel {
         }
         let normalized = normalizedCredential(token, kind: auth.kind)
         guard !normalized.isEmpty else { return false }
-        return keychain.saveToken(normalized, service: service, account: account)
+        let ok = keychain.saveToken(normalized, service: service, account: account)
+        if ok {
+            markCredentialLookupCached(service: service, account: account)
+        }
+        return ok
     }
 
     func hasOfficialManualCookie(for provider: ProviderDescriptor) -> Bool {
@@ -1551,7 +1625,7 @@ final class AppViewModel {
               let account = provider.officialConfig?.manualCookieAccount else {
             return false
         }
-        return keychain.readToken(service: KeychainService.defaultServiceName, account: account)?.isEmpty == false
+        return cachedCredentialExists(service: KeychainService.defaultServiceName, account: account)
     }
 
     func savedOfficialManualCookieLength(for provider: ProviderDescriptor) -> Int? {
@@ -1570,21 +1644,78 @@ final class AppViewModel {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        return keychain.saveToken(trimmed, service: KeychainService.defaultServiceName, account: account)
+        let ok = keychain.saveToken(trimmed, service: KeychainService.defaultServiceName, account: account)
+        if ok {
+            markCredentialLookupCached(service: KeychainService.defaultServiceName, account: account)
+        }
+        return ok
     }
 
     private func savedCredentialLength(service: String?, account: String?) -> Int? {
+        _ = credentialLookupVersion
         guard let service,
               let account,
               !service.isEmpty,
               !account.isEmpty else {
             return nil
         }
-        guard let token = keychain.readToken(service: service, account: account),
+        guard let token = keychain.cachedToken(service: service, account: account),
               !token.isEmpty else {
+            guard secureStorageReady else {
+                return nil
+            }
+            scheduleCredentialLookup(service: service, account: account)
             return nil
         }
         return token.count
+    }
+
+    private func cachedCredentialExists(service: String?, account: String?) -> Bool {
+        savedCredentialLength(service: service, account: account) != nil
+    }
+
+    private func scheduleCredentialLookup(service: String, account: String) {
+        let key = credentialLookupCacheKey(service: service, account: account)
+        guard !credentialLookupInFlight.contains(key),
+              !credentialLookupMissingKeys.contains(key) else {
+            return
+        }
+        credentialLookupInFlight.insert(key)
+
+        let keychain = self.keychain
+        Task { [weak self, keychain, service, account, key] in
+            let token = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    let token = keychain.readToken(service: service, account: account)
+                    continuation.resume(returning: token)
+                }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.credentialLookupInFlight.remove(key)
+            if let token, !token.isEmpty {
+                self.credentialLookupMissingKeys.remove(key)
+                self.credentialLookupVersion &+= 1
+            } else {
+                self.credentialLookupMissingKeys.insert(key)
+            }
+        }
+    }
+
+    private func credentialLookupCacheKey(service: String, account: String) -> String {
+        "\(service)::\(account)"
+    }
+
+    private func markCredentialLookupCached(service: String, account: String) {
+        let key = credentialLookupCacheKey(service: service, account: account)
+        credentialLookupInFlight.remove(key)
+        credentialLookupMissingKeys.remove(key)
+        credentialLookupVersion &+= 1
+    }
+
+    private func invalidateCredentialLookupCache() {
+        credentialLookupInFlight.removeAll()
+        credentialLookupMissingKeys.removeAll()
+        credentialLookupVersion &+= 1
     }
 
     func addOpenRelay(name: String, baseURL: String, preferredAdapterID: String? = nil) {
@@ -1959,6 +2090,12 @@ final class AppViewModel {
             return descriptor.family == .official ? "Kimi Coding" : "Kimi"
         case .trae:
             return "Trae SOLO"
+        case .openrouterCredits:
+            return "OpenRouter Credits"
+        case .openrouterAPI:
+            return "OpenRouter API"
+        case .ollamaCloud:
+            return "Ollama Cloud"
         case .relay, .open, .dragon:
             return descriptor.name
         }
@@ -2508,7 +2645,7 @@ final class AppViewModel {
             await refreshCodexInactiveProfileCardInBackground(descriptor: descriptor)
         case .claude:
             await refreshClaudeInactiveProfileCardInBackground(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
             break
         }
     }
@@ -2622,7 +2759,7 @@ final class AppViewModel {
             await refreshCodexProfileCardsAfterManualRefresh(descriptor: descriptor)
         case .claude:
             await refreshClaudeProfileCardsAfterManualRefresh(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
             break
         }
     }

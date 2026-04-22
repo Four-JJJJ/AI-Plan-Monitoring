@@ -20,6 +20,9 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "windsurf-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "kimi-official" && $0.family == .official && !$0.enabled }))
         XCTAssertTrue(migrated.providers.contains(where: { $0.id == "trae-official" && $0.family == .official && !$0.enabled }))
+        XCTAssertTrue(migrated.providers.contains(where: { $0.id == "openrouter-credits-official" && $0.family == .official && !$0.enabled }))
+        XCTAssertTrue(migrated.providers.contains(where: { $0.id == "openrouter-api-official" && $0.family == .official && !$0.enabled }))
+        XCTAssertTrue(migrated.providers.contains(where: { $0.id == "ollama-cloud-official" && $0.family == .official && !$0.enabled }))
     }
 
     func testLegacyCodexDescriptorNormalizesToOfficialFamily() {

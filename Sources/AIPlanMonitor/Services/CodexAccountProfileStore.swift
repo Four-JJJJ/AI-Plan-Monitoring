@@ -356,7 +356,11 @@ final class CodexAccountProfileStore {
         payload: CodexParsedAuthPayload?
     ) -> CodexAccountProfile {
         var updated = profile
-        let parsedPayload = payload ?? (try? Self.parseAuthJSON(profile.authJSON))
+        let needsParsedPayload = CodexIdentity.trimmed(updated.accountId) == nil
+            || CodexIdentity.trimmed(updated.accountEmail) == nil
+            || CodexIdentity.trimmed(updated.accountSubject) == nil
+            || CodexIdentity.trimmed(updated.credentialFingerprint) == nil
+        let parsedPayload = payload ?? (needsParsedPayload ? (try? Self.parseAuthJSON(profile.authJSON)) : nil)
         updated.note = CodexIdentity.trimmed(updated.note)
 
         if CodexIdentity.trimmed(updated.accountId) == nil {

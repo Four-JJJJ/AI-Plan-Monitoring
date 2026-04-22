@@ -817,8 +817,12 @@ final class ClaudeAccountProfileStore {
         updated.configDir = Self.normalizedConfigDirectory(updated.configDir)
         updated.displayName = Self.fallbackDisplayName(updated.displayName, slotID: updated.slotID)
         updated.note = Self.normalizedNote(updated.note)
+        let needsParsedPayload = updated.accountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+            || updated.accountEmail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+            || updated.credentialFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
         if let credentialsJSON = updated.credentialsJSON?.trimmingCharacters(in: .whitespacesAndNewlines),
            !credentialsJSON.isEmpty,
+           needsParsedPayload,
            let parsedPayload = try? Self.parseCredentialsJSON(credentialsJSON) {
             let payload = Self.applyingAccountEmailFallback(parsedPayload, configDir: updated.configDir)
             if updated.accountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {

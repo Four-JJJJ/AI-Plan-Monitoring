@@ -13,6 +13,42 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.statusBarDisplayStyle, .iconPercent)
     }
 
+    func testDecodeSkipsInvalidProviderEntriesInsteadOfFailingWholeConfig() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "providers":[
+            {
+              "id":"legacy-opencode-go",
+              "name":"Legacy OpenCode Go",
+              "family":"official",
+              "type":"openCodeGo",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"bearer"}
+            },
+            {
+              "id":"codex-official",
+              "name":"Official Codex",
+              "family":"official",
+              "type":"codex",
+              "enabled":true,
+              "pollIntervalSec":180,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://chatgpt.com"
+            }
+          ]
+        }
+        """#
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(config.providers.count, 1)
+        XCTAssertEqual(config.providers.first?.id, "codex-official")
+        XCTAssertEqual(config.providers.first?.pollIntervalSec, 180)
+    }
+
     func testNormalizeRelayBaseURLStripsPathAndQuery() {
         let normalized = ProviderDescriptor.normalizeRelayBaseURL("platform.deepseek.com/usage?month=4")
         XCTAssertEqual(normalized, "https://platform.deepseek.com")
@@ -36,15 +72,45 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.defaultStatusBarProviderID(from: providers), "codex-official")
     }
 
-    func testDefaultProvidersIncludeOfficialTraeWithStableOrder() {
+    func testDefaultProvidersIncludeNewOfficialSourcesWithStableOrder() {
         let ids = AppConfig.default.providers.map(\.id)
-        XCTAssertEqual(ids.suffix(2), ["kimi-official", "trae-official"])
+        XCTAssertEqual(
+            ids.suffix(5),
+            [
+                "kimi-official",
+                "trae-official",
+                "openrouter-credits-official",
+                "openrouter-api-official",
+                "ollama-cloud-official"
+            ]
+        )
 
         let trae = AppConfig.default.providers.first(where: { $0.id == "trae-official" })
         XCTAssertEqual(trae?.family, .official)
         XCTAssertEqual(trae?.type, .trae)
         XCTAssertEqual(trae?.auth.kind, .bearer)
         XCTAssertEqual(trae?.baseURL, "https://api-sg-central.trae.ai")
+
+        let openRouterCredits = AppConfig.default.providers.first(where: { $0.id == "openrouter-credits-official" })
+        XCTAssertEqual(openRouterCredits?.family, .official)
+        XCTAssertEqual(openRouterCredits?.type, .openrouterCredits)
+        XCTAssertEqual(openRouterCredits?.auth.kind, .bearer)
+        XCTAssertEqual(openRouterCredits?.officialConfig?.sourceMode, .auto)
+        XCTAssertEqual(openRouterCredits?.officialConfig?.webMode, .disabled)
+
+        let openRouterAPI = AppConfig.default.providers.first(where: { $0.id == "openrouter-api-official" })
+        XCTAssertEqual(openRouterAPI?.family, .official)
+        XCTAssertEqual(openRouterAPI?.type, .openrouterAPI)
+        XCTAssertEqual(openRouterAPI?.auth.kind, .bearer)
+        XCTAssertEqual(openRouterAPI?.officialConfig?.sourceMode, .auto)
+        XCTAssertEqual(openRouterAPI?.officialConfig?.webMode, .disabled)
+
+        let ollama = AppConfig.default.providers.first(where: { $0.id == "ollama-cloud-official" })
+        XCTAssertEqual(ollama?.family, .official)
+        XCTAssertEqual(ollama?.type, .ollamaCloud)
+        XCTAssertEqual(ollama?.auth.kind, AuthKind.none)
+        XCTAssertEqual(ollama?.officialConfig?.sourceMode, .auto)
+        XCTAssertEqual(ollama?.officialConfig?.webMode, .autoImport)
     }
 
     func testDefaultProvidersIncludeMicrosoftCopilotOfficialDescriptor() {

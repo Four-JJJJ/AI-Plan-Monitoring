@@ -429,6 +429,12 @@ final class StatusBarController: NSObject {
             return provider.family == .official ? "Kimi Coding" : "Kimi"
         case .trae:
             return "Trae SOLO"
+        case .openrouterCredits:
+            return "OpenRouter Credits"
+        case .openrouterAPI:
+            return "OpenRouter API"
+        case .ollamaCloud:
+            return "Ollama Cloud"
         case .relay, .open, .dragon:
             let trimmed = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "API" : trimmed
@@ -746,7 +752,7 @@ final class StatusBarController: NSObject {
             let fallback = NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: "Kimi")
             fallback?.isTemplate = true
             return fallback
-        case .relay, .open, .dragon, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae:
+        case .relay, .open, .dragon, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
             let fallback = NSImage(systemSymbolName: "globe", accessibilityDescription: "Relay")
             fallback?.isTemplate = true
             return fallback
@@ -809,6 +815,8 @@ final class StatusBarController: NSObject {
         case .kimi:
             return "menu_kimi_icon"
         case .trae:
+            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
             return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
