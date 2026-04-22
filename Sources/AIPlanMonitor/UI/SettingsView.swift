@@ -255,6 +255,13 @@ struct SettingsView: View {
                 claudeProfileEditorDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
+            } else if showsOAuthImportDialog {
+                Color.white.opacity(0.15)
+                    .ignoresSafeArea()
+
+                oauthImportProgressDialog
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(1)
             } else if showsNewAPISiteDialog {
                 Color.white.opacity(0.15)
                     .ignoresSafeArea()
@@ -442,8 +449,26 @@ struct SettingsView: View {
         isNewAPISiteDialogPresented
     }
 
+    private var activeOAuthImportDialogState: OAuthImportState? {
+        if let codex = viewModel.oauthImportState(for: .codex), codex.isRunning {
+            return codex
+        }
+        if let claude = viewModel.oauthImportState(for: .claude), claude.isRunning {
+            return claude
+        }
+        return nil
+    }
+
+    private var showsOAuthImportDialog: Bool {
+        activeOAuthImportDialogState != nil
+    }
+
     private var showsModalOverlay: Bool {
-        showsResetDataDialog || showsCodexProfileEditorDialog || showsClaudeProfileEditorDialog || showsNewAPISiteDialog
+        showsResetDataDialog
+            || showsCodexProfileEditorDialog
+            || showsClaudeProfileEditorDialog
+            || showsOAuthImportDialog
+            || showsNewAPISiteDialog
     }
 
     private var resetDialogTitleText: String {
@@ -5138,7 +5163,10 @@ struct SettingsView: View {
     }
 
     private func codexImportNextProfileCard(nextSlotID: CodexSlotID) -> some View {
-        officialAccountMonitorCard {
+        let oauthState = viewModel.oauthImportState(for: .codex)
+        let oauthRunning = oauthState?.isRunning ?? false
+
+        return officialAccountMonitorCard {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     codexAccountIcon(size: 12)
@@ -5160,11 +5188,25 @@ struct SettingsView: View {
 
                     Spacer(minLength: 8)
 
+                    codexAccountActionButton(
+                        viewModel.localizedText("OAuth 添加", "Add via OAuth"),
+                        disabled: oauthRunning
+                    ) {
+                        viewModel.startOAuthImport(providerType: .codex, slotID: nextSlotID)
+                    }
                     codexAccountActionButton(codexAddButtonTitle) {
                         openCodexProfileEditor(slotID: nextSlotID, existingProfile: nil)
                     }
                 }
                 .padding(.top, 8)
+
+                if let oauthState {
+                    Text(oauthImportStateText(oauthState))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(oauthImportStateColor(oauthState))
+                        .lineLimit(2)
+                        .padding(.top, 8)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5293,7 +5335,14 @@ struct SettingsView: View {
     }
 
     private func claudeImportNextProfileCard(nextSlotID: CodexSlotID) -> some View {
-        officialAccountMonitorCard {
+        let oauthState = viewModel.oauthImportState(for: .claude)
+        let oauthRunning = oauthState?.isRunning ?? false
+        let oauthEnabledBinding = Binding<Bool>(
+            get: { viewModel.claudeOAuthImportEnabled() },
+            set: { viewModel.setClaudeOAuthImportEnabled($0) }
+        )
+
+        return officialAccountMonitorCard {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     claudeAccountIcon(size: 12)
@@ -5315,11 +5364,42 @@ struct SettingsView: View {
 
                     Spacer(minLength: 8)
 
+                    codexAccountActionButton(
+                        viewModel.localizedText("OAuth 添加", "Add via OAuth"),
+                        disabled: oauthRunning || !oauthEnabledBinding.wrappedValue
+                    ) {
+                        viewModel.startOAuthImport(providerType: .claude, slotID: nextSlotID)
+                    }
                     codexAccountActionButton(codexAddButtonTitle) {
                         openClaudeProfileEditor(slotID: nextSlotID, existingProfile: nil)
                     }
                 }
                 .padding(.top, 8)
+
+                HStack(spacing: 8) {
+                    Text(viewModel.localizedText("高级 OAuth 导入", "Advanced OAuth import"))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: oauthEnabledBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                .padding(.top, 8)
+
+                Text(viewModel.localizedText("默认关闭。仅在你确认需要从本机 Claude 登录态自动导入时再开启。", "Disabled by default. Turn on only when you explicitly want to import from local Claude login state."))
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineLimit(2)
+                    .padding(.top, 6)
+
+                if let oauthState {
+                    Text(oauthImportStateText(oauthState))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(oauthImportStateColor(oauthState))
+                        .lineLimit(2)
+                        .padding(.top, 8)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5504,6 +5584,100 @@ struct SettingsView: View {
         return editor.isNewSlot ? "Add \(editor.title) credentials" : "Edit \(editor.title) credentials"
     }
 
+    private var oauthImportProgressDialog: some View {
+        VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(oauthImportDialogTitle)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(settingsBodyColor)
+
+                if let state = activeOAuthImportDialogState {
+                    Text(oauthImportStateText(state))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(oauthImportStateColor(state))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = state.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(settingsHintColor)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                settingsCapsuleButton(viewModel.text(.permissionCancel)) {
+                    guard let state = activeOAuthImportDialogState else { return }
+                    viewModel.cancelOAuthImport(providerType: oauthProviderType(for: state.provider))
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 560, alignment: .leading)
+        .background(
+            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
+                .fill(panelBackground)
+        )
+        .overlay(
+            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.50), radius: 45, x: 0, y: 17)
+        .shadow(color: Color.black.opacity(0.20), radius: 1, x: 0, y: 0)
+    }
+
+    private var oauthImportDialogTitle: String {
+        guard let state = activeOAuthImportDialogState else { return "" }
+        switch state.provider {
+        case .codex:
+            return viewModel.localizedText("Codex OAuth 添加中", "Adding Codex via OAuth")
+        case .claude:
+            return viewModel.localizedText("Claude OAuth 添加中", "Adding Claude via OAuth")
+        }
+    }
+
+    private func oauthProviderType(for provider: OAuthImportProvider) -> ProviderType {
+        switch provider {
+        case .codex:
+            return .codex
+        case .claude:
+            return .claude
+        }
+    }
+
+    private func oauthImportStateText(_ state: OAuthImportState) -> String {
+        switch state.phase {
+        case .launching:
+            return viewModel.localizedText("正在启动官方 CLI 登录流程…", "Launching official CLI login…")
+        case .waitingForBrowser:
+            return viewModel.localizedText("请在浏览器完成授权，完成后将自动导入本地账号。", "Complete authorization in your browser. The local account will be imported automatically.")
+        case .waitingForDevice:
+            return viewModel.localizedText("浏览器回调失败，已自动回退到 Device Code 登录。", "Browser callback failed. Automatically switched to Device Code login.")
+        case .verifying:
+            return viewModel.localizedText("正在读取并校验本地凭据…", "Reading and validating local credentials…")
+        case .succeeded:
+            return viewModel.localizedText("OAuth 导入成功。", "OAuth import succeeded.")
+        case .failed:
+            return viewModel.localizedText("OAuth 导入失败。", "OAuth import failed.")
+        case .cancelled:
+            return viewModel.localizedText("OAuth 导入已取消。", "OAuth import cancelled.")
+        }
+    }
+
+    private func oauthImportStateColor(_ state: OAuthImportState) -> Color {
+        switch state.phase {
+        case .failed:
+            return Color(hex: 0xD05757)
+        case .succeeded:
+            return Color(hex: 0x69BD64)
+        default:
+            return settingsBodyColor
+        }
+    }
+
     @ViewBuilder
     private func quotaMetricLayout(
         metrics: [CodexQuotaMetricDisplay],
@@ -5603,12 +5777,13 @@ struct SettingsView: View {
     private func codexAccountActionButton(
         _ title: String,
         destructive: Bool = false,
+        disabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white.opacity(0.80)))
+                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white.opacity(disabled ? 0.45 : 0.80)))
                 .padding(.horizontal, 10)
                 .frame(height: 22)
                 .background(
@@ -5617,10 +5792,14 @@ struct SettingsView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(destructive ? Color(hex: 0xD05757) : Color.white.opacity(0.55), lineWidth: 1)
+                        .stroke(
+                            destructive ? Color(hex: 0xD05757) : Color.white.opacity(disabled ? 0.35 : 0.55),
+                            lineWidth: 1
+                        )
                 )
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
     }
 
     private func codexAccountIcon(size: CGFloat) -> some View {

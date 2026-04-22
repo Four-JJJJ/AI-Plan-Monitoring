@@ -342,6 +342,50 @@ final class CodexAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profiles.first(where: { $0.slotID == .b })?.accountId, "acc-b")
     }
 
+    func testSaveProfileWithAccountOnlyPayloadDoesNotOverwriteExistingPrincipalProfile() throws {
+        let store = makeStore()
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Codex A",
+            note: nil,
+            authJSON: sampleAuthJSON(accountID: "team-shared", email: "a@example.com"),
+            currentFingerprint: nil
+        )
+
+        _ = try store.saveProfile(
+            slotID: .b,
+            displayName: "Codex B",
+            note: nil,
+            authJSON: sampleAuthJSONWithoutIDToken(accountID: "team-shared", accessToken: "token-without-principal"),
+            currentFingerprint: nil
+        )
+
+        let profiles = store.profiles()
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(profiles.map(\.slotID), [.a, .b])
+        XCTAssertEqual(profiles.first(where: { $0.slotID == .a })?.accountEmail, "a@example.com")
+    }
+
+    func testMatchingProfileByAuthJSONReturnsExistingSlotForSameIdentity() throws {
+        let store = makeStore()
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Codex A",
+            note: nil,
+            authJSON: sampleAuthJSON(accountID: "acc-a", email: "a@example.com"),
+            currentFingerprint: nil
+        )
+
+        let matched = store.matchingProfile(
+            authJSON: sampleAuthJSON(
+                accountID: "acc-a",
+                email: "a@example.com",
+                accessToken: "rotated-a"
+            )
+        )
+        XCTAssertEqual(matched?.slotID, .a)
+    }
+
     func testRemovedCurrentFingerprintIsNotAutoCapturedAgainImmediately() throws {
         let store = makeStore()
         let authJSON = sampleAuthJSON(accountID: "acc-current", email: "current@example.com")
@@ -414,6 +458,31 @@ final class CodexAccountProfileStoreTests: XCTestCase {
             "refresh_token": "refresh-token-\#(accountSuffix)",
             \#(accountLine)
             "id_token": "header.\#(payload).signature"
+          }
+        }
+        """#
+    }
+
+    private func sampleAuthJSONWithoutIDToken(
+        accountID: String?,
+        accessToken: String
+    ) -> String {
+        let accountLine: String
+        if let accountID {
+            accountLine = #"""
+            "account_id": "\#(accountID)",
+            """#
+        } else {
+            accountLine = ""
+        }
+        let accountSuffix = accountID ?? "default"
+        return #"""
+        {
+          "tokens": {
+            "access_token": "\#(accessToken)",
+            "refresh_token": "refresh-token-\#(accountSuffix)",
+            \#(accountLine)
+            "token_type": "Bearer"
           }
         }
         """#

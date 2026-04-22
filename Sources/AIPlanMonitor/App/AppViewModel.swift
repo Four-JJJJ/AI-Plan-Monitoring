@@ -17,6 +17,7 @@ final class AppViewModel {
     private let codexProfileSnapshotService = CodexProfileSnapshotService()
     private let codexDesktopAuthService = CodexDesktopAuthService()
     private let codexDesktopAppService = CodexDesktopAppService()
+    private let oauthImportOrchestrator = OAuthImportOrchestrator()
     private let claudeSlotStore = ClaudeAccountSlotStore()
     private let claudeProfileStore = ClaudeAccountProfileStore()
     private let claudeProfileSnapshotService = ClaudeProfileSnapshotService()
@@ -32,9 +33,11 @@ final class AppViewModel {
     private(set) var codexSlots: [CodexAccountSlot] = []
     private(set) var codexProfiles: [CodexAccountProfile] = []
     private(set) var codexSwitchFeedback: [CodexSlotID: CodexSwitchFeedback] = [:]
+    private(set) var codexOAuthImportState: OAuthImportState?
     private(set) var claudeSlots: [ClaudeAccountSlot] = []
     private(set) var claudeProfiles: [ClaudeAccountProfile] = []
     private(set) var claudeSwitchFeedback: [CodexSlotID: ClaudeSwitchFeedback] = [:]
+    private(set) var claudeOAuthImportState: OAuthImportState?
     private(set) var errors: [String: String] = [:]
     private(set) var lastUpdatedAt: Date?
     private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
@@ -57,10 +60,12 @@ final class AppViewModel {
     private var pollTasks: [String: Task<Void, Never>] = [:]
     private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
     private var codexSwitchingSlots: Set<CodexSlotID> = []
+    private var codexOAuthImportTask: Task<Void, Never>?
     private var codexPrefetchInFlightSlots: Set<CodexSlotID> = []
     private var codexPrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var claudeFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
     private var claudeSwitchingSlots: Set<CodexSlotID> = []
+    private var claudeOAuthImportTask: Task<Void, Never>?
     private var claudePrefetchInFlightSlots: Set<CodexSlotID> = []
     private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var inactiveProfileBackgroundRefreshLastAttemptAt: [String: Date] = [:]
@@ -880,6 +885,201 @@ final class AppViewModel {
         "Codex \(slotID.rawValue)"
     }
 
+    func oauthImportState(for providerType: ProviderType) -> OAuthImportState? {
+        switch providerType {
+        case .codex:
+            return codexOAuthImportState
+        case .claude:
+            return claudeOAuthImportState
+        default:
+            return nil
+        }
+    }
+
+    func claudeOAuthImportEnabled() -> Bool {
+        guard let provider = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
+            return ProviderDescriptor.defaultOfficialConfig(type: .claude).oauthAccountImportEnabled
+                ?? false
+        }
+        return provider.officialConfig?.oauthAccountImportEnabled
+            ?? ProviderDescriptor.defaultOfficialConfig(type: .claude).oauthAccountImportEnabled
+            ?? false
+    }
+
+    func setClaudeOAuthImportEnabled(_ enabled: Bool) {
+        guard let index = config.providers.firstIndex(where: { $0.type == .claude && $0.family == .official }) else {
+            return
+        }
+        var provider = config.providers[index]
+        var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
+        guard official.oauthAccountImportEnabled != enabled else { return }
+        official.oauthAccountImportEnabled = enabled
+        provider.officialConfig = official
+        config.providers[index] = provider
+        try? configStore.save(config)
+    }
+
+    func startOAuthImport(providerType: ProviderType, slotID: CodexSlotID) {
+        switch providerType {
+        case .codex:
+            guard codexOAuthImportTask == nil else { return }
+        case .claude:
+            guard claudeOAuthImportTask == nil else { return }
+            guard claudeOAuthImportEnabled() else {
+                claudeOAuthImportState = OAuthImportState(
+                    provider: .claude,
+                    slotID: slotID,
+                    mode: .browserCallback,
+                    phase: .failed,
+                    detail: localizedText(
+                        "Claude OAuth 导入默认关闭，请先启用“高级 OAuth 导入”。",
+                        "Claude OAuth import is disabled by default. Enable advanced OAuth import first."
+                    ),
+                    startedAt: Date(),
+                    updatedAt: Date()
+                )
+                return
+            }
+        default:
+            return
+        }
+
+        let provider: OAuthImportProvider
+        switch providerType {
+        case .codex:
+            provider = .codex
+        case .claude:
+            provider = .claude
+        default:
+            return
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+
+            let result = await self.oauthImportOrchestrator.importAccount(
+                provider: provider,
+                slotID: slotID
+            ) { [weak self] state in
+                guard let self else { return }
+                switch providerType {
+                case .codex:
+                    self.codexOAuthImportState = state
+                case .claude:
+                    self.claudeOAuthImportState = state
+                default:
+                    break
+                }
+            }
+
+            switch result {
+            case .success(let imported):
+                let saveMessage: String
+                switch providerType {
+                case .codex:
+                    let existing = self.codexProfileStore.matchingProfile(authJSON: imported.rawCredentialJSON)
+                    let resolvedSlotID = existing?.slotID ?? slotID
+                    let resolvedDisplayName = existing?.displayName ?? "Codex \(resolvedSlotID.rawValue)"
+                    saveMessage = self.saveCodexProfile(
+                        slotID: resolvedSlotID,
+                        displayName: resolvedDisplayName,
+                        note: existing?.note,
+                        authJSON: imported.rawCredentialJSON
+                    )
+                    self.codexOAuthImportState = OAuthImportState(
+                        provider: imported.provider,
+                        slotID: resolvedSlotID,
+                        mode: imported.mode,
+                        phase: .succeeded,
+                        detail: saveMessage,
+                        startedAt: self.codexOAuthImportState?.startedAt ?? Date(),
+                        updatedAt: Date()
+                    )
+                case .claude:
+                    let existing = self.claudeProfileStore.matchingProfile(credentialsJSON: imported.rawCredentialJSON)
+                    let resolvedSlotID = existing?.slotID ?? slotID
+                    let resolvedDisplayName = existing?.displayName ?? "Claude \(resolvedSlotID.rawValue)"
+                    saveMessage = self.saveClaudeProfile(
+                        slotID: resolvedSlotID,
+                        displayName: resolvedDisplayName,
+                        note: existing?.note,
+                        source: .manualCredentials,
+                        configDir: existing?.configDir,
+                        credentialsJSON: imported.rawCredentialJSON
+                    )
+                    self.claudeOAuthImportState = OAuthImportState(
+                        provider: imported.provider,
+                        slotID: resolvedSlotID,
+                        mode: imported.mode,
+                        phase: .succeeded,
+                        detail: saveMessage,
+                        startedAt: self.claudeOAuthImportState?.startedAt ?? Date(),
+                        updatedAt: Date()
+                    )
+                default:
+                    break
+                }
+            case .failure(let error):
+                let description = error.localizedDescription
+                switch providerType {
+                case .codex:
+                    let current = self.codexOAuthImportState
+                    self.codexOAuthImportState = OAuthImportState(
+                        provider: .codex,
+                        slotID: slotID,
+                        mode: current?.mode ?? .browserCallback,
+                        phase: error == .cancelled ? .cancelled : .failed,
+                        detail: description,
+                        startedAt: current?.startedAt ?? Date(),
+                        updatedAt: Date()
+                    )
+                case .claude:
+                    let current = self.claudeOAuthImportState
+                    self.claudeOAuthImportState = OAuthImportState(
+                        provider: .claude,
+                        slotID: slotID,
+                        mode: current?.mode ?? .browserCallback,
+                        phase: error == .cancelled ? .cancelled : .failed,
+                        detail: description,
+                        startedAt: current?.startedAt ?? Date(),
+                        updatedAt: Date()
+                    )
+                default:
+                    break
+                }
+            }
+
+            switch providerType {
+            case .codex:
+                self.codexOAuthImportTask = nil
+            case .claude:
+                self.claudeOAuthImportTask = nil
+            default:
+                break
+            }
+        }
+
+        switch providerType {
+        case .codex:
+            codexOAuthImportTask = task
+        case .claude:
+            claudeOAuthImportTask = task
+        default:
+            break
+        }
+    }
+
+    func cancelOAuthImport(providerType: ProviderType) {
+        switch providerType {
+        case .codex:
+            Task { await oauthImportOrchestrator.cancelImport(provider: .codex) }
+        case .claude:
+            Task { await oauthImportOrchestrator.cancelImport(provider: .claude) }
+        default:
+            break
+        }
+    }
+
     func saveCodexProfile(slotID: CodexSlotID, displayName: String, note: String?, authJSON: String) -> String {
         do {
             _ = try codexProfileStore.saveProfile(
@@ -1153,14 +1353,21 @@ final class AppViewModel {
         pollTasks.removeAll()
         codexFeedbackTasks.values.forEach { $0.cancel() }
         codexFeedbackTasks.removeAll()
+        codexOAuthImportTask?.cancel()
+        codexOAuthImportTask = nil
+        Task { await oauthImportOrchestrator.cancelImport(provider: .codex) }
         claudeFeedbackTasks.values.forEach { $0.cancel() }
         claudeFeedbackTasks.removeAll()
+        claudeOAuthImportTask?.cancel()
+        claudeOAuthImportTask = nil
+        Task { await oauthImportOrchestrator.cancelImport(provider: .claude) }
         codexSwitchingSlots.removeAll()
         codexPrefetchInFlightSlots.removeAll()
         codexPrefetchAttemptedIdentity.removeAll()
         codexInactiveRefreshCursor = 0
         codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
         codexSwitchFeedback.removeAll()
+        codexOAuthImportState = nil
         claudeSwitchingSlots.removeAll()
         claudePrefetchInFlightSlots.removeAll()
         claudePrefetchAttemptedIdentity.removeAll()
@@ -1169,6 +1376,7 @@ final class AppViewModel {
         inactiveProfileBackgroundRefreshLastAttemptAt.removeAll()
         didRunClaudeAutoCaptureCompaction = false
         claudeSwitchFeedback.removeAll()
+        claudeOAuthImportState = nil
         snapshots.removeAll()
         errors.removeAll()
         consecutiveFailures.removeAll()

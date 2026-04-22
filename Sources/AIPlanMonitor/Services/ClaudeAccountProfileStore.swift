@@ -69,6 +69,19 @@ final class ClaudeAccountProfileStore {
         load().first(where: { $0.slotID == slotID })
     }
 
+    func matchingProfile(credentialsJSON: String) -> ClaudeAccountProfile? {
+        let trimmed = credentialsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let parsedPayload = try? Self.parseCredentialsJSON(trimmed) else {
+            return nil
+        }
+        let items = load()
+        guard let index = Self.matchingIndex(for: parsedPayload, in: items) else {
+            return nil
+        }
+        return items[index]
+    }
+
     func nextAvailableSlotID() -> CodexSlotID {
         let existing = Set(load().map(\.slotID))
         return CodexSlotID.nextAvailable(excluding: existing)

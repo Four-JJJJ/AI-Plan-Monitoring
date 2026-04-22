@@ -104,6 +104,7 @@ struct OfficialProviderConfig: Codable, Equatable {
     var sourceMode: OfficialSourceMode
     var webMode: OfficialWebMode
     var manualCookieAccount: String?
+    var oauthAccountImportEnabled: Bool?
     var autoDiscoveryEnabled: Bool
     var quotaDisplayMode: OfficialQuotaDisplayMode
     var traeValueDisplayMode: OfficialTraeValueDisplayMode?
@@ -113,6 +114,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         sourceMode: OfficialSourceMode = .auto,
         webMode: OfficialWebMode = .disabled,
         manualCookieAccount: String? = nil,
+        oauthAccountImportEnabled: Bool? = nil,
         autoDiscoveryEnabled: Bool = true,
         quotaDisplayMode: OfficialQuotaDisplayMode = .remaining,
         traeValueDisplayMode: OfficialTraeValueDisplayMode? = nil,
@@ -121,6 +123,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.sourceMode = sourceMode
         self.webMode = webMode
         self.manualCookieAccount = manualCookieAccount
+        self.oauthAccountImportEnabled = oauthAccountImportEnabled
         self.autoDiscoveryEnabled = autoDiscoveryEnabled
         self.quotaDisplayMode = quotaDisplayMode
         self.traeValueDisplayMode = traeValueDisplayMode
@@ -131,6 +134,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         case sourceMode
         case webMode
         case manualCookieAccount
+        case oauthAccountImportEnabled
         case autoDiscoveryEnabled
         case quotaDisplayMode
         case traeValueDisplayMode
@@ -142,6 +146,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.sourceMode = try container.decodeIfPresent(OfficialSourceMode.self, forKey: .sourceMode) ?? .auto
         self.webMode = try container.decodeIfPresent(OfficialWebMode.self, forKey: .webMode) ?? .disabled
         self.manualCookieAccount = try container.decodeIfPresent(String.self, forKey: .manualCookieAccount)
+        self.oauthAccountImportEnabled = try container.decodeIfPresent(Bool.self, forKey: .oauthAccountImportEnabled)
         self.autoDiscoveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoDiscoveryEnabled) ?? true
         self.quotaDisplayMode = try container.decodeIfPresent(OfficialQuotaDisplayMode.self, forKey: .quotaDisplayMode) ?? .remaining
         self.traeValueDisplayMode = try container.decodeIfPresent(OfficialTraeValueDisplayMode.self, forKey: .traeValueDisplayMode)
@@ -153,6 +158,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         try container.encode(sourceMode, forKey: .sourceMode)
         try container.encode(webMode, forKey: .webMode)
         try container.encodeIfPresent(manualCookieAccount, forKey: .manualCookieAccount)
+        try container.encodeIfPresent(oauthAccountImportEnabled, forKey: .oauthAccountImportEnabled)
         try container.encode(autoDiscoveryEnabled, forKey: .autoDiscoveryEnabled)
         try container.encode(quotaDisplayMode, forKey: .quotaDisplayMode)
         try container.encodeIfPresent(traeValueDisplayMode, forKey: .traeValueDisplayMode)
@@ -728,6 +734,9 @@ extension ProviderDescriptor {
             } else if copy.officialConfig?.manualCookieAccount?.isEmpty ?? true {
                 copy.officialConfig?.manualCookieAccount = Self.defaultOfficialConfig(type: copy.type).manualCookieAccount
             }
+            if copy.officialConfig?.oauthAccountImportEnabled == nil {
+                copy.officialConfig?.oauthAccountImportEnabled = Self.defaultOfficialConfig(type: copy.type).oauthAccountImportEnabled
+            }
             if copy.type == .trae, var official = copy.officialConfig {
                 // 兼容旧版 Trae：历史 quotaDisplayMode 用于“百分比/数字”开关，新版改为 traeValueDisplayMode。
                 if official.traeValueDisplayMode == nil {
@@ -875,6 +884,7 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .autoImport,
                 manualCookieAccount: "official/codex/cookie-header",
+                oauthAccountImportEnabled: true,
                 autoDiscoveryEnabled: true
             )
         case .claude:
@@ -882,6 +892,7 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .autoImport,
                 manualCookieAccount: "official/claude/cookie-header",
+                oauthAccountImportEnabled: false,
                 autoDiscoveryEnabled: true,
                 quotaDisplayMode: .used
             )

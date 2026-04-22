@@ -68,6 +68,19 @@ final class CodexAccountProfileStore {
         load().first(where: { $0.slotID == slotID })
     }
 
+    func matchingProfile(authJSON: String) -> CodexAccountProfile? {
+        let trimmed = authJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let payload = try? Self.parseAuthJSON(trimmed) else {
+            return nil
+        }
+        let items = load()
+        guard let index = matchingIndex(for: payload, in: items) else {
+            return nil
+        }
+        return items[index]
+    }
+
     @discardableResult
     func saveProfile(
         slotID: CodexSlotID,
@@ -452,13 +465,6 @@ final class CodexAccountProfileStore {
             }
             if noPrincipalCandidates.count == 1 {
                 return noPrincipalCandidates[0]
-            }
-
-            let fallbackCandidates = profiles.indices.filter { index in
-                CodexIdentity.normalizedAccountID(profiles[index].accountId) == accountID
-            }
-            if fallbackCandidates.count == 1 {
-                return fallbackCandidates[0]
             }
         }
 
