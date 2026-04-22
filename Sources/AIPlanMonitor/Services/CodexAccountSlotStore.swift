@@ -92,6 +92,10 @@ struct CodexAccountSlot: Codable, Equatable, Identifiable {
 }
 
 final class CodexAccountSlotStore {
+    private static let codexSessionWindowDuration: TimeInterval = 5 * 60 * 60
+    private static let codexSessionWindowTolerance: TimeInterval = 90
+    private static let codexWindowPercentEpsilon: Double = 0.001
+
     private struct SlotFile: Codable {
         var slots: [CodexAccountSlot]
     }
@@ -164,11 +168,16 @@ final class CodexAccountSlotStore {
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
+            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+                incoming: snapshot,
+                previous: slots[existing].lastSnapshot,
+                now: now
+            )
             if let preferredSlotID {
                 slots[existing].slotID = preferredSlotID
             }
             slots[existing].displayName = displayName
-            slots[existing].lastSnapshot = snapshot
+            slots[existing].lastSnapshot = stabilizedSnapshot
             slots[existing].lastSeenAt = now
             slots[existing].isActive = true
             save()
@@ -177,8 +186,13 @@ final class CodexAccountSlotStore {
 
         // Unknown identity should stay single-slot to avoid fake account splits.
         if accountKey == "unknown", let unknownIndex = slots.firstIndex(where: { $0.accountKey == "unknown" }) {
+            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+                incoming: snapshot,
+                previous: slots[unknownIndex].lastSnapshot,
+                now: now
+            )
             slots[unknownIndex].displayName = displayName
-            slots[unknownIndex].lastSnapshot = snapshot
+            slots[unknownIndex].lastSnapshot = stabilizedSnapshot
             slots[unknownIndex].lastSeenAt = now
             slots[unknownIndex].isActive = true
             save()
@@ -226,11 +240,16 @@ final class CodexAccountSlotStore {
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
+            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+                incoming: snapshot,
+                previous: slots[existing].lastSnapshot,
+                now: now
+            )
             if let resolvedSlotID {
                 slots[existing].slotID = resolvedSlotID
             }
             slots[existing].displayName = displayName
-            slots[existing].lastSnapshot = snapshot
+            slots[existing].lastSnapshot = stabilizedSnapshot
             slots[existing].lastSeenAt = now
             slots[existing].isActive = false
             save()
@@ -238,8 +257,13 @@ final class CodexAccountSlotStore {
         }
 
         if accountKey == "unknown", let unknownIndex = slots.firstIndex(where: { $0.accountKey == "unknown" }) {
+            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+                incoming: snapshot,
+                previous: slots[unknownIndex].lastSnapshot,
+                now: now
+            )
             slots[unknownIndex].displayName = displayName
-            slots[unknownIndex].lastSnapshot = snapshot
+            slots[unknownIndex].lastSnapshot = stabilizedSnapshot
             slots[unknownIndex].lastSeenAt = now
             slots[unknownIndex].isActive = false
             save()
@@ -340,6 +364,63 @@ final class CodexAccountSlotStore {
             || key.hasPrefix("subject:")
             || key.hasPrefix("fingerprint:")
             || key.hasPrefix("email:")
+    }
+
+    private static func stabilizeCodexSessionWindowIfNeeded(
+        incoming: UsageSnapshot,
+        previous: UsageSnapshot,
+        now: Date
+    ) -> UsageSnapshot {
+        guard isCodexSnapshot(incoming), isCodexSnapshot(previous) else {
+            return incoming
+        }
+        guard let incomingSessionIndex = incoming.quotaWindows.firstIndex(where: { $0.kind == .session }),
+              let previousSession = previous.quotaWindows.first(where: { $0.kind == .session }),
+              let incomingResetAt = incoming.quotaWindows[incomingSessionIndex].resetAt,
+              let previousResetAt = previousSession.resetAt else {
+            return incoming
+        }
+
+        let incomingSession = incoming.quotaWindows[incomingSessionIndex]
+        guard incomingSession.usedPercent <= codexWindowPercentEpsilon,
+              incomingSession.remainingPercent >= (100 - codexWindowPercentEpsilon) else {
+            return incoming
+        }
+
+        let expectedFullWindowResetAt = now.addingTimeInterval(codexSessionWindowDuration)
+        guard abs(incomingResetAt.timeIntervalSince(expectedFullWindowResetAt)) <= codexSessionWindowTolerance else {
+            return incoming
+        }
+        guard previousResetAt > now else {
+            return incoming
+        }
+        guard incomingResetAt.timeIntervalSince(previousResetAt) > codexSessionWindowTolerance else {
+            return incoming
+        }
+
+        var stabilized = incoming
+        stabilized.quotaWindows[incomingSessionIndex].remainingPercent = previousSession.remainingPercent
+        stabilized.quotaWindows[incomingSessionIndex].usedPercent = previousSession.usedPercent
+        stabilized.quotaWindows[incomingSessionIndex].resetAt = previousResetAt
+        stabilized.remaining = stabilized.quotaWindows.map(\.remainingPercent).min()
+        if let sessionWindow = stabilized.quotaWindows.first(where: { $0.kind == .session }) {
+            stabilized.used = sessionWindow.usedPercent
+        }
+        stabilized.rawMeta["codex.sessionWindowStabilized"] = "true"
+        return stabilized
+    }
+
+    private static func isCodexSnapshot(_ snapshot: UsageSnapshot) -> Bool {
+        if snapshot.source == "codex-official" {
+            return true
+        }
+        if snapshot.source.hasPrefix("codex-placeholder-") {
+            return true
+        }
+        if snapshot.rawMeta.keys.contains(where: { $0.hasPrefix("codex.") }) {
+            return true
+        }
+        return snapshot.quotaWindows.contains(where: { $0.kind == .session && $0.title == "5h" })
     }
 
     private func load() -> [CodexAccountSlot] {

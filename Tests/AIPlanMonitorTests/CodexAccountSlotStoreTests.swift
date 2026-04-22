@@ -141,6 +141,64 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         XCTAssertTrue(visible.isEmpty)
     }
 
+    func testUpsertInactivePreservesExistingSessionCountdownWhenResponseResetsToFreshFiveHours() throws {
+        let store = makeStore(staleInterval: 10_000)
+        let base = Date(timeIntervalSince1970: 5_000)
+        let accountID = "acc-stabilize"
+
+        let previousSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 42,
+            sessionUsed: 58,
+            sessionReset: base.addingTimeInterval(1_800)
+        )
+        _ = store.upsertInactive(snapshot: previousSnapshot, now: base)
+
+        let incomingSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 100,
+            sessionUsed: 0,
+            sessionReset: base.addingTimeInterval(30 + 5 * 60 * 60)
+        )
+        let slots = store.upsertInactive(snapshot: incomingSnapshot, now: base.addingTimeInterval(30))
+
+        XCTAssertEqual(slots.count, 1)
+        let sessionWindow = try XCTUnwrap(slots[0].lastSnapshot.quotaWindows.first(where: { $0.kind == .session }))
+        XCTAssertEqual(sessionWindow.remainingPercent, 42, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.usedPercent, 58, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.resetAt, previousSnapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertEqual(slots[0].lastSnapshot.rawMeta["codex.sessionWindowStabilized"], "true")
+    }
+
+    func testUpsertInactiveAcceptsNewSessionCountdownAfterPreviousWindowExpires() throws {
+        let store = makeStore(staleInterval: 10_000)
+        let base = Date(timeIntervalSince1970: 5_500)
+        let accountID = "acc-expired"
+
+        let previousSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 20,
+            sessionUsed: 80,
+            sessionReset: base.addingTimeInterval(20)
+        )
+        _ = store.upsertInactive(snapshot: previousSnapshot, now: base)
+
+        let incomingSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 100,
+            sessionUsed: 0,
+            sessionReset: base.addingTimeInterval(60 + 5 * 60 * 60)
+        )
+        let slots = store.upsertInactive(snapshot: incomingSnapshot, now: base.addingTimeInterval(60))
+
+        XCTAssertEqual(slots.count, 1)
+        let sessionWindow = try XCTUnwrap(slots[0].lastSnapshot.quotaWindows.first(where: { $0.kind == .session }))
+        XCTAssertEqual(sessionWindow.remainingPercent, 100, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.usedPercent, 0, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.resetAt, incomingSnapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertNil(slots[0].lastSnapshot.rawMeta["codex.sessionWindowStabilized"])
+    }
+
     private func makeStore(staleInterval: TimeInterval) -> CodexAccountSlotStore {
         let path = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("codex-slot-tests-\(UUID().uuidString).json")
@@ -152,6 +210,8 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         accountLabel: String? = nil,
         subject: String? = nil,
         fingerprint: String? = nil,
+        sessionRemaining: Double = 30,
+        sessionUsed: Double = 70,
         sessionReset: Date? = nil
     ) -> UsageSnapshot {
         var rawMeta: [String: String] = [:]
@@ -163,8 +223,8 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         return UsageSnapshot(
             source: "codex-official",
             status: .ok,
-            remaining: 30,
-            used: 70,
+            remaining: min(sessionRemaining, 60),
+            used: sessionUsed,
             limit: 100,
             unit: "%",
             updatedAt: Date(),
@@ -173,8 +233,8 @@ final class CodexAccountSlotStoreTests: XCTestCase {
                 UsageQuotaWindow(
                     id: "session",
                     title: "5h",
-                    remainingPercent: 30,
-                    usedPercent: 70,
+                    remainingPercent: sessionRemaining,
+                    usedPercent: sessionUsed,
                     resetAt: sessionReset,
                     kind: .session
                 ),
