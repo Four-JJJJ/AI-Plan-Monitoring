@@ -1764,7 +1764,8 @@ final class AppViewModel {
         usedJSONPath: String,
         limitJSONPath: String,
         successJSONPath: String,
-        unit: String
+        unit: String,
+        quotaDisplayMode: OfficialQuotaDisplayMode? = nil
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
               let updated = relayDescriptorForPreview(
@@ -1784,7 +1785,8 @@ final class AppViewModel {
                 usedJSONPath: usedJSONPath,
                 limitJSONPath: limitJSONPath,
                 successJSONPath: successJSONPath,
-                unit: unit
+                unit: unit,
+                quotaDisplayMode: quotaDisplayMode
               ) else {
             return
         }
@@ -1809,7 +1811,8 @@ final class AppViewModel {
         usedJSONPath: String,
         limitJSONPath: String,
         successJSONPath: String,
-        unit: String
+        unit: String,
+        quotaDisplayMode: OfficialQuotaDisplayMode? = nil
     ) -> ProviderDescriptor? {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
               config.providers[idx].isRelay else {
@@ -1837,6 +1840,9 @@ final class AppViewModel {
         relayConfig.tokenChannelEnabled = tokenUsageEnabled
         relayConfig.balanceChannelEnabled = accountEnabled
         relayConfig.balanceCredentialMode = balanceCredentialMode
+        if let quotaDisplayMode {
+            relayConfig.quotaDisplayMode = quotaDisplayMode
+        }
 
         let templateRequest = matchedManifest.balanceRequest
         let templateExtract = matchedManifest.extract
@@ -1900,6 +1906,23 @@ final class AppViewModel {
         provider.relayConfig = relayConfig
         provider.openConfig = nil
         return provider.normalized()
+    }
+
+    func updateThirdPartyQuotaDisplayMode(
+        providerID: String,
+        quotaDisplayMode: OfficialQuotaDisplayMode
+    ) {
+        guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
+              config.providers[idx].family == .thirdParty,
+              config.providers[idx].isRelay,
+              var relayConfig = config.providers[idx].relayConfig else {
+            return
+        }
+        var provider = config.providers[idx]
+        relayConfig.quotaDisplayMode = quotaDisplayMode
+        provider.relayConfig = relayConfig
+        config.providers[idx] = provider.normalized()
+        persistAndRestart()
     }
 
     func relayAdapterName(for provider: ProviderDescriptor) -> String? {
@@ -1973,7 +1996,8 @@ final class AppViewModel {
         providerID: String,
         sourceMode: OfficialSourceMode,
         webMode: OfficialWebMode,
-        quotaDisplayMode: OfficialQuotaDisplayMode? = nil
+        quotaDisplayMode: OfficialQuotaDisplayMode? = nil,
+        traeValueDisplayMode: OfficialTraeValueDisplayMode? = nil
     ) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }),
               config.providers[idx].family == .official else {
@@ -1986,6 +2010,9 @@ final class AppViewModel {
         official.webMode = webMode
         if let quotaDisplayMode {
             official.quotaDisplayMode = quotaDisplayMode
+        }
+        if let traeValueDisplayMode {
+            official.traeValueDisplayMode = traeValueDisplayMode
         }
         provider.officialConfig = official
         config.providers[idx] = provider
@@ -2458,7 +2485,7 @@ final class AppViewModel {
 
     private func handleLowRemainingAlerts(for descriptor: ProviderDescriptor, snapshot: UsageSnapshot) {
         let genericKey = "low:\(descriptor.id)"
-        let displaysUsedQuota = descriptor.displaysUsedQuota
+        let displaysUsedQuota = descriptor.displaysUsedQuota && (snapshot.used != nil || !snapshot.quotaWindows.isEmpty)
         let lowWindows = AlertEngine.lowQuotaWindows(
             snapshot: snapshot,
             rule: descriptor.threshold,
@@ -2512,7 +2539,7 @@ final class AppViewModel {
                     title: text(.lowBalanceWarning),
                     body: Localizer.lowBalanceBody(
                         providerName: descriptor.name,
-                        remaining: format(displaysUsedQuota ? snapshot.used : snapshot.remaining),
+                        remaining: format(displaysUsedQuota ? (snapshot.used ?? snapshot.remaining) : snapshot.remaining),
                         unit: snapshot.unit,
                         language: config.language,
                         displaysUsedQuota: displaysUsedQuota

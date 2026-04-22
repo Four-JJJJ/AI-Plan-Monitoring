@@ -3,6 +3,24 @@ import XCTest
 @testable import AIPlanMonitor
 
 final class RelayProviderTests: XCTestCase {
+    func testDecodeRelayConfigWithoutQuotaDisplayModeDefaultsToRemaining() throws {
+        let json = #"""
+        {
+          "baseURL":"https://relay.example.com",
+          "tokenChannelEnabled":true,
+          "balanceChannelEnabled":true,
+          "balanceAuth":{
+            "kind":"bearer",
+            "keychainService":"AIPlanMonitor",
+            "keychainAccount":"relay.example.com/system-token"
+          }
+        }
+        """#
+
+        let decoded = try JSONDecoder().decode(RelayProviderConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.quotaDisplayMode, .remaining)
+    }
+
     func testLegacyOpenConfigNormalizesToRelayAdapter() {
         let descriptor = ProviderDescriptor(
             id: "open-ailinyu",

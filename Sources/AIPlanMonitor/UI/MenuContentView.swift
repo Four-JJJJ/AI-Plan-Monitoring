@@ -419,18 +419,19 @@ struct MenuContentView: View {
             let disconnected = error != nil && !stale
             let status = amountStatus(snapshot: snapshot, disconnected: disconnected)
             let hasErrorState = disconnected || (snapshot?.valueFreshness == .empty && snapshot?.fetchHealth != .ok)
+            let amountValue = displayedAmountValue(provider: provider, snapshot: snapshot)
             AmountModelCard(
                 title: displayName(for: provider),
                 iconName: iconName(for: provider),
                 iconFallback: fallbackIcon(for: provider),
                 status: status,
-                amountText: (disconnected || stale) ? "-" : formattedBalanceNumber(snapshot?.remaining),
+                amountText: (disconnected || stale) ? "-" : formattedBalanceNumber(amountValue),
                 secondaryText: (disconnected || stale) ? nil : relaySecondaryText(provider: provider, snapshot: snapshot),
                 errorText: error,
                 backgroundColor: cardBackground,
                 isDisconnected: disconnected || stale,
                 highlightColor: hasErrorState ? errorColor : nil,
-                balanceLabel: viewModel.text(.balanceLabel)
+                balanceLabel: provider.displaysUsedQuota ? viewModel.text(.used) : viewModel.text(.balanceLabel)
             )
         }
     }
@@ -569,6 +570,14 @@ struct MenuContentView: View {
         }
     }
 
+    private func displayedAmountValue(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> Double? {
+        guard let snapshot else { return nil }
+        if provider.displaysUsedQuota, let used = snapshot.used {
+            return used
+        }
+        return snapshot.remaining
+    }
+
     private func visibleQuotaMetrics(provider: ProviderDescriptor, metrics: [QuotaMetric]) -> [QuotaMetric] {
         let source = metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics
         return Array(source.prefix(preferredMetricCount(for: provider)))
@@ -592,8 +601,12 @@ struct MenuContentView: View {
                 valueText = "-"
             } else if let valueTextOverride = metric.valueTextOverride {
                 valueText = valueTextOverride
-            } else if traeDisplaysAmount(provider),
-                      let amount = traeRemainingAmountText(for: metric, snapshot: snapshot) {
+            } else if provider.traeDisplaysAmount,
+                      let amount = traeAmountText(
+                        for: metric,
+                        snapshot: snapshot,
+                        displaysUsedQuota: provider.displaysUsedQuota
+                      ) {
                 valueText = amount
             } else {
                 valueText = displayPercent.map { "\($0)%" } ?? "-"
@@ -1299,28 +1312,32 @@ struct MenuContentView: View {
         return rawTitle
     }
 
-    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
-        provider.family == .official
-            && provider.type == .trae
-            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
-    }
-
-    private func traeRemainingAmountText(for metric: QuotaMetric, snapshot: UsageSnapshot?) -> String? {
+    private func traeAmountText(
+        for metric: QuotaMetric,
+        snapshot: UsageSnapshot?,
+        displaysUsedQuota: Bool
+    ) -> String? {
         guard let snapshot else { return nil }
-        let key: String?
+        let primaryKey: String?
+        let fallbackKey: String?
         let kind: TraeMetricKind?
         switch TraeMetricKind.detect(id: metric.id, title: metric.title) {
         case .autocomplete:
-            key = "autocompleteRemaining"
+            primaryKey = displaysUsedQuota ? "autocompleteUsed" : "autocompleteRemaining"
+            fallbackKey = displaysUsedQuota ? "autocompleteRemaining" : nil
             kind = .autocomplete
         case .dollarBalance:
-            key = "dollarRemaining"
+            primaryKey = displaysUsedQuota ? "dollarUsed" : "dollarRemaining"
+            fallbackKey = displaysUsedQuota ? "dollarRemaining" : nil
             kind = .dollarBalance
         case .none:
-            key = nil
+            primaryKey = nil
+            fallbackKey = nil
             kind = nil
         }
-        guard let key, let raw = snapshot.extras[key], let value = Double(raw) else { return nil }
+        guard let key = primaryKey else { return nil }
+        let resolvedRaw = snapshot.extras[key] ?? fallbackKey.flatMap { snapshot.extras[$0] }
+        guard let raw = resolvedRaw, let value = Double(raw) else { return nil }
         guard let kind else { return nil }
         return TraeValueDisplayFormatter.format(
             value,

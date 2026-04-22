@@ -93,12 +93,20 @@ enum OfficialQuotaDisplayMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum OfficialTraeValueDisplayMode: String, Codable, CaseIterable, Identifiable {
+    case percent
+    case amount
+
+    var id: String { rawValue }
+}
+
 struct OfficialProviderConfig: Codable, Equatable {
     var sourceMode: OfficialSourceMode
     var webMode: OfficialWebMode
     var manualCookieAccount: String?
     var autoDiscoveryEnabled: Bool
     var quotaDisplayMode: OfficialQuotaDisplayMode
+    var traeValueDisplayMode: OfficialTraeValueDisplayMode?
     var showPlanTypeInMenuBar: Bool
 
     init(
@@ -107,6 +115,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         manualCookieAccount: String? = nil,
         autoDiscoveryEnabled: Bool = true,
         quotaDisplayMode: OfficialQuotaDisplayMode = .remaining,
+        traeValueDisplayMode: OfficialTraeValueDisplayMode? = nil,
         showPlanTypeInMenuBar: Bool = true
     ) {
         self.sourceMode = sourceMode
@@ -114,6 +123,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.manualCookieAccount = manualCookieAccount
         self.autoDiscoveryEnabled = autoDiscoveryEnabled
         self.quotaDisplayMode = quotaDisplayMode
+        self.traeValueDisplayMode = traeValueDisplayMode
         self.showPlanTypeInMenuBar = showPlanTypeInMenuBar
     }
 
@@ -123,6 +133,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         case manualCookieAccount
         case autoDiscoveryEnabled
         case quotaDisplayMode
+        case traeValueDisplayMode
         case showPlanTypeInMenuBar
     }
 
@@ -133,6 +144,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.manualCookieAccount = try container.decodeIfPresent(String.self, forKey: .manualCookieAccount)
         self.autoDiscoveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoDiscoveryEnabled) ?? true
         self.quotaDisplayMode = try container.decodeIfPresent(OfficialQuotaDisplayMode.self, forKey: .quotaDisplayMode) ?? .remaining
+        self.traeValueDisplayMode = try container.decodeIfPresent(OfficialTraeValueDisplayMode.self, forKey: .traeValueDisplayMode)
         self.showPlanTypeInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showPlanTypeInMenuBar) ?? true
     }
 
@@ -143,6 +155,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         try container.encodeIfPresent(manualCookieAccount, forKey: .manualCookieAccount)
         try container.encode(autoDiscoveryEnabled, forKey: .autoDiscoveryEnabled)
         try container.encode(quotaDisplayMode, forKey: .quotaDisplayMode)
+        try container.encodeIfPresent(traeValueDisplayMode, forKey: .traeValueDisplayMode)
         try container.encode(showPlanTypeInMenuBar, forKey: .showPlanTypeInMenuBar)
     }
 }
@@ -715,6 +728,14 @@ extension ProviderDescriptor {
             } else if copy.officialConfig?.manualCookieAccount?.isEmpty ?? true {
                 copy.officialConfig?.manualCookieAccount = Self.defaultOfficialConfig(type: copy.type).manualCookieAccount
             }
+            if copy.type == .trae, var official = copy.officialConfig {
+                // 兼容旧版 Trae：历史 quotaDisplayMode 用于“百分比/数字”开关，新版改为 traeValueDisplayMode。
+                if official.traeValueDisplayMode == nil {
+                    official.traeValueDisplayMode = official.quotaDisplayMode == .used ? .amount : .percent
+                    official.quotaDisplayMode = .remaining
+                }
+                copy.officialConfig = official
+            }
             if copy.baseURL?.isEmpty ?? true {
                 copy.baseURL = Self.defaultOfficialBaseURL(type: copy.type)
             }
@@ -939,7 +960,8 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .disabled,
                 manualCookieAccount: nil,
-                autoDiscoveryEnabled: true
+                autoDiscoveryEnabled: true,
+                traeValueDisplayMode: .percent
             )
         case .openrouterCredits, .openrouterAPI:
             return OfficialProviderConfig(
@@ -1246,7 +1268,20 @@ extension ProviderDescriptor {
     }
 
     var displaysUsedQuota: Bool {
-        family == .official && type == .claude && officialConfig?.quotaDisplayMode == .used
+        switch family {
+        case .official:
+            return (officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: type).quotaDisplayMode) == .used
+        case .thirdParty:
+            return (relayConfig?.quotaDisplayMode ?? .remaining) == .used
+        }
+    }
+
+    var traeDisplaysAmount: Bool {
+        family == .official
+            && type == .trae
+            && (officialConfig?.traeValueDisplayMode
+                ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).traeValueDisplayMode
+                ?? .percent) == .amount
     }
 
     var relayViewConfig: OpenProviderConfig? {

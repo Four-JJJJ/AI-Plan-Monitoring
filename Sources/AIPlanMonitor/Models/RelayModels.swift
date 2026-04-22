@@ -7,6 +7,7 @@ struct RelayProviderConfig: Codable, Equatable {
     var balanceChannelEnabled: Bool
     var balanceAuth: AuthConfig
     var balanceCredentialMode: RelayCredentialMode?
+    var quotaDisplayMode: OfficialQuotaDisplayMode
     var manualOverrides: RelayManualOverride?
 
     init(
@@ -16,6 +17,7 @@ struct RelayProviderConfig: Codable, Equatable {
         balanceChannelEnabled: Bool = false,
         balanceAuth: AuthConfig,
         balanceCredentialMode: RelayCredentialMode? = nil,
+        quotaDisplayMode: OfficialQuotaDisplayMode = .remaining,
         manualOverrides: RelayManualOverride? = nil
     ) {
         self.adapterID = adapterID
@@ -24,7 +26,43 @@ struct RelayProviderConfig: Codable, Equatable {
         self.balanceChannelEnabled = balanceChannelEnabled
         self.balanceAuth = balanceAuth
         self.balanceCredentialMode = balanceCredentialMode
+        self.quotaDisplayMode = quotaDisplayMode
         self.manualOverrides = manualOverrides
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case adapterID
+        case baseURL
+        case tokenChannelEnabled
+        case balanceChannelEnabled
+        case balanceAuth
+        case balanceCredentialMode
+        case quotaDisplayMode
+        case manualOverrides
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.adapterID = try container.decodeIfPresent(String.self, forKey: .adapterID)
+        self.baseURL = try container.decode(String.self, forKey: .baseURL)
+        self.tokenChannelEnabled = try container.decodeIfPresent(Bool.self, forKey: .tokenChannelEnabled) ?? true
+        self.balanceChannelEnabled = try container.decodeIfPresent(Bool.self, forKey: .balanceChannelEnabled) ?? false
+        self.balanceAuth = try container.decode(AuthConfig.self, forKey: .balanceAuth)
+        self.balanceCredentialMode = try container.decodeIfPresent(RelayCredentialMode.self, forKey: .balanceCredentialMode)
+        self.quotaDisplayMode = try container.decodeIfPresent(OfficialQuotaDisplayMode.self, forKey: .quotaDisplayMode) ?? .remaining
+        self.manualOverrides = try container.decodeIfPresent(RelayManualOverride.self, forKey: .manualOverrides)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(adapterID, forKey: .adapterID)
+        try container.encode(baseURL, forKey: .baseURL)
+        try container.encode(tokenChannelEnabled, forKey: .tokenChannelEnabled)
+        try container.encode(balanceChannelEnabled, forKey: .balanceChannelEnabled)
+        try container.encode(balanceAuth, forKey: .balanceAuth)
+        try container.encodeIfPresent(balanceCredentialMode, forKey: .balanceCredentialMode)
+        try container.encode(quotaDisplayMode, forKey: .quotaDisplayMode)
+        try container.encodeIfPresent(manualOverrides, forKey: .manualOverrides)
     }
 }
 

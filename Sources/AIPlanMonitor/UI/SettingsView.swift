@@ -35,6 +35,8 @@ struct SettingsView: View {
     @State private var officialSourceModeInputs: [String: OfficialSourceMode] = [:]
     @State private var officialWebModeInputs: [String: OfficialWebMode] = [:]
     @State private var officialQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
+    @State private var officialTraeValueDisplayModeInputs: [String: OfficialTraeValueDisplayMode] = [:]
+    @State private var thirdPartyQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
     @State private var officialCookieInputs: [String: String] = [:]
     @State private var codexProfileJSONInputs: [String: String] = [:]
     @State private var codexProfileNoteInputs: [String: String] = [:]
@@ -2292,6 +2294,7 @@ struct SettingsView: View {
                 ))
 
                 if provider.isRelay {
+                    thirdPartyUsagePreferenceRow(provider)
                     openRelayConfigSection(provider)
                 }
             }
@@ -2330,6 +2333,40 @@ struct SettingsView: View {
             if oldValue == provider.id, newValue != provider.id {
                 applyOfficialThresholdInput(provider)
             }
+        }
+    }
+
+    private func thirdPartyUsagePreferenceRow(_ provider: ProviderDescriptor) -> some View {
+        let quotaDisplayBinding: Binding<OfficialQuotaDisplayMode> = Binding(
+            get: {
+                thirdPartyQuotaDisplayModeInputs[provider.id]
+                    ?? provider.relayConfig?.quotaDisplayMode
+                    ?? .remaining
+            },
+            set: { newValue in
+                thirdPartyQuotaDisplayModeInputs[provider.id] = newValue
+                viewModel.updateThirdPartyQuotaDisplayMode(
+                    providerID: provider.id,
+                    quotaDisplayMode: newValue
+                )
+            }
+        )
+        return VStack(alignment: .leading, spacing: 8) {
+            thirdPartyConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
+                officialSegmentControl(
+                    selection: quotaDisplayBinding,
+                    options: [.remaining, .used],
+                    label: { mode in
+                        switch mode {
+                        case .remaining:
+                            viewModel.text(.quotaDisplayRemaining)
+                        case .used:
+                            viewModel.text(.quotaDisplayUsed)
+                        }
+                    }
+                )
+            }
+            thirdPartyHintText(viewModel.text(.claudeQuotaDisplayHint))
         }
     }
 
@@ -4471,6 +4508,15 @@ struct SettingsView: View {
             },
             set: { officialQuotaDisplayModeInputs[provider.id] = $0 }
         )
+        let traeValueDisplayBinding: Binding<OfficialTraeValueDisplayMode> = Binding(
+            get: {
+                officialTraeValueDisplayModeInputs[provider.id]
+                    ?? (provider.officialConfig?.traeValueDisplayMode
+                        ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).traeValueDisplayMode
+                        ?? .percent)
+            },
+            set: { officialTraeValueDisplayModeInputs[provider.id] = $0 }
+        )
         let sourceBinding: Binding<OfficialSourceMode> = Binding(
             get: {
                 let current = officialSourceModeInputs[provider.id] ?? (provider.officialConfig?.sourceMode ?? .auto)
@@ -4519,7 +4565,8 @@ struct SettingsView: View {
                                     providerID: provider.id,
                                     sourceMode: .auto,
                                     webMode: .disabled,
-                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue
+                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue,
+                                    traeValueDisplayMode: traeValueDisplayBinding.wrappedValue
                                 )
                                 officialCookieInputs[provider.id] = ""
                                 viewModel.restartPolling()
@@ -4539,18 +4586,20 @@ struct SettingsView: View {
 
                     officialConfigRow(title: viewModel.localizedText("用量显示", "Usage Display")) {
                         officialSegmentControl(
-                            selection: quotaDisplayBinding,
-                            options: [.remaining, .used],
+                            selection: traeValueDisplayBinding,
+                            options: [.percent, .amount],
                             label: { mode in
                                 switch mode {
-                                case .remaining:
+                                case .percent:
                                     viewModel.localizedText("百分比", "Percent")
-                                case .used:
+                                case .amount:
                                     viewModel.localizedText("数字", "Amount")
                                 }
                             }
                         )
                     }
+
+                    officialUsagePreferenceSection(quotaDisplayBinding)
                 }
             } else if supportsBearerCredentialInput {
                 VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
@@ -4583,7 +4632,7 @@ struct SettingsView: View {
                                 providerID: provider.id,
                                 sourceMode: sourceBinding.wrappedValue,
                                 webMode: webBinding.wrappedValue,
-                                quotaDisplayMode: nil
+                                quotaDisplayMode: quotaDisplayBinding.wrappedValue
                             )
                             officialCookieInputs[provider.id] = ""
                             viewModel.restartPolling()
@@ -4603,6 +4652,8 @@ struct SettingsView: View {
                         }
                         officialConfigHintText(officialSourceHintText(for: provider))
                     }
+
+                    officialUsagePreferenceSection(quotaDisplayBinding)
                 }
             } else {
                 if supportedWebModes.count > 1 {
@@ -4639,26 +4690,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if provider.type == .claude {
-                    VStack(alignment: .leading, spacing: 8) {
-                        officialConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
-                            officialSegmentControl(
-                                selection: quotaDisplayBinding,
-                                options: [.remaining, .used],
-                                label: { mode in
-                                    switch mode {
-                                    case .remaining:
-                                        viewModel.text(.quotaDisplayRemaining)
-                                    case .used:
-                                        viewModel.text(.quotaDisplayUsed)
-                                    }
-                                }
-                            )
-                        }
-
-                        officialConfigHintText(viewModel.text(.claudeQuotaDisplayHint))
-                    }
-                }
+                officialUsagePreferenceSection(quotaDisplayBinding)
 
                 if supportsManualInput {
                     VStack(alignment: .leading, spacing: 8) {
@@ -4689,7 +4721,7 @@ struct SettingsView: View {
                                     providerID: provider.id,
                                     sourceMode: sourceBinding.wrappedValue,
                                     webMode: webBinding.wrappedValue,
-                                    quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue
                                 )
                                 officialCookieInputs[provider.id] = ""
                                 viewModel.restartPolling()
@@ -4708,7 +4740,7 @@ struct SettingsView: View {
                 providerID: provider.id,
                 sourceMode: newValue,
                 webMode: webBinding.wrappedValue,
-                quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+                quotaDisplayMode: quotaDisplayBinding.wrappedValue
             )
         }
         .onChange(of: webBinding.wrappedValue) { _, newValue in
@@ -4717,24 +4749,47 @@ struct SettingsView: View {
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
                 webMode: newValue,
-                quotaDisplayMode: provider.type == .claude ? quotaDisplayBinding.wrappedValue : nil
+                quotaDisplayMode: quotaDisplayBinding.wrappedValue
             )
         }
         .onChange(of: quotaDisplayBinding.wrappedValue) { _, newValue in
-            switch provider.type {
-            case .claude:
-                guard !supportsManualInput else { return }
-            case .trae:
-                break
-            default:
-                return
-            }
             viewModel.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
                 webMode: webBinding.wrappedValue,
-                quotaDisplayMode: newValue
+                quotaDisplayMode: newValue,
+                traeValueDisplayMode: provider.type == .trae ? traeValueDisplayBinding.wrappedValue : nil
             )
+        }
+        .onChange(of: traeValueDisplayBinding.wrappedValue) { _, newValue in
+            guard provider.type == .trae else { return }
+            viewModel.updateOfficialProviderSettings(
+                providerID: provider.id,
+                sourceMode: .auto,
+                webMode: .disabled,
+                quotaDisplayMode: quotaDisplayBinding.wrappedValue,
+                traeValueDisplayMode: newValue
+            )
+        }
+    }
+
+    private func officialUsagePreferenceSection(_ quotaDisplayBinding: Binding<OfficialQuotaDisplayMode>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            officialConfigRow(title: viewModel.localizedText("用量偏好", "Usage Preference")) {
+                officialSegmentControl(
+                    selection: quotaDisplayBinding,
+                    options: [.remaining, .used],
+                    label: { mode in
+                        switch mode {
+                        case .remaining:
+                            viewModel.text(.quotaDisplayRemaining)
+                        case .used:
+                            viewModel.text(.quotaDisplayUsed)
+                        }
+                    }
+                )
+            }
+            officialConfigHintText(viewModel.text(.claudeQuotaDisplayHint))
         }
     }
 
@@ -6083,8 +6138,12 @@ struct SettingsView: View {
         snapshot: UsageSnapshot?,
         percent: Double
     ) -> String {
-        if provider.type == .trae, traeDisplaysAmount(provider) {
-            if let amount = traeRemainingAmountValue(window: window, snapshot: snapshot),
+        if provider.type == .trae, provider.traeDisplaysAmount {
+            if let amount = traeAmountValue(
+                window: window,
+                snapshot: snapshot,
+                displaysUsedQuota: provider.displaysUsedQuota
+            ),
                let kind = TraeMetricKind.detect(id: window.id, title: window.title) {
                 return TraeValueDisplayFormatter.format(
                     amount,
@@ -6097,24 +6156,28 @@ struct SettingsView: View {
         return "\(Int(percent.rounded()))%"
     }
 
-    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
-        provider.family == .official
-            && provider.type == .trae
-            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
-    }
-
-    private func traeRemainingAmountValue(window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> Double? {
+    private func traeAmountValue(
+        window: UsageQuotaWindow,
+        snapshot: UsageSnapshot?,
+        displaysUsedQuota: Bool
+    ) -> Double? {
         guard let snapshot else { return nil }
-        let key: String?
+        let primaryKey: String?
+        let fallbackKey: String?
         let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if window.id.lowercased().contains("autocomplete") || normalizedTitle.contains("autocomplete") || normalizedTitle.contains("自动补全") {
-            key = "autocompleteRemaining"
+            primaryKey = displaysUsedQuota ? "autocompleteUsed" : "autocompleteRemaining"
+            fallbackKey = displaysUsedQuota ? "autocompleteRemaining" : nil
         } else if window.id.lowercased().contains("dollar") || normalizedTitle.contains("dollar") || normalizedTitle.contains("美元") {
-            key = "dollarRemaining"
+            primaryKey = displaysUsedQuota ? "dollarUsed" : "dollarRemaining"
+            fallbackKey = displaysUsedQuota ? "dollarRemaining" : nil
         } else {
-            key = nil
+            primaryKey = nil
+            fallbackKey = nil
         }
-        guard let key, let raw = snapshot.extras[key] else { return nil }
+        guard let key = primaryKey else { return nil }
+        let resolvedRaw = snapshot.extras[key] ?? fallbackKey.flatMap { snapshot.extras[$0] }
+        guard let raw = resolvedRaw else { return nil }
         return Double(raw)
     }
 
@@ -6413,7 +6476,10 @@ struct SettingsView: View {
                 usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
                 limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
                 successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-                unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
+                unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota"),
+                quotaDisplayMode: thirdPartyQuotaDisplayModeInputs[provider.id]
+                    ?? provider.relayConfig?.quotaDisplayMode
+                    ?? .remaining
             )
         }
 
@@ -6619,7 +6685,10 @@ struct SettingsView: View {
                             usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
                             limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
                             successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-                            unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota")
+                            unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota"),
+                            quotaDisplayMode: thirdPartyQuotaDisplayModeInputs[provider.id]
+                                ?? provider.relayConfig?.quotaDisplayMode
+                                ?? .remaining
                         ) else {
                             relayTestResult[provider.id] = RelayDiagnosticResult(
                                 success: false,
@@ -7424,6 +7493,9 @@ struct SettingsView: View {
             if relayCredentialModeInputs[provider.id] == nil {
                 relayCredentialModeInputs[provider.id] = provider.relayConfig?.balanceCredentialMode ?? .manualPreferred
             }
+            if thirdPartyQuotaDisplayModeInputs[provider.id] == nil {
+                thirdPartyQuotaDisplayModeInputs[provider.id] = provider.relayConfig?.quotaDisplayMode ?? .remaining
+            }
         }
 
         for provider in viewModel.config.providers where provider.family == .official {
@@ -7436,6 +7508,11 @@ struct SettingsView: View {
             if officialQuotaDisplayModeInputs[provider.id] == nil {
                 officialQuotaDisplayModeInputs[provider.id] = provider.officialConfig?.quotaDisplayMode
                     ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).quotaDisplayMode
+            }
+            if officialTraeValueDisplayModeInputs[provider.id] == nil {
+                officialTraeValueDisplayModeInputs[provider.id] = provider.officialConfig?.traeValueDisplayMode
+                    ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).traeValueDisplayMode
+                    ?? .percent
             }
             if officialThresholdInputs[provider.id] == nil {
                 officialThresholdInputs[provider.id] = formattedOfficialThresholdValue(provider.threshold.lowRemaining)

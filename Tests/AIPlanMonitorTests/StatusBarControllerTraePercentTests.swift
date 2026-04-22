@@ -79,6 +79,55 @@ final class StatusBarControllerTraePercentTests: XCTestCase {
         assertPercent(StatusBarController.traePrimaryPercent(snapshot: snapshot), equals: 77)
     }
 
+    func testTraePrimaryPercentUsesUsedPercentWhenUsagePreferenceIsUsed() {
+        let snapshot = UsageSnapshot(
+            source: "trae-official",
+            status: .ok,
+            remaining: 64,
+            used: 36,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [
+                UsageQuotaWindow(
+                    id: "trae-official-dollar",
+                    title: "美元余额",
+                    remainingPercent: 64,
+                    usedPercent: 36,
+                    resetAt: nil,
+                    kind: .custom
+                )
+            ],
+            sourceLabel: "API"
+        )
+
+        assertPercent(
+            StatusBarController.traePrimaryPercent(snapshot: snapshot, displaysUsedQuota: true),
+            equals: 36
+        )
+    }
+
+    func testTraePrimaryPercentFallsBackToRemainingWhenUsedMissing() {
+        let snapshot = UsageSnapshot(
+            source: "trae-official",
+            status: .ok,
+            remaining: 61,
+            used: nil,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [],
+            sourceLabel: "API"
+        )
+
+        assertPercent(
+            StatusBarController.traePrimaryPercent(snapshot: snapshot, displaysUsedQuota: true),
+            equals: 61
+        )
+    }
+
     private func assertPercent(
         _ value: Double?,
         equals expected: Double,

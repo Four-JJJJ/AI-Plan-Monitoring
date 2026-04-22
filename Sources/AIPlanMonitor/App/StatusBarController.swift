@@ -379,23 +379,25 @@ final class StatusBarController: NSObject {
         }
 
         if provider.family == .thirdParty {
+            if provider.displaysUsedQuota, let used = snapshot.used {
+                return formattedAmount(used)
+            }
             guard let remaining = snapshot.remaining else { return "" }
             return formattedAmount(remaining)
         }
 
-        if traeDisplaysAmount(provider),
-           let amount = traePrimaryRemainingAmount(snapshot: snapshot) {
+        if provider.traeDisplaysAmount,
+           let amount = traePrimaryAmount(snapshot: snapshot, displaysUsedQuota: provider.displaysUsedQuota) {
             return TraeValueDisplayFormatter.format(amount, kind: .dollarBalance)
         }
 
         if let percent = preferredPercent(from: snapshot, provider: provider) {
             return "\(Int(percent.rounded()))%"
         }
-        if provider.displaysUsedQuota {
-            if let used = snapshot.used {
-                return formattedAmount(used)
-            }
-        } else if let remaining = snapshot.remaining {
+        if provider.displaysUsedQuota, let used = snapshot.used {
+            return formattedAmount(used)
+        }
+        if let remaining = snapshot.remaining {
             return formattedAmount(remaining)
         }
         return ""
@@ -449,6 +451,7 @@ final class StatusBarController: NSObject {
         }
         if viewModel.statusBarDisplayStyle == .barNamePercent,
            provider.family == .thirdParty,
+           !provider.displaysUsedQuota,
            let percent = viewModel.thirdPartyBarPercent(for: provider.id) {
             return percent
         }
@@ -471,7 +474,8 @@ final class StatusBarController: NSObject {
     private func preferredPercent(from snapshot: UsageSnapshot, provider: ProviderDescriptor) -> Double? {
         if provider.type == .trae,
            let percent = Self.traePrimaryPercent(
-            snapshot: snapshot
+            snapshot: snapshot,
+            displaysUsedQuota: provider.displaysUsedQuota
            ) {
             return percent
         }
@@ -494,12 +498,20 @@ final class StatusBarController: NSObject {
         return nil
     }
 
-    nonisolated static func traePrimaryPercent(snapshot: UsageSnapshot) -> Double? {
+    nonisolated static func traePrimaryPercent(
+        snapshot: UsageSnapshot,
+        displaysUsedQuota: Bool = false
+    ) -> Double? {
         let primaryWindow = snapshot.quotaWindows.first(where: isTraeDollarWindow) ?? snapshot.quotaWindows.first
         if let primaryWindow {
-            return primaryWindow.remainingPercent
+            return displaysUsedQuota ? primaryWindow.usedPercent : primaryWindow.remainingPercent
         }
         if snapshot.unit == "%" {
+            if displaysUsedQuota,
+               let used = snapshot.used,
+               used >= 0, used <= 100 {
+                return used
+            }
             if let remaining = snapshot.remaining,
                remaining >= 0, remaining <= 100 {
                 return remaining
@@ -516,20 +528,25 @@ final class StatusBarController: NSObject {
             || title.contains("美元")
     }
 
-    private func traeDisplaysAmount(_ provider: ProviderDescriptor) -> Bool {
-        provider.family == .official
-            && provider.type == .trae
-            && (provider.officialConfig?.quotaDisplayMode ?? ProviderDescriptor.defaultOfficialConfig(type: .trae).quotaDisplayMode) == .used
-    }
-
-    private func traePrimaryRemainingAmount(snapshot: UsageSnapshot) -> Double? {
-        if let raw = snapshot.extras["dollarRemaining"], let value = Double(raw) {
+    private func traePrimaryAmount(
+        snapshot: UsageSnapshot,
+        displaysUsedQuota: Bool
+    ) -> Double? {
+        let primaryKey = displaysUsedQuota ? "dollarUsed" : "dollarRemaining"
+        if let raw = snapshot.extras[primaryKey], let value = Double(raw) {
             return value
         }
-        if let window = snapshot.quotaWindows.first {
-            let percent = max(0, min(100, window.remainingPercent))
+        if displaysUsedQuota,
+           let fallbackRaw = snapshot.extras["dollarRemaining"],
+           let fallback = Double(fallbackRaw) {
+            return fallback
+        }
+        if let window = snapshot.quotaWindows.first(where: Self.isTraeDollarWindow) ?? snapshot.quotaWindows.first {
+            let displayPercent = displaysUsedQuota
+                ? max(0, min(100, window.usedPercent))
+                : max(0, min(100, window.remainingPercent))
             if let raw = snapshot.extras["dollarLimit"], let limit = Double(raw) {
-                return max(0, limit * percent / 100)
+                return max(0, limit * displayPercent / 100)
             }
         }
         return nil

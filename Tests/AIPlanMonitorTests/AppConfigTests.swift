@@ -129,6 +129,57 @@ final class AppConfigTests: XCTestCase {
         )
     }
 
+    func testDefaultOfficialTraeUsesPercentValueDisplayAndRemainingQuotaPreference() {
+        let config = ProviderDescriptor.defaultOfficialConfig(type: .trae)
+        XCTAssertEqual(config.traeValueDisplayMode, .percent)
+        XCTAssertEqual(config.quotaDisplayMode, .remaining)
+    }
+
+    func testDecodeLegacyTraeQuotaDisplayModeMigratesToIndependentFields() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "providers":[
+            {
+              "id":"trae-official",
+              "name":"Official Trae",
+              "family":"official",
+              "type":"trae",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"bearer"},
+              "baseURL":"https://api-sg-central.trae.ai",
+              "officialConfig":{
+                "sourceMode":"auto",
+                "webMode":"disabled",
+                "autoDiscoveryEnabled":true,
+                "quotaDisplayMode":"used"
+              }
+            }
+          ]
+        }
+        """#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        let traeConfig = try XCTUnwrap(config.providers.first?.officialConfig)
+        XCTAssertEqual(traeConfig.traeValueDisplayMode, .amount)
+        XCTAssertEqual(traeConfig.quotaDisplayMode, .remaining)
+    }
+
+    func testThirdPartyDisplaysUsedQuotaFollowsRelayQuotaPreference() {
+        var relayProvider = ProviderDescriptor.makeOpenRelay(
+            name: "Relay Example",
+            baseURL: "https://relay.example.com"
+        )
+        relayProvider.relayConfig?.quotaDisplayMode = .used
+        relayProvider = relayProvider.normalized()
+        XCTAssertTrue(relayProvider.displaysUsedQuota)
+
+        relayProvider.relayConfig?.quotaDisplayMode = .remaining
+        relayProvider = relayProvider.normalized()
+        XCTAssertFalse(relayProvider.displaysUsedQuota)
+    }
+
     func testDecodeOfficialConfigDefaultsPlanTypeDisplayEnabled() throws {
         let json = #"""
         {
