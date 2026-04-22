@@ -1040,6 +1040,25 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.sourceLabel, "CLI")
     }
 
+    func testKiroCLIOutputParsesUsedCoveredInPlanFormat() throws {
+        let text = """
+        Estimated Usage resets on 05/01
+        Credits 50 used / 50 covered in plan
+        """
+
+        let snapshot = try KiroProvider.parseSnapshot(
+            text: text,
+            descriptor: ProviderDescriptor.defaultOfficialKiro()
+        )
+
+        XCTAssertEqual(snapshot.sourceLabel, "CLI")
+        XCTAssertEqual(snapshot.quotaWindows.count, 1)
+        XCTAssertEqual(snapshot.quotaWindows.first?.title, "Credits")
+        XCTAssertEqual(snapshot.quotaWindows.first?.remainingPercent ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.remaining ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.used ?? -1, 100, accuracy: 0.001)
+    }
+
     func testKiroIDEStateParsesCreditsAndBonus() throws {
         let stateJSON = """
         {

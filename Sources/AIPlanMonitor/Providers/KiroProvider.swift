@@ -89,9 +89,9 @@ final class KiroProvider: UsageProvider, @unchecked Sendable {
         let clean = text.replacingOccurrences(of: #"\u{001B}\[[0-9;]*[A-Za-z]"#, with: "", options: .regularExpression)
         var windows: [UsageQuotaWindow] = []
 
-        let bonus = clean.regexCaptures(pattern: #"Bonus credits:\s*([\d.]+)/([\d.]+)"#)
+        let bonus = clean.regexCaptures(pattern: #"Bonus credits:\s*([\d.,]+)/([\d.,]+)"#)
         if bonus.count >= 3,
-           let used = Double(bonus[1]), let total = Double(bonus[2]), total > 0 {
+           let used = parseNumeric(bonus[1]), let total = parseNumeric(bonus[2]), total > 0 {
             let remainingPercent = max(0, (total - used) / total * 100)
             let days = clean.regexCaptures(pattern: #"expires in (\d+) days"#)
             let resetAt = days.count >= 2 ? Date().addingTimeInterval((Double(days[1]) ?? 0) * 24 * 3600) : nil
@@ -107,9 +107,15 @@ final class KiroProvider: UsageProvider, @unchecked Sendable {
             )
         }
 
-        let credits = clean.regexCaptures(pattern: #"Credits \(([\d.]+) of ([\d.]+)"#)
-        if credits.count >= 3,
-           let used = Double(credits[1]), let total = Double(credits[2]), total > 0 {
+        if let creditsUsage = parseFirstUsagePair(
+            in: clean,
+            patterns: [
+                #"Credits \(([\d.,]+)\s+of\s+([\d.,]+)"#,
+                #"Credits\s+([\d.,]+)\s+used\s*/\s*([\d.,]+)(?:\s+(?:covered\s+in\s+plan|credits?))?"#
+            ]
+        ) {
+            let used = creditsUsage.used
+            let total = creditsUsage.total
             let remainingPercent = max(0, (total - used) / total * 100)
             var resetAt: Date?
             let reset = clean.regexCaptures(pattern: #"resets on (\d{2}/\d{2})"#)
@@ -383,6 +389,27 @@ final class KiroProvider: UsageProvider, @unchecked Sendable {
         guard let value else { return fallback }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    private static func parseFirstUsagePair(in text: String, patterns: [String]) -> (used: Double, total: Double)? {
+        for pattern in patterns {
+            let captures = text.regexCaptures(pattern: pattern)
+            guard captures.count >= 3,
+                  let used = parseNumeric(captures[1]),
+                  let total = parseNumeric(captures[2]),
+                  total > 0 else {
+                continue
+            }
+            return (used: used, total: total)
+        }
+        return nil
+    }
+
+    private static func parseNumeric(_ raw: String) -> Double? {
+        let normalized = raw
+            .replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Double(normalized)
     }
 
     private static func firstEmail(in dictionary: [String: Any]) -> String? {
