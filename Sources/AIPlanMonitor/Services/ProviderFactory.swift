@@ -54,6 +54,12 @@ final class ProviderFactory {
                 keychain: keychain,
                 browserCookieService: browserCookieService
             )
+        case .opencodeGo:
+            return OpenCodeGoProvider(
+                descriptor: descriptor,
+                keychain: keychain,
+                browserCookieService: browserCookieService
+            )
         case .relay, .open, .dragon:
             return RelayProvider(
                 descriptor: descriptor,

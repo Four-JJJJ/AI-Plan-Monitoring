@@ -55,6 +55,7 @@ AI Plan Monitor 解决的是一个很实际的问题：现在 AI 服务的额度
 - Z.ai
 - JetBrains AI
 - Kiro
+- OpenCode Go
 
 ### 2. 第三方站点配置做了模板化
 

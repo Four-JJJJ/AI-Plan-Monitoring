@@ -75,13 +75,14 @@ final class AppConfigTests: XCTestCase {
     func testDefaultProvidersIncludeNewOfficialSourcesWithStableOrder() {
         let ids = AppConfig.default.providers.map(\.id)
         XCTAssertEqual(
-            ids.suffix(5),
+            ids.suffix(6),
             [
                 "kimi-official",
                 "trae-official",
                 "openrouter-credits-official",
                 "openrouter-api-official",
-                "ollama-cloud-official"
+                "ollama-cloud-official",
+                "opencode-go-official"
             ]
         )
 
@@ -111,6 +112,14 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(ollama?.auth.kind, AuthKind.none)
         XCTAssertEqual(ollama?.officialConfig?.sourceMode, .auto)
         XCTAssertEqual(ollama?.officialConfig?.webMode, .autoImport)
+
+        let opencodeGo = AppConfig.default.providers.first(where: { $0.id == "opencode-go-official" })
+        XCTAssertEqual(opencodeGo?.family, .official)
+        XCTAssertEqual(opencodeGo?.type, .opencodeGo)
+        XCTAssertEqual(opencodeGo?.auth.kind, AuthKind.none)
+        XCTAssertEqual(opencodeGo?.officialConfig?.sourceMode, .auto)
+        XCTAssertEqual(opencodeGo?.officialConfig?.webMode, .autoImport)
+        XCTAssertEqual(opencodeGo?.officialConfig?.manualCookieAccount, "official/opencode-go/auth-cookie")
     }
 
     func testDefaultProvidersIncludeMicrosoftCopilotOfficialDescriptor() {

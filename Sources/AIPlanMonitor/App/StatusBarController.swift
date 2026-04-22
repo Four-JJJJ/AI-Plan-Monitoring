@@ -437,6 +437,8 @@ final class StatusBarController: NSObject {
             return "OpenRouter API"
         case .ollamaCloud:
             return "Ollama Cloud"
+        case .opencodeGo:
+            return "OpenCode Go"
         case .relay, .open, .dragon:
             let trimmed = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "API" : trimmed
@@ -769,7 +771,7 @@ final class StatusBarController: NSObject {
             let fallback = NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: "Kimi")
             fallback?.isTemplate = true
             return fallback
-        case .relay, .open, .dragon, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
+        case .relay, .open, .dragon, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo:
             let fallback = NSImage(systemSymbolName: "globe", accessibilityDescription: "Relay")
             fallback?.isTemplate = true
             return fallback
@@ -837,6 +839,8 @@ final class StatusBarController: NSObject {
             return "menu_openrouter_icon"
         case .ollamaCloud:
             return "menu_ollama_icon"
+        case .opencodeGo:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override

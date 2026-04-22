@@ -17,6 +17,7 @@ This page summarizes what AI Plan Monitor can currently monitor and how each ser
 | Z.ai | official API | Session, weekly, and web usage |
 | JetBrains AI | local data | Local XML usage parsing |
 | Kiro | CLI/local output | Credit-based usage |
+| OpenCode Go | opencode.ai web usage + local sqlite fallback | Remote truth first with local fallback when remote fails |
 
 ## Third-Party Relay Templates
 

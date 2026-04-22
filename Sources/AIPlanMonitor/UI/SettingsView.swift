@@ -37,6 +37,7 @@ struct SettingsView: View {
     @State private var officialQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
     @State private var officialTraeValueDisplayModeInputs: [String: OfficialTraeValueDisplayMode] = [:]
     @State private var thirdPartyQuotaDisplayModeInputs: [String: OfficialQuotaDisplayMode] = [:]
+    @State private var officialWorkspaceInputs: [String: String] = [:]
     @State private var officialCookieInputs: [String: String] = [:]
     @State private var codexProfileJSONInputs: [String: String] = [:]
     @State private var codexProfileNoteInputs: [String: String] = [:]
@@ -4558,7 +4559,120 @@ struct SettingsView: View {
         )
 
         VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
-            if provider.type == .trae {
+            if provider.type == .opencodeGo {
+                VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
+                    if supportedWebModes.count > 1 {
+                        officialConfigRow(title: viewModel.text(.sourceMode)) {
+                            officialSegmentControl(
+                                selection: sourceBinding,
+                                options: supportedSourceModes,
+                                label: sourceModeLabel
+                            )
+                        }
+
+                        officialConfigRow(title: viewModel.text(.webMode)) {
+                            officialSegmentControl(
+                                selection: webBinding,
+                                options: supportedWebModes,
+                                label: webModeLabel
+                            )
+                        }
+                    } else {
+                        officialConfigRow(title: viewModel.text(.sourceMode)) {
+                            officialSegmentControl(
+                                selection: sourceBinding,
+                                options: supportedSourceModes,
+                                label: sourceModeLabel
+                            )
+                        }
+                    }
+
+                    officialConfigHintText(officialSourceHintText(for: provider))
+                    officialUsagePreferenceSection(quotaDisplayBinding)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            let hasSavedWorkspaceID = viewModel.hasToken(for: provider)
+                            let savedWorkspaceLength = viewModel.savedTokenLength(for: provider)
+
+                            Text("Workspace ID")
+                                .font(settingsLabelFont)
+                                .foregroundStyle(settingsBodyColor)
+                                .frame(width: 82, alignment: .leading)
+
+                            relayProminentTextField(
+                                hasSavedWorkspaceID
+                                ? maskedSecretDots(length: savedWorkspaceLength)
+                                : viewModel.localizedText("粘贴 wrk_... (必填)", "Paste wrk_... (Required)"),
+                                text: Binding(
+                                    get: { officialWorkspaceInputs[provider.id, default: ""] },
+                                    set: { officialWorkspaceInputs[provider.id] = $0 }
+                                )
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                            settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
+                                let raw = officialWorkspaceInputs[provider.id, default: ""]
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !raw.isEmpty {
+                                    _ = viewModel.saveToken(raw, for: provider)
+                                }
+                                viewModel.updateOfficialProviderSettings(
+                                    providerID: provider.id,
+                                    sourceMode: sourceBinding.wrappedValue,
+                                    webMode: webBinding.wrappedValue,
+                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue
+                                )
+                                officialWorkspaceInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack(spacing: 8) {
+                            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
+                            let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
+
+                            Text("Cookie")
+                                .font(settingsLabelFont)
+                                .foregroundStyle(settingsBodyColor)
+                                .frame(width: 82, alignment: .leading)
+
+                            relayProminentSecureField(
+                                hasSavedManualCookie
+                                ? maskedSecretDots(length: savedManualCookieLength)
+                                : viewModel.localizedText("auth=... (可选，自动导入可留空)", "auth=... (Optional when auto import is enabled)"),
+                                text: Binding(
+                                    get: { officialCookieInputs[provider.id, default: ""] },
+                                    set: { officialCookieInputs[provider.id] = $0 }
+                                )
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                            settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
+                                let raw = officialCookieInputs[provider.id, default: ""]
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !raw.isEmpty {
+                                    _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                                }
+                                viewModel.updateOfficialProviderSettings(
+                                    providerID: provider.id,
+                                    sourceMode: sourceBinding.wrappedValue,
+                                    webMode: webBinding.wrappedValue,
+                                    quotaDisplayMode: quotaDisplayBinding.wrappedValue
+                                )
+                                officialCookieInputs[provider.id] = ""
+                                viewModel.restartPolling()
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else if provider.type == .trae {
                 VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
@@ -6425,6 +6539,12 @@ struct SettingsView: View {
                 "OpenRouter Credits requires a Management Key to read total credit usage from /credits."
             )
         }
+        if provider.type == .opencodeGo {
+            return viewModel.localizedText(
+                "Workspace ID 请从 opencode.ai 的 workspace URL 中复制 wrk_...；Cookie 可开启浏览器自动导入 auth，或手动粘贴。若远端接口 hash 变更，可用环境变量 OPENCODE_USAGE_ENDPOINT_ID 覆盖。",
+                "Copy Workspace ID (wrk_...) from the opencode.ai workspace URL. Cookie can be auto-imported from browser auth or pasted manually. If endpoint hash changes, override with OPENCODE_USAGE_ENDPOINT_ID."
+            )
+        }
         if provider.type == .openrouterAPI {
             return viewModel.localizedText(
                 "OpenRouter API 使用普通 API Key，读取 /key 的 limit 与 remaining。",
@@ -7469,6 +7589,8 @@ struct SettingsView: View {
             return "OpenRouter API"
         case .ollamaCloud:
             return "Ollama Cloud"
+        case .opencodeGo:
+            return "OpenCode Go"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -7506,6 +7628,8 @@ struct SettingsView: View {
             return "menu_openrouter_icon"
         case .ollamaCloud:
             return "menu_ollama_icon"
+        case .opencodeGo:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override
@@ -7558,7 +7682,7 @@ struct SettingsView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .relay, .open, .dragon:
+        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"

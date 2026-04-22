@@ -919,6 +919,8 @@ struct MenuContentView: View {
             return "OpenRouter API"
         case .ollamaCloud:
             return "Ollama Cloud"
+        case .opencodeGo:
+            return "OpenCode Go"
         case .relay, .open, .dragon:
             return provider.name
         }
@@ -957,6 +959,8 @@ struct MenuContentView: View {
             return "menu_openrouter_icon"
         case .ollamaCloud:
             return "menu_ollama_icon"
+        case .opencodeGo:
+            return "menu_relay_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override
@@ -1006,7 +1010,7 @@ struct MenuContentView: View {
             return "terminal.fill"
         case .kimi:
             return "moon.stars.fill"
-        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .relay, .open, .dragon:
+        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo, .relay, .open, .dragon:
             return "link"
         case .claude, .gemini:
             return "sparkles"
@@ -1141,6 +1145,30 @@ struct MenuContentView: View {
                 QuotaMetric(
                     id: "\(provider.id)-placeholder-weekly",
                     title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                )
+            ]
+        case .opencodeGo:
+            return [
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-session",
+                    title: placeholderMetricTitle(viewModel.localizedText("会话", "Session"), provider: provider),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                ),
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-weekly",
+                    title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider),
+                    displayPercent: 0,
+                    healthPercent: 0,
+                    resetAt: nil
+                ),
+                QuotaMetric(
+                    id: "\(provider.id)-placeholder-monthly",
+                    title: placeholderMetricTitle(viewModel.localizedText("月度", "Monthly"), provider: provider),
                     displayPercent: 0,
                     healthPercent: 0,
                     resetAt: nil

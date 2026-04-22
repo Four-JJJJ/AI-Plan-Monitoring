@@ -2331,6 +2331,8 @@ final class AppViewModel {
             return "OpenRouter API"
         case .ollamaCloud:
             return "Ollama Cloud"
+        case .opencodeGo:
+            return "OpenCode Go"
         case .relay, .open, .dragon:
             return descriptor.name
         }
@@ -2880,7 +2882,7 @@ final class AppViewModel {
             await refreshCodexInactiveProfileCardInBackground(descriptor: descriptor)
         case .claude:
             await refreshClaudeInactiveProfileCardInBackground(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo:
             break
         }
     }
@@ -2994,7 +2996,7 @@ final class AppViewModel {
             await refreshCodexProfileCardsAfterManualRefresh(descriptor: descriptor)
         case .claude:
             await refreshClaudeProfileCardsAfterManualRefresh(descriptor: descriptor)
-        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
+        case .relay, .open, .dragon, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo:
             break
         }
     }

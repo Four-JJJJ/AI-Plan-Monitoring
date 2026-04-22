@@ -21,6 +21,7 @@ enum ProviderType: String, Codable, CaseIterable {
     case openrouterCredits
     case openrouterAPI
     case ollamaCloud
+    case opencodeGo
     case relay
     case open
     case dragon
@@ -589,7 +590,8 @@ struct AppConfig: Codable, Equatable {
             .defaultOfficialTrae(),
             .defaultOfficialOpenRouterCredits(),
             .defaultOfficialOpenRouterAPI(),
-            .defaultOfficialOllamaCloud()
+            .defaultOfficialOllamaCloud(),
+            .defaultOfficialOpenCodeGo()
         ]
     )
 
@@ -714,7 +716,7 @@ extension ProviderDescriptor {
         switch type {
         case .relay, .open, .dragon:
             return true
-        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo:
             return false
         }
     }
@@ -727,7 +729,7 @@ extension ProviderDescriptor {
         }
 
         switch copy.type {
-        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud:
+        case .codex, .claude, .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo:
             copy.family = .official
             if copy.officialConfig == nil {
                 copy.officialConfig = Self.defaultOfficialConfig(type: copy.type)
@@ -872,6 +874,8 @@ extension ProviderDescriptor {
             return "https://openrouter.ai/api/v1"
         case .ollamaCloud:
             return "https://ollama.com"
+        case .opencodeGo:
+            return "https://opencode.ai"
         case .relay, .open, .dragon:
             return ""
         }
@@ -986,6 +990,13 @@ extension ProviderDescriptor {
                 sourceMode: .auto,
                 webMode: .autoImport,
                 manualCookieAccount: "official/ollama/session-cookie",
+                autoDiscoveryEnabled: true
+            )
+        case .opencodeGo:
+            return OfficialProviderConfig(
+                sourceMode: .auto,
+                webMode: .autoImport,
+                manualCookieAccount: "official/opencode-go/auth-cookie",
                 autoDiscoveryEnabled: true
             )
         case .relay, .open, .dragon:
@@ -1574,6 +1585,25 @@ extension ProviderDescriptor {
         )
     }
 
+    static func defaultOfficialOpenCodeGo() -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "opencode-go-official",
+            name: "OpenCode Go",
+            family: .official,
+            type: .opencodeGo,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(
+                kind: .none,
+                keychainService: KeychainService.defaultServiceName,
+                keychainAccount: "official/opencode-go/workspace-id"
+            ),
+            baseURL: "https://opencode.ai",
+            officialConfig: defaultOfficialConfig(type: .opencodeGo)
+        )
+    }
+
     static func defaultOpenAilinyu() -> ProviderDescriptor {
         ProviderDescriptor(
             id: "open-ailinyu",
@@ -1706,6 +1736,8 @@ extension ProviderDescriptor {
             return [.auto, .cli]
         case .ollamaCloud:
             return [.auto, .web]
+        case .opencodeGo:
+            return [.auto, .web]
         case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI:
             return [.auto, .api]
         case .relay, .open, .dragon:
@@ -1719,6 +1751,8 @@ extension ProviderDescriptor {
         case .codex, .claude:
             return [.disabled, .autoImport, .manual]
         case .ollamaCloud:
+            return [.disabled, .autoImport, .manual]
+        case .opencodeGo:
             return [.disabled, .autoImport, .manual]
         case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI:
             return [.disabled]
