@@ -576,12 +576,14 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             )
         }
 
+        var parsedSevenDayKeys: [String] = []
         for key in root.keys.sorted() where key.hasPrefix("seven_day_") {
             guard let item = root[key] as? [String: Any],
                   let used = OfficialValueParser.double(item["utilization"] ?? item["used_percent"]) else {
                 continue
             }
-            let title = key.replacingOccurrences(of: "seven_day_", with: "").capitalized
+            parsedSevenDayKeys.append(key)
+            let title = normalizedSevenDayWindowTitle(for: key)
             windows.append(
                 UsageQuotaWindow(
                     id: "\(descriptor.id)-\(key)",
@@ -621,6 +623,16 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         if let extraLimit {
             extras["extraUsageLimit"] = String(format: "%.2f", extraLimit)
         }
+        var rawMeta = extras
+        if !parsedSevenDayKeys.isEmpty {
+            rawMeta["claude.parsedSevenDayKeys"] = parsedSevenDayKeys.joined(separator: ",")
+        }
+        if parsedSevenDayKeys.contains("seven_day_sonnet_only") {
+            rawMeta["claude.window.sonnetOnly"] = "present"
+        }
+        if parsedSevenDayKeys.contains("seven_day_claude_design") {
+            rawMeta["claude.window.claudeDesign"] = "present"
+        }
 
         return UsageSnapshot(
             source: descriptor.id,
@@ -635,7 +647,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             sourceLabel: sourceLabel,
             accountLabel: accountLabel,
             extras: extras,
-            rawMeta: extras
+            rawMeta: rawMeta
         )
     }
 
@@ -666,6 +678,27 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             }
         }
         return parts.joined(separator: " | ")
+    }
+
+    private static func normalizedSevenDayWindowTitle(for key: String) -> String {
+        switch key {
+        case "seven_day_sonnet_only":
+            return "Sonnet only"
+        case "seven_day_claude_design":
+            return "Claude Design"
+        default:
+            let raw = key.replacingOccurrences(of: "seven_day_", with: "")
+            let words = raw
+                .split(separator: "_")
+                .map { segment in
+                    let lower = segment.lowercased()
+                    if lower == "claude" {
+                        return "Claude"
+                    }
+                    return lower.prefix(1).uppercased() + lower.dropFirst()
+                }
+            return words.joined(separator: " ")
+        }
     }
 
     private func merge(primary: UsageSnapshot, overlay: UsageSnapshot, sourceLabel: String) -> UsageSnapshot {

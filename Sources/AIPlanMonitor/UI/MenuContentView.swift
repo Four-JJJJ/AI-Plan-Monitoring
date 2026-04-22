@@ -387,7 +387,7 @@ struct MenuContentView: View {
         // menubar 模型卡入口：官方模型走百分比卡，第三方走余额卡。
         if provider.family == .official || provider.type == .kimi {
             let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
-            let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+            let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
             let disconnected = error != nil
             let status = percentageStatus(metrics: visibleMetrics, snapshot: snapshot, disconnected: disconnected)
             let hasErrorState = disconnected || (snapshot?.valueFreshness == .empty && snapshot?.fetchHealth != .ok)
@@ -442,7 +442,7 @@ struct MenuContentView: View {
     ) -> some View {
         // Codex 多账号卡片样式（激活账号左侧绿条）。
         let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
-        let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+        let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
         let showsSwitchAction = !slot.isActive && slot.canSwitch
 
         return PercentageModelCard(
@@ -481,7 +481,7 @@ struct MenuContentView: View {
 
     private func claudeSlotCard(_ slot: ClaudeSlotViewModel, provider: ProviderDescriptor) -> some View {
         let metrics = quotaMetrics(provider: provider, snapshot: slot.snapshot)
-        let visibleMetrics = Array((metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics).prefix(2))
+        let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
         let showsSwitchAction = !slot.isActive && slot.canSwitch
 
         return PercentageModelCard(
@@ -569,6 +569,15 @@ struct MenuContentView: View {
         }
     }
 
+    private func visibleQuotaMetrics(provider: ProviderDescriptor, metrics: [QuotaMetric]) -> [QuotaMetric] {
+        let source = metrics.isEmpty ? placeholderQuotaMetrics(provider: provider) : metrics
+        return Array(source.prefix(preferredMetricCount(for: provider)))
+    }
+
+    private func preferredMetricCount(for provider: ProviderDescriptor) -> Int {
+        provider.type == .claude ? 4 : 2
+    }
+
     private func buildPercentageMetricDisplays(
         from metrics: [QuotaMetric],
         provider: ProviderDescriptor,
@@ -576,25 +585,37 @@ struct MenuContentView: View {
         disconnected: Bool
     ) -> [PercentageMetricDisplay] {
         metrics.map { metric in
-            let percent = disconnected ? nil : metric.displayPercent
+            let percent = (disconnected || !metric.isAvailable) ? nil : metric.displayPercent
             let displayPercent = percent.map { Int($0.rounded()) }
             let valueText: String
             if disconnected {
                 valueText = "-"
+            } else if let valueTextOverride = metric.valueTextOverride {
+                valueText = valueTextOverride
             } else if traeDisplaysAmount(provider),
                       let amount = traeRemainingAmountText(for: metric, snapshot: snapshot) {
                 valueText = amount
             } else {
                 valueText = displayPercent.map { "\($0)%" } ?? "-"
             }
-            let resetLabel = disconnected ? "-" : Self.countdownText(to: metric.resetAt, now: now)
+            let resetLabel: String
+            if disconnected {
+                resetLabel = "-"
+            } else if !metric.isAvailable {
+                resetLabel = "-"
+            } else {
+                resetLabel = Self.countdownText(to: metric.resetAt, now: now)
+            }
             return PercentageMetricDisplay(
                 id: metric.id,
                 title: metric.title,
                 valueText: valueText,
                 resetText: resetLabel,
                 percent: (displayPercent ?? 0) > 0 ? percent : 0,
-                barColor: percentageBarColor(metric.healthPercent, displayPercent: Int(metric.healthPercent.rounded()))
+                barColor: percentageBarColor(
+                    metric.healthPercent,
+                    displayPercent: metric.healthPercent.map { Int($0.rounded()) }
+                )
             )
         }
     }
@@ -632,7 +653,12 @@ struct MenuContentView: View {
             return CardStatus(text: disconnectedStatusText, color: errorColor)
         }
 
-        let displayedMinimum = metrics.map { Int($0.healthPercent.rounded()) }.min() ?? 0
+        let availableHealthPercents = metrics
+            .compactMap(\.healthPercent)
+            .map { Int($0.rounded()) }
+        guard let displayedMinimum = availableHealthPercents.min() else {
+            return CardStatus(text: viewModel.text(.statusTight), color: warningColor)
+        }
         if displayedMinimum <= 0 {
             return CardStatus(text: viewModel.text(.statusExhausted), color: errorColor)
         }
@@ -914,8 +940,10 @@ struct MenuContentView: View {
             return "menu_kimi_icon"
         case .trae:
             return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
-            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI:
+            return "menu_openrouter_icon"
+        case .ollamaCloud:
+            return "menu_ollama_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override
@@ -991,6 +1019,9 @@ struct MenuContentView: View {
     private func quotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [QuotaMetric] {
         guard let snapshot else { return [] }
         if !snapshot.quotaWindows.isEmpty {
+            if provider.type == .claude {
+                return claudeQuotaMetrics(provider: provider, snapshot: snapshot)
+            }
             return snapshot.quotaWindows
                 .sorted { metricRank($0.kind) < metricRank($1.kind) }
                 .map {
@@ -1009,7 +1040,9 @@ struct MenuContentView: View {
 
     private func placeholderQuotaMetrics(provider: ProviderDescriptor) -> [QuotaMetric] {
         switch provider.type {
-        case .codex, .claude, .kimi:
+        case .claude:
+            return claudePlaceholderQuotaMetrics(provider: provider)
+        case .codex, .kimi:
             return [
                 QuotaMetric(id: "\(provider.id)-placeholder-5h", title: placeholderMetricTitle(viewModel.text(.quotaFiveHour), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil),
                 QuotaMetric(id: "\(provider.id)-placeholder-weekly", title: placeholderMetricTitle(viewModel.text(.quotaWeekly), provider: provider), displayPercent: 0, healthPercent: 0, resetAt: nil)
@@ -1103,6 +1136,118 @@ struct MenuContentView: View {
         case .relay, .open, .dragon:
             return []
         }
+    }
+
+    private func claudePlaceholderQuotaMetrics(provider: ProviderDescriptor) -> [QuotaMetric] {
+        [
+            QuotaMetric(
+                id: "\(provider.id)-placeholder-session",
+                title: placeholderMetricTitle(viewModel.text(.quotaFiveHour), provider: provider),
+                displayPercent: 0,
+                healthPercent: 0,
+                resetAt: nil
+            ),
+            QuotaMetric(
+                id: "\(provider.id)-placeholder-weekly-all",
+                title: placeholderMetricTitle(viewModel.localizedText("全部模型", "All models"), provider: provider),
+                displayPercent: 0,
+                healthPercent: 0,
+                resetAt: nil
+            ),
+            QuotaMetric(
+                id: "\(provider.id)-placeholder-weekly-sonnet",
+                title: placeholderMetricTitle(viewModel.localizedText("Sonnet 专用", "Sonnet only"), provider: provider),
+                displayPercent: 0,
+                healthPercent: nil,
+                resetAt: nil,
+                isAvailable: false,
+                valueTextOverride: "N/A"
+            ),
+            QuotaMetric(
+                id: "\(provider.id)-placeholder-weekly-design",
+                title: placeholderMetricTitle(viewModel.localizedText("Claude Design", "Claude Design"), provider: provider),
+                displayPercent: 0,
+                healthPercent: nil,
+                resetAt: nil,
+                isAvailable: false,
+                valueTextOverride: "N/A"
+            )
+        ]
+    }
+
+    private func claudeQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot) -> [QuotaMetric] {
+        let windows = snapshot.quotaWindows
+        return [
+            claudeMetric(
+                provider: provider,
+                id: "\(provider.id)-session",
+                title: viewModel.text(.quotaFiveHour),
+                window: windows.first(where: { $0.kind == .session })
+            ),
+            claudeMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-all",
+                title: viewModel.localizedText("全部模型", "All models"),
+                window: windows.first(where: { $0.kind == .weekly })
+            ),
+            claudeMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-sonnet",
+                title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
+                window: windows.first(where: isClaudeSonnetWindow(_:))
+            ),
+            claudeMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-design",
+                title: viewModel.localizedText("Claude Design", "Claude Design"),
+                window: windows.first(where: isClaudeDesignWindow(_:))
+            )
+        ]
+    }
+
+    private func claudeMetric(
+        provider: ProviderDescriptor,
+        id: String,
+        title: String,
+        window: UsageQuotaWindow?
+    ) -> QuotaMetric {
+        let displayTitle = placeholderMetricTitle(title, provider: provider)
+        guard let window else {
+            return QuotaMetric(
+                id: id,
+                title: displayTitle,
+                displayPercent: 0,
+                healthPercent: nil,
+                resetAt: nil,
+                isAvailable: false,
+                valueTextOverride: "N/A"
+            )
+        }
+
+        let displayPercent = provider.displaysUsedQuota
+            ? clamp(window.usedPercent)
+            : clamp(window.remainingPercent)
+        return QuotaMetric(
+            id: id,
+            title: displayTitle,
+            displayPercent: displayPercent,
+            healthPercent: clamp(window.remainingPercent),
+            resetAt: window.resetAt
+        )
+    }
+
+    private func isClaudeSonnetWindow(_ window: UsageQuotaWindow) -> Bool {
+        let normalizedID = window.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedID.contains("sonnet")
+            || normalizedTitle.contains("sonnet")
+    }
+
+    private func isClaudeDesignWindow(_ window: UsageQuotaWindow) -> Bool {
+        let normalizedID = window.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedID.contains("design")
+            || normalizedTitle.contains("design")
     }
 
     private func metricRank(_ kind: UsageQuotaKind) -> Int {
@@ -1285,10 +1430,23 @@ private struct PercentageModelCard: View {
                 }
             }
 
-            HStack(spacing: 24) {
-                ForEach(metrics) { metric in
-                    PercentageMetricView(metric: metric)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            if metrics.count > 2 {
+                VStack(spacing: 8) {
+                    ForEach(0..<2, id: \.self) { row in
+                        HStack(spacing: 24) {
+                            ForEach(metricsForRow(row), id: \.id) { metric in
+                                PercentageMetricView(metric: metric)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                }
+            } else {
+                HStack(spacing: 24) {
+                    ForEach(metrics) { metric in
+                        PercentageMetricView(metric: metric)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
 
@@ -1346,6 +1504,13 @@ private struct PercentageModelCard: View {
 
     private var hasBorder: Bool {
         highlightColor != nil || isDisconnected
+    }
+
+    private func metricsForRow(_ row: Int) -> [PercentageMetricDisplay] {
+        let start = row * 2
+        guard start < metrics.count else { return [] }
+        let end = min(start + 2, metrics.count)
+        return Array(metrics[start..<end])
     }
 }
 
@@ -1728,8 +1893,28 @@ private struct QuotaMetric: Identifiable {
     let id: String
     let title: String
     let displayPercent: Double
-    let healthPercent: Double
+    let healthPercent: Double?
     let resetAt: Date?
+    let isAvailable: Bool
+    let valueTextOverride: String?
+
+    init(
+        id: String,
+        title: String,
+        displayPercent: Double,
+        healthPercent: Double?,
+        resetAt: Date?,
+        isAvailable: Bool = true,
+        valueTextOverride: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.displayPercent = displayPercent
+        self.healthPercent = healthPercent
+        self.resetAt = resetAt
+        self.isAvailable = isAvailable
+        self.valueTextOverride = valueTextOverride
+    }
 }
 
 private extension Color {

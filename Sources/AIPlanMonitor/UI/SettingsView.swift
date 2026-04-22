@@ -197,8 +197,9 @@ struct SettingsView: View {
         var title: String
         var valueText: String
         var resetText: String
-        var percent: Double
+        var percent: Double?
         var barColor: Color
+        var isAvailable: Bool = true
     }
 
     private struct OfficialDetailedDataRow: Identifiable {
@@ -2565,7 +2566,7 @@ struct SettingsView: View {
         snapshot: UsageSnapshot?,
         error: String?
     ) -> some View {
-        let status = codexSlotStatus(snapshot: snapshot)
+        let status = codexSlotStatus(provider: provider, snapshot: snapshot)
         let metrics = codexQuotaMetrics(provider: provider, snapshot: snapshot)
         let subtitle = officialMonitorSubtitle(snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: provider.type, snapshot: snapshot)
@@ -2610,12 +2611,10 @@ struct SettingsView: View {
                 }
                 .frame(height: 24)
 
-                HStack(spacing: 24) {
-                    ForEach(metrics.prefix(2)) { metric in
-                        codexQuotaMetricView(metric)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                quotaMetricLayout(
+                    metrics: metrics,
+                    twoByTwo: provider.type == .claude
+                )
                 .padding(.top, 8)
 
                 if let error, !error.isEmpty {
@@ -4930,7 +4929,7 @@ struct SettingsView: View {
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
-        let status = codexSlotStatus(snapshot: snapshot)
+        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
         let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .codex, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
@@ -4979,13 +4978,8 @@ struct SettingsView: View {
                 }
                 .frame(height: 24)
 
-                HStack(spacing: 24) {
-                    ForEach(metrics.prefix(2)) { metric in
-                        codexQuotaMetricView(metric)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(.top, 8)
+                quotaMetricLayout(metrics: metrics, twoByTwo: false)
+                    .padding(.top, 8)
 
                 if hasError, let note = snapshot?.note, !note.isEmpty {
                     Text(note)
@@ -5147,7 +5141,7 @@ struct SettingsView: View {
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
-        let status = codexSlotStatus(snapshot: snapshot)
+        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
         let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .claude, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
@@ -5188,13 +5182,8 @@ struct SettingsView: View {
                 }
                 .frame(height: 24)
 
-                HStack(spacing: 24) {
-                    ForEach(metrics.prefix(2)) { metric in
-                        codexQuotaMetricView(metric)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(.top, 8)
+                quotaMetricLayout(metrics: metrics, twoByTwo: true)
+                    .padding(.top, 8)
 
                 Text(claudeProfileSourceHint(profile))
                     .font(.system(size: 10, weight: .regular))
@@ -5460,6 +5449,39 @@ struct SettingsView: View {
         return editor.isNewSlot ? "Add \(editor.title) credentials" : "Edit \(editor.title) credentials"
     }
 
+    @ViewBuilder
+    private func quotaMetricLayout(
+        metrics: [CodexQuotaMetricDisplay],
+        twoByTwo: Bool
+    ) -> some View {
+        if twoByTwo {
+            VStack(spacing: 8) {
+                ForEach(0..<2, id: \.self) { row in
+                    HStack(spacing: 24) {
+                        ForEach(metricsForRow(metrics: metrics, row: row), id: \.id) { metric in
+                            codexQuotaMetricView(metric)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        } else {
+            HStack(spacing: 24) {
+                ForEach(metrics.prefix(2)) { metric in
+                    codexQuotaMetricView(metric)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private func metricsForRow(metrics: [CodexQuotaMetricDisplay], row: Int) -> [CodexQuotaMetricDisplay] {
+        let start = row * 2
+        guard start < metrics.count else { return [] }
+        let end = min(start + 2, metrics.count)
+        return Array(metrics[start..<end])
+    }
+
     private func codexQuotaMetricView(_ metric: CodexQuotaMetricDisplay) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -5511,9 +5533,11 @@ struct SettingsView: View {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Color.white.opacity(0.30))
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(metric.barColor)
-                            .frame(width: max(1, proxy.size.width * metric.percent / 100))
+                        if let percent = metric.percent, percent > 0 {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(metric.barColor)
+                                .frame(width: max(1, proxy.size.width * percent / 100))
+                        }
                     }
                 }
                 .frame(height: 4)
@@ -5723,7 +5747,7 @@ struct SettingsView: View {
         return String(trimmed.prefix(8)).lowercased()
     }
 
-    private func codexSlotStatus(snapshot: UsageSnapshot?) -> (text: String, color: Color) {
+    private func codexSlotStatus(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> (text: String, color: Color) {
         guard let snapshot else {
             return (viewModel.language == .zhHans ? "未知" : "Unknown", settingsHintColor)
         }
@@ -5742,7 +5766,10 @@ struct SettingsView: View {
             }
         }
 
-        let minimum = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot).map(\.percent).min() ?? 0
+        let availablePercents = codexQuotaMetrics(provider: provider, snapshot: snapshot).compactMap(\.percent)
+        guard let minimum = availablePercents.min() else {
+            return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
+        }
         if minimum > 30 {
             return (viewModel.text(.statusSufficient), Color(hex: 0x69BD64))
         }
@@ -5753,6 +5780,13 @@ struct SettingsView: View {
     }
 
     private func codexQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [CodexQuotaMetricDisplay] {
+        if provider.type == .claude {
+            if let snapshot, !snapshot.quotaWindows.isEmpty {
+                return claudeCodexQuotaMetrics(provider: provider, snapshot: snapshot)
+            }
+            return claudeCodexQuotaPlaceholderMetrics(provider: provider)
+        }
+
         let windows: [UsageQuotaWindow]
         if let snapshot, !snapshot.quotaWindows.isEmpty {
             windows = snapshot.quotaWindows
@@ -5881,24 +5915,149 @@ struct SettingsView: View {
 
         return windows.prefix(2).map { window in
             let clamped = max(0, min(100, window.remainingPercent))
-            let barColor: Color
-            if clamped > 30 {
-                barColor = Color(hex: 0x69BD64)
-            } else if clamped > 10 {
-                barColor = Color(hex: 0xE88B2D)
-            } else {
-                barColor = Color(hex: 0xD05757)
-            }
-
             return CodexQuotaMetricDisplay(
                 id: window.id,
                 title: codexQuotaDisplayTitle(window, provider: provider),
                 valueText: codexQuotaValueText(window: window, provider: provider, snapshot: snapshot, percent: clamped),
                 resetText: codexResetCountdownText(to: window.resetAt),
                 percent: clamped,
-                barColor: barColor
+                barColor: codexQuotaBarColor(remainingPercent: clamped)
             )
         }
+    }
+
+    private func claudeCodexQuotaPlaceholderMetrics(provider: ProviderDescriptor) -> [CodexQuotaMetricDisplay] {
+        [
+            CodexQuotaMetricDisplay(
+                id: "\(provider.id)-placeholder-session",
+                title: viewModel.text(.quotaFiveHour),
+                valueText: "0%",
+                resetText: codexResetCountdownText(to: nil),
+                percent: 0,
+                barColor: codexQuotaBarColor(remainingPercent: 0)
+            ),
+            CodexQuotaMetricDisplay(
+                id: "\(provider.id)-placeholder-weekly-all",
+                title: viewModel.localizedText("全部模型", "All models"),
+                valueText: "0%",
+                resetText: codexResetCountdownText(to: nil),
+                percent: 0,
+                barColor: codexQuotaBarColor(remainingPercent: 0)
+            ),
+            CodexQuotaMetricDisplay(
+                id: "\(provider.id)-placeholder-weekly-sonnet",
+                title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
+                valueText: "N/A",
+                resetText: codexResetCountdownText(to: nil),
+                percent: nil,
+                barColor: .clear,
+                isAvailable: false
+            ),
+            CodexQuotaMetricDisplay(
+                id: "\(provider.id)-placeholder-weekly-design",
+                title: viewModel.localizedText("Claude Design", "Claude Design"),
+                valueText: "N/A",
+                resetText: codexResetCountdownText(to: nil),
+                percent: nil,
+                barColor: .clear,
+                isAvailable: false
+            )
+        ]
+    }
+
+    private func claudeCodexQuotaMetrics(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot
+    ) -> [CodexQuotaMetricDisplay] {
+        let windows = snapshot.quotaWindows
+        return [
+            claudeCodexQuotaMetric(
+                provider: provider,
+                id: "\(provider.id)-session",
+                title: viewModel.text(.quotaFiveHour),
+                window: windows.first(where: { $0.kind == .session }),
+                snapshot: snapshot
+            ),
+            claudeCodexQuotaMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-all",
+                title: viewModel.localizedText("全部模型", "All models"),
+                window: windows.first(where: { $0.kind == .weekly }),
+                snapshot: snapshot
+            ),
+            claudeCodexQuotaMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-sonnet",
+                title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
+                window: windows.first(where: isClaudeSonnetWindow(_:)),
+                snapshot: snapshot
+            ),
+            claudeCodexQuotaMetric(
+                provider: provider,
+                id: "\(provider.id)-weekly-design",
+                title: viewModel.localizedText("Claude Design", "Claude Design"),
+                window: windows.first(where: isClaudeDesignWindow(_:)),
+                snapshot: snapshot
+            )
+        ]
+    }
+
+    private func claudeCodexQuotaMetric(
+        provider: ProviderDescriptor,
+        id: String,
+        title: String,
+        window: UsageQuotaWindow?,
+        snapshot: UsageSnapshot
+    ) -> CodexQuotaMetricDisplay {
+        guard let window else {
+            return CodexQuotaMetricDisplay(
+                id: id,
+                title: title,
+                valueText: "N/A",
+                resetText: codexResetCountdownText(to: nil),
+                percent: nil,
+                barColor: .clear,
+                isAvailable: false
+            )
+        }
+
+        let clamped = max(0, min(100, window.remainingPercent))
+        return CodexQuotaMetricDisplay(
+            id: id,
+            title: title,
+            valueText: codexQuotaValueText(window: window, provider: provider, snapshot: snapshot, percent: clamped),
+            resetText: codexResetCountdownText(to: window.resetAt),
+            percent: clamped,
+            barColor: codexQuotaBarColor(remainingPercent: clamped),
+            isAvailable: true
+        )
+    }
+
+    private func codexQuotaBarColor(remainingPercent: Double?) -> Color {
+        guard let remainingPercent else {
+            return .clear
+        }
+        if remainingPercent > 30 {
+            return Color(hex: 0x69BD64)
+        }
+        if remainingPercent > 10 {
+            return Color(hex: 0xE88B2D)
+        }
+        return Color(hex: 0xD05757)
+    }
+
+    private func isClaudeSonnetWindow(_ window: UsageQuotaWindow) -> Bool {
+        let normalizedID = window.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedID.contains("sonnet")
+            || normalizedTitle.contains("sonnet")
+    }
+
+    private func isClaudeDesignWindow(_ window: UsageQuotaWindow) -> Bool {
+        let normalizedID = window.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedID.contains("design")
+            || normalizedTitle.contains("design")
     }
 
     private func codexQuotaDisplayTitle(_ window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
@@ -7095,8 +7254,10 @@ struct SettingsView: View {
             return "menu_kimi_icon"
         case .trae:
             return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
-            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI:
+            return "menu_openrouter_icon"
+        case .ollamaCloud:
+            return "menu_ollama_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override

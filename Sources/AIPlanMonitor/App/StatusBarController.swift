@@ -816,8 +816,10 @@ final class StatusBarController: NSObject {
             return "menu_kimi_icon"
         case .trae:
             return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI, .ollamaCloud:
-            return "menu_relay_icon"
+        case .openrouterCredits, .openrouterAPI:
+            return "menu_openrouter_icon"
+        case .ollamaCloud:
+            return "menu_ollama_icon"
         case .relay, .open, .dragon:
             if let override = relayModelIconOverrideName(for: provider) {
                 return override

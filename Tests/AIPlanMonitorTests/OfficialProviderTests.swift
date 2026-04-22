@@ -450,6 +450,32 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.extras["extraUsageLimit"], "5000.00")
     }
 
+    func testClaudeOAuthResponseNormalizesKnownModelWindowTitles() throws {
+        let root: [String: Any] = [
+            "five_hour": ["utilization": 10, "resets_at": "2026-04-11T10:00:00Z"],
+            "seven_day": ["utilization": 20, "resets_at": "2026-04-17T00:00:00Z"],
+            "seven_day_sonnet_only": ["utilization": 12, "resets_at": "2026-04-17T12:00:00Z"],
+            "seven_day_claude_design": ["utilization": 34, "resets_at": "2026-04-19T23:00:00Z"]
+        ]
+
+        let snapshot = try ClaudeProvider.parseClaudeSnapshot(
+            root: root,
+            descriptor: ProviderDescriptor.defaultOfficialClaude(),
+            sourceLabel: "API",
+            accountLabel: nil,
+            planHint: "max"
+        )
+
+        XCTAssertNotNil(snapshot.quotaWindows.first(where: { $0.title == "Sonnet only" }))
+        XCTAssertNotNil(snapshot.quotaWindows.first(where: { $0.title == "Claude Design" }))
+        XCTAssertEqual(
+            snapshot.rawMeta["claude.parsedSevenDayKeys"],
+            "seven_day_claude_design,seven_day_sonnet_only"
+        )
+        XCTAssertEqual(snapshot.rawMeta["claude.window.sonnetOnly"], "present")
+        XCTAssertEqual(snapshot.rawMeta["claude.window.claudeDesign"], "present")
+    }
+
     func testClaudeOAuthResponseParsesFractionalSecondResetDate() throws {
         let root: [String: Any] = [
             "five_hour": ["utilization": 30, "resets_at": "2026-04-11T10:00:00.123Z"],
