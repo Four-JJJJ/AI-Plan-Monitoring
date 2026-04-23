@@ -176,6 +176,183 @@ final class TraeProviderTests: XCTestCase {
         )
     }
 
+    func testFetchWithSavedTokenDoesNotReadBrowserCandidates() async throws {
+        let keychain = KeychainService()
+        let service = "AIPlanMonitorTests-Trae-\(UUID().uuidString)"
+        let account = "official/trae/cloud-ide-jwt-\(UUID().uuidString)"
+        XCTAssertTrue(keychain.saveToken("saved.jwt.token", service: service, account: account))
+
+        var descriptor = ProviderDescriptor.defaultOfficialTrae()
+        descriptor.auth = AuthConfig(kind: .bearer, keychainService: service, keychainAccount: account)
+        descriptor.officialConfig?.sourceMode = .auto
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TraeMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        TraeMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Cloud-IDE-JWT saved.jwt.token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(Self.successBody.utf8))
+        }
+        defer { TraeMockURLProtocol.requestHandler = nil }
+
+        let spy = TraeBrowserCandidateSpy()
+        let provider = TraeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: spy.candidates(host:),
+                cacheTTL: 0
+            )
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(snapshot.sourceLabel, "API")
+        XCTAssertTrue(spy.calls.isEmpty)
+    }
+
+    func testFetchRefreshesSavedTokenFromBrowserCandidateAfterUnauthorized() async throws {
+        let keychain = KeychainService()
+        let service = "AIPlanMonitorTests-Trae-\(UUID().uuidString)"
+        let account = "official/trae/cloud-ide-jwt-\(UUID().uuidString)"
+        XCTAssertTrue(keychain.saveToken("expired.jwt.token", service: service, account: account))
+
+        var descriptor = ProviderDescriptor.defaultOfficialTrae()
+        descriptor.auth = AuthConfig(kind: .bearer, keychainService: service, keychainAccount: account)
+        descriptor.officialConfig?.sourceMode = .auto
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TraeMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        var authorizations: [String] = []
+
+        TraeMockURLProtocol.requestHandler = { request in
+            let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            authorizations.append(auth)
+            if auth == "Cloud-IDE-JWT expired.jwt.token" {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"msg":"unauthorized"}"#.utf8))
+            }
+            XCTAssertEqual(auth, "Cloud-IDE-JWT fresh.jwt.token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(Self.successBody.utf8))
+        }
+        defer { TraeMockURLProtocol.requestHandler = nil }
+
+        let spy = TraeBrowserCandidateSpy(
+            candidatesByHost: [
+                "trae.ai": [BrowserDetectedCredential(value: "fresh.jwt.token", source: "Chrome:localStorage")]
+            ]
+        )
+        let provider = TraeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: spy.candidates(host:),
+                cacheTTL: 0
+            )
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(authorizations, [
+            "Cloud-IDE-JWT expired.jwt.token",
+            "Cloud-IDE-JWT fresh.jwt.token"
+        ])
+        XCTAssertEqual(snapshot.authSourceLabel, "Chrome:localStorage:trae.ai")
+        XCTAssertEqual(keychain.readToken(service: service, account: account), "fresh.jwt.token")
+    }
+
+    func testFetchUsesBrowserCandidateWhenSavedTokenMissing() async throws {
+        let keychain = KeychainService()
+        let service = "AIPlanMonitorTests-Trae-\(UUID().uuidString)"
+        let account = "official/trae/cloud-ide-jwt-\(UUID().uuidString)"
+
+        var descriptor = ProviderDescriptor.defaultOfficialTrae()
+        descriptor.auth = AuthConfig(kind: .bearer, keychainService: service, keychainAccount: account)
+        descriptor.officialConfig?.sourceMode = .auto
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TraeMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        TraeMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Cloud-IDE-JWT fresh.jwt.token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(Self.successBody.utf8))
+        }
+        defer { TraeMockURLProtocol.requestHandler = nil }
+
+        let spy = TraeBrowserCandidateSpy(
+            candidatesByHost: [
+                "trae.ai": [BrowserDetectedCredential(value: "Cloud-IDE-JWT fresh.jwt.token", source: "Arc:localStorage")]
+            ]
+        )
+        let provider = TraeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: spy.candidates(host:),
+                cacheTTL: 0
+            )
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(snapshot.authSourceLabel, "Arc:localStorage:trae.ai")
+        XCTAssertEqual(keychain.readToken(service: service, account: account), "fresh.jwt.token")
+    }
+
+    func testFetchReturnsUnauthorizedDetailWhenSavedAndBrowserCandidatesFail() async throws {
+        let keychain = KeychainService()
+        let service = "AIPlanMonitorTests-Trae-\(UUID().uuidString)"
+        let account = "official/trae/cloud-ide-jwt-\(UUID().uuidString)"
+        XCTAssertTrue(keychain.saveToken("expired.jwt.token", service: service, account: account))
+
+        var descriptor = ProviderDescriptor.defaultOfficialTrae()
+        descriptor.auth = AuthConfig(kind: .bearer, keychainService: service, keychainAccount: account)
+        descriptor.officialConfig?.sourceMode = .auto
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TraeMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        TraeMockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"msg":"unauthorized"}"#.utf8))
+        }
+        defer { TraeMockURLProtocol.requestHandler = nil }
+
+        let spy = TraeBrowserCandidateSpy(
+            candidatesByHost: [
+                "trae.ai": [BrowserDetectedCredential(value: "fresh.jwt.token", source: "Chrome:localStorage")]
+            ]
+        )
+        let provider = TraeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: spy.candidates(host:),
+                cacheTTL: 0
+            )
+        )
+
+        do {
+            _ = try await provider.fetch(forceRefresh: false)
+            XCTFail("Expected unauthorizedDetail")
+        } catch let error as ProviderError {
+            guard case .unauthorizedDetail(let message) = error else {
+                return XCTFail("Expected unauthorizedDetail, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Trae SOLO Authorization 已失效"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testNormalizeTokenAcceptsCloudIDEAndBearerPrefix() {
         let jwt = "aaa.bbb.ccc"
 
@@ -204,7 +381,7 @@ final class TraeProviderTests: XCTestCase {
         var descriptor = ProviderDescriptor.defaultOfficialTrae()
         descriptor.auth = AuthConfig(kind: .bearer, keychainService: service, keychainAccount: account)
         descriptor.baseURL = "https://api-sg-central.trae.ai"
-        descriptor.officialConfig?.sourceMode = .auto
+        descriptor.officialConfig?.sourceMode = .api
 
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [TraeMockURLProtocol.self]
@@ -233,6 +410,45 @@ final class TraeProviderTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)", file: file, line: line)
         }
+    }
+
+    private static let successBody = """
+    {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "user_entitlement_pack_list": [
+          {
+            "display_desc": "Trae SOLO Pro",
+            "usage": {
+              "basic_usage_amount": 12.5,
+              "auto_completion_usage": 8
+            },
+            "entitlement_base_info": {
+              "end_time": 1776787199,
+              "quota": {
+                "basic_usage_limit": 100,
+                "auto_completion_limit": 50
+              }
+            }
+          }
+        ]
+      }
+    }
+    """
+}
+
+private final class TraeBrowserCandidateSpy {
+    var calls: [String] = []
+    var candidatesByHost: [String: [BrowserDetectedCredential]]
+
+    init(candidatesByHost: [String: [BrowserDetectedCredential]] = [:]) {
+        self.candidatesByHost = candidatesByHost
+    }
+
+    func candidates(host: String) -> [BrowserDetectedCredential] {
+        calls.append(host)
+        return candidatesByHost[host] ?? []
     }
 }
 

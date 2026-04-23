@@ -388,9 +388,10 @@ struct MenuContentView: View {
         if provider.family == .official || provider.type == .kimi {
             let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
             let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
-            let disconnected = error != nil
+            let stale = snapshot?.valueFreshness == .cachedFallback
+            let disconnected = error != nil && !stale
             let status = percentageStatus(metrics: visibleMetrics, snapshot: snapshot, disconnected: disconnected)
-            let hasErrorState = disconnected || (snapshot?.valueFreshness == .empty && snapshot?.fetchHealth != .ok)
+            let hasErrorState = disconnected || stale || (snapshot?.valueFreshness == .empty && snapshot?.fetchHealth != .ok)
 
             PercentageModelCard(
                 title: displayName(for: provider),
@@ -647,6 +648,10 @@ struct MenuContentView: View {
     }
 
     private func percentageStatus(metrics: [QuotaMetric], snapshot: UsageSnapshot?, disconnected: Bool) -> CardStatus {
+        if let snapshot, snapshot.valueFreshness == .cachedFallback {
+            return cachedRelayStatus(fetchHealth: snapshot.fetchHealth)
+        }
+
         if let snapshot, snapshot.valueFreshness == .empty {
             switch snapshot.fetchHealth {
             case .authExpired:
@@ -725,15 +730,36 @@ struct MenuContentView: View {
     private func cachedRelayStatus(fetchHealth: FetchHealth) -> CardStatus {
         switch fetchHealth {
         case .authExpired:
-            return CardStatus(text: localizedRelayState(authExpired: true, cached: true), color: errorColor)
+            return CardStatus(text: Self.cachedFetchHealthStatusText(fetchHealth, language: viewModel.language), color: errorColor)
         case .endpointMisconfigured:
-            return CardStatus(text: localizedRelayState(configIssue: true, cached: true), color: errorColor)
+            return CardStatus(text: Self.cachedFetchHealthStatusText(fetchHealth, language: viewModel.language), color: errorColor)
         case .rateLimited:
-            return CardStatus(text: localizedRelayState(rateLimited: true, cached: true), color: warningColor)
+            return CardStatus(text: Self.cachedFetchHealthStatusText(fetchHealth, language: viewModel.language), color: warningColor)
         case .unreachable:
-            return CardStatus(text: localizedRelayState(cached: true), color: warningColor)
+            return CardStatus(text: Self.cachedFetchHealthStatusText(fetchHealth, language: viewModel.language), color: warningColor)
         case .ok:
-            return CardStatus(text: localizedRelayState(cached: true), color: warningColor)
+            return CardStatus(text: Self.cachedFetchHealthStatusText(fetchHealth, language: viewModel.language), color: warningColor)
+        }
+    }
+
+    nonisolated static func cachedFetchHealthStatusText(_ health: FetchHealth, language: AppLanguage) -> String {
+        switch (language, health) {
+        case (.zhHans, .authExpired):
+            return "认证失效(缓存)"
+        case (.zhHans, .endpointMisconfigured):
+            return "配置异常(缓存)"
+        case (.zhHans, .rateLimited):
+            return "限流回退"
+        case (.zhHans, .unreachable), (.zhHans, .ok):
+            return "缓存回退"
+        case (.en, .authExpired):
+            return "Auth Expired (Cached)"
+        case (.en, .endpointMisconfigured):
+            return "Config Issue (Cached)"
+        case (.en, .rateLimited):
+            return "Rate Limited (Cached)"
+        case (.en, .unreachable), (.en, .ok):
+            return "Cached Fallback"
         }
     }
 

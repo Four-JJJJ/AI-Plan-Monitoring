@@ -9,12 +9,13 @@ final class ProviderFactory {
     init(
         keychain: KeychainService,
         kimiCookieService: KimiBrowserCookieService = KimiBrowserCookieService(),
-        browserCookieService: BrowserCookieService = BrowserCookieService()
+        browserCookieService: BrowserCookieService = BrowserCookieService(),
+        browserCredentialService: BrowserCredentialService? = nil
     ) {
         self.keychain = keychain
         self.kimiCookieService = kimiCookieService
         self.browserCookieService = browserCookieService
-        self.browserCredentialService = BrowserCredentialService(
+        self.browserCredentialService = browserCredentialService ?? BrowserCredentialService(
             bearerService: kimiCookieService,
             cookieService: browserCookieService
         )
@@ -45,7 +46,11 @@ final class ProviderFactory {
         case .windsurf:
             return WindsurfProvider(descriptor: descriptor)
         case .trae:
-            return TraeProvider(descriptor: descriptor, keychain: keychain)
+            return TraeProvider(
+                descriptor: descriptor,
+                keychain: keychain,
+                browserCredentialService: browserCredentialService
+            )
         case .openrouterCredits, .openrouterAPI:
             return OpenRouterProvider(descriptor: descriptor, keychain: keychain)
         case .ollamaCloud:

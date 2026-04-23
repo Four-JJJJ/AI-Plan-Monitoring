@@ -3,33 +3,68 @@ import Foundation
 final class TraeProvider: UsageProvider, @unchecked Sendable {
     private let session: URLSession
     private let keychain: KeychainService
+    let browserCredentialService: BrowserCredentialService
 
     let descriptor: ProviderDescriptor
 
     init(
         descriptor: ProviderDescriptor,
         session: URLSession = .shared,
-        keychain: KeychainService
+        keychain: KeychainService,
+        browserCredentialService: BrowserCredentialService = BrowserCredentialService()
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
+        self.browserCredentialService = browserCredentialService
     }
 
     func fetch() async throws -> UsageSnapshot {
+        try await fetch(forceRefresh: false)
+    }
+
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .trae)
         guard official.sourceMode == .auto || official.sourceMode == .api else {
             throw ProviderError.unavailable("Trae SOLO 官方来源当前仅支持 API 检测")
         }
 
-        let jwt = try resolveJWT()
-        return try await requestSnapshot(jwt: jwt)
+        let allowsBrowserFallback = official.sourceMode == .auto
+        var attempted = Set<String>()
+
+        do {
+            let jwt = try resolveJWT()
+            attempted.insert(jwt)
+            return try await requestSnapshot(jwt: jwt)
+        } catch let error as ProviderError {
+            guard allowsBrowserFallback, Self.isCredentialRefreshable(error) else {
+                throw error
+            }
+        }
+
+        for candidate in browserJWTCandidates(excluding: attempted) {
+            attempted.insert(candidate.jwt)
+            do {
+                var snapshot = try await requestSnapshot(jwt: candidate.jwt)
+                snapshot.authSourceLabel = candidate.source
+                persistJWT(candidate.jwt)
+                return snapshot
+            } catch let error as ProviderError {
+                guard Self.isCredentialRefreshable(error) else {
+                    throw error
+                }
+            }
+        }
+
+        throw ProviderError.unauthorizedDetail(
+            "Trae SOLO Authorization 已失效，且未在浏览器中找到可用登录态。请登录 trae.ai 后重试，或重新粘贴最新 Cloud-IDE-JWT。"
+        )
     }
 
     private func resolveJWT() throws -> String {
-        let defaultAccount = "official/trae/cloud-ide-jwt"
-        let service = descriptor.auth.keychainService ?? KeychainService.defaultServiceName
-        let account = descriptor.auth.keychainAccount ?? defaultAccount
+        let location = credentialLocation()
+        let service = location.service
+        let account = location.account
         guard let token = keychain.readToken(service: service, account: account) else {
             throw ProviderError.missingCredential(account)
         }
@@ -39,6 +74,36 @@ final class TraeProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential(account)
         }
         return normalized
+    }
+
+    private func credentialLocation() -> (service: String, account: String) {
+        (
+            descriptor.auth.keychainService ?? KeychainService.defaultServiceName,
+            descriptor.auth.keychainAccount ?? "official/trae/cloud-ide-jwt"
+        )
+    }
+
+    private func persistJWT(_ jwt: String) {
+        let normalized = Self.normalizeToken(jwt)
+        guard !normalized.isEmpty else { return }
+        let location = credentialLocation()
+        _ = keychain.saveToken(normalized, service: location.service, account: location.account)
+    }
+
+    private func browserJWTCandidates(excluding attempted: Set<String>) -> [(jwt: String, source: String)] {
+        let hosts = ["trae.ai", "api-sg-central.trae.ai"]
+        var seen = attempted
+        var output: [(jwt: String, source: String)] = []
+
+        for host in hosts {
+            for candidate in browserCredentialService.detectBearerTokenCandidates(host: host) {
+                let jwt = Self.normalizeToken(candidate.value)
+                guard Self.looksLikeJWT(jwt), seen.insert(jwt).inserted else { continue }
+                output.append((jwt: jwt, source: "\(candidate.source):\(host)"))
+            }
+        }
+
+        return output
     }
 
     private func requestSnapshot(jwt: String) async throws -> UsageSnapshot {
@@ -189,6 +254,19 @@ final class TraeProvider: UsageProvider, @unchecked Sendable {
             token = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return token
+    }
+
+    private static func looksLikeJWT(_ token: String) -> Bool {
+        token.split(separator: ".").count >= 3
+    }
+
+    private static func isCredentialRefreshable(_ error: ProviderError) -> Bool {
+        switch error {
+        case .missingCredential, .unauthorized, .unauthorizedDetail:
+            return true
+        case .rateLimited, .invalidResponse, .commandFailed, .timeout, .unavailable:
+            return false
+        }
     }
 
     private static func usageWindow(used: Double, limit: Double) -> (remainingPercent: Double, usedPercent: Double) {
