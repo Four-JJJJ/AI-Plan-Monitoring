@@ -132,6 +132,72 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(manifest.id, "hongmacc")
     }
 
+    func testRegistryFiltersLegacyRelayExampleManifestByHostPattern() {
+        let sample = RelayAdapterManifest(
+            id: "relay-example-template",
+            displayName: "Relay Example",
+            match: RelayAdapterMatch(
+                hostPatterns: ["relay.example.com"],
+                defaultDisplayName: "Relay Example",
+                defaultTokenChannelEnabled: false,
+                defaultBalanceChannelEnabled: true
+            ),
+            authStrategies: [.init(kind: .savedBearer)],
+            balanceRequest: RelayRequestManifest(path: "/api/user/self"),
+            extract: RelayExtractManifest(remaining: "data.quota")
+        )
+        let registry = RelayAdapterRegistry(builtInManifests: [RelayAdapterRegistry.genericManifest, sample])
+        let ids = Set(registry.availableManifests().map(\.id))
+
+        XCTAssertTrue(ids.contains("generic-newapi"))
+        XCTAssertFalse(ids.contains("relay-example-template"))
+    }
+
+    func testRegistryFiltersLegacyRelayExampleManifestByDisplayName() {
+        let sample = RelayAdapterManifest(
+            id: "custom-template",
+            displayName: "Relay Example Backup",
+            match: RelayAdapterMatch(
+                hostPatterns: ["api.custom.example.com"],
+                defaultDisplayName: "Relay Example Backup",
+                defaultTokenChannelEnabled: false,
+                defaultBalanceChannelEnabled: true
+            ),
+            authStrategies: [.init(kind: .savedBearer)],
+            balanceRequest: RelayRequestManifest(path: "/api/user/self"),
+            extract: RelayExtractManifest(remaining: "data.quota")
+        )
+        let registry = RelayAdapterRegistry(builtInManifests: [RelayAdapterRegistry.genericManifest, sample])
+        let ids = Set(registry.availableManifests().map(\.id))
+
+        XCTAssertTrue(ids.contains("generic-newapi"))
+        XCTAssertFalse(ids.contains("custom-template"))
+    }
+
+    func testRegistryFiltersLegacyRelayExampleManifestWhenHostPatternIsURL() {
+        let sample = RelayAdapterManifest(
+            id: "custom-template-url-host",
+            displayName: "Legacy Sample",
+            match: RelayAdapterMatch(
+                hostPatterns: ["https://relay.example.com/path?from=legacy"],
+                defaultDisplayName: "Legacy Sample",
+                defaultTokenChannelEnabled: false,
+                defaultBalanceChannelEnabled: true
+            ),
+            authStrategies: [.init(kind: .savedBearer)],
+            balanceRequest: RelayRequestManifest(path: "/api/user/self"),
+            extract: RelayExtractManifest(
+                remaining: "data.quota",
+                used: "data.used_quota"
+            )
+        )
+        let registry = RelayAdapterRegistry(builtInManifests: [RelayAdapterRegistry.genericManifest, sample])
+        let ids = Set(registry.builtInManifests().map(\.id))
+
+        XCTAssertTrue(ids.contains("generic-newapi"))
+        XCTAssertFalse(ids.contains("custom-template-url-host"))
+    }
+
     func testGenericNewAPIManifestUsesAccessTokenAndUserIDDefaults() {
         let manifest = RelayAdapterRegistry.shared.manifest(for: "https://relay.example.com", preferredID: "generic-newapi")
 
@@ -511,14 +577,15 @@ final class RelayProviderTests: XCTestCase {
     func testExpiredSavedBearerReturnsUnauthorizedDetail() async throws {
         let expiredToken = makeJWT(exp: Int(Date().timeIntervalSince1970) - 60)
         let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let host = "expired-bearer.invalid"
         let keychain = KeychainService()
-        XCTAssertTrue(keychain.saveToken(expiredToken, service: service, account: "relay.example.com/system-token"))
+        XCTAssertTrue(keychain.saveToken(expiredToken, service: service, account: "\(host)/system-token"))
 
         let manifest = RelayAdapterManifest(
             id: "expired-bearer-only",
             displayName: "Expired Bearer Only",
             match: RelayAdapterMatch(
-                hostPatterns: ["relay.example.com"],
+                hostPatterns: [host],
                 defaultDisplayName: "Expired Bearer Only",
                 defaultTokenChannelEnabled: false,
                 defaultBalanceChannelEnabled: true
@@ -543,7 +610,7 @@ final class RelayProviderTests: XCTestCase {
         let session = URLSession(configuration: config)
 
         let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "expired-bearer-only", baseURL: "https://relay.example.com"),
+            descriptor: makeRelayDescriptor(service: service, adapterID: "expired-bearer-only", baseURL: "https://\(host)"),
             session: session,
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(bearerCandidatesOverride: { _ in [] }),

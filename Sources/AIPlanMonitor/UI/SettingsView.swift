@@ -939,12 +939,30 @@ struct SettingsView: View {
     }
 
     private var providerSidebarList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(orderedEnabledSidebarProviders) { provider in
-                sidebarProviderRow(provider)
+        let enabledProviders = orderedEnabledSidebarProviders
+        let disabledProviders = disabledSidebarProviders
+
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(enabledProviders) { provider in
+                    sidebarProviderRow(provider)
+                }
             }
-            ForEach(disabledSidebarProviders) { provider in
-                sidebarProviderRow(provider)
+
+            if !enabledProviders.isEmpty, !disabledProviders.isEmpty {
+                Spacer()
+                    .frame(height: 12)
+
+                dividerLine
+
+                Spacer()
+                    .frame(height: 12)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(disabledProviders) { provider in
+                    sidebarProviderRow(provider)
+                }
             }
         }
     }
@@ -6262,14 +6280,22 @@ struct SettingsView: View {
         }
 
         return windows.prefix(2).map { window in
-            let clamped = max(0, min(100, window.remainingPercent))
+            let remainingPercent = max(0, min(100, window.remainingPercent))
+            let displayPercent = provider.displaysUsedQuota
+                ? max(0, min(100, window.usedPercent))
+                : remainingPercent
             return CodexQuotaMetricDisplay(
                 id: window.id,
                 title: codexQuotaDisplayTitle(window, provider: provider),
-                valueText: codexQuotaValueText(window: window, provider: provider, snapshot: snapshot, percent: clamped),
+                valueText: codexQuotaValueText(
+                    window: window,
+                    provider: provider,
+                    snapshot: snapshot,
+                    displayPercent: displayPercent
+                ),
                 resetText: codexResetCountdownText(to: window.resetAt),
-                percent: clamped,
-                barColor: codexQuotaBarColor(remainingPercent: clamped)
+                percent: displayPercent,
+                barColor: codexQuotaBarColor(remainingPercent: remainingPercent)
             )
         }
     }
@@ -6278,7 +6304,10 @@ struct SettingsView: View {
         [
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-session",
-                title: viewModel.text(.quotaFiveHour),
+                title: usagePreferredQuotaTitle(
+                    viewModel.text(.quotaFiveHour),
+                    provider: provider
+                ),
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
@@ -6286,7 +6315,10 @@ struct SettingsView: View {
             ),
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-all",
-                title: viewModel.localizedText("全部模型", "All models"),
+                title: usagePreferredQuotaTitle(
+                    viewModel.localizedText("全部模型", "All models"),
+                    provider: provider
+                ),
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
@@ -6294,7 +6326,10 @@ struct SettingsView: View {
             ),
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-sonnet",
-                title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
+                title: usagePreferredQuotaTitle(
+                    viewModel.localizedText("Sonnet 专用", "Sonnet only"),
+                    provider: provider
+                ),
                 valueText: "N/A",
                 resetText: codexResetCountdownText(to: nil),
                 percent: nil,
@@ -6303,7 +6338,10 @@ struct SettingsView: View {
             ),
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-design",
-                title: viewModel.localizedText("Claude Design", "Claude Design"),
+                title: usagePreferredQuotaTitle(
+                    viewModel.localizedText("Claude Design", "Claude Design"),
+                    provider: provider
+                ),
                 valueText: "N/A",
                 resetText: codexResetCountdownText(to: nil),
                 percent: nil,
@@ -6360,7 +6398,7 @@ struct SettingsView: View {
         guard let window else {
             return CodexQuotaMetricDisplay(
                 id: id,
-                title: title,
+                title: usagePreferredQuotaTitle(title, provider: provider),
                 valueText: "N/A",
                 resetText: codexResetCountdownText(to: nil),
                 percent: nil,
@@ -6369,14 +6407,22 @@ struct SettingsView: View {
             )
         }
 
-        let clamped = max(0, min(100, window.remainingPercent))
+        let remainingPercent = max(0, min(100, window.remainingPercent))
+        let displayPercent = provider.displaysUsedQuota
+            ? max(0, min(100, window.usedPercent))
+            : remainingPercent
         return CodexQuotaMetricDisplay(
             id: id,
-            title: title,
-            valueText: codexQuotaValueText(window: window, provider: provider, snapshot: snapshot, percent: clamped),
+            title: usagePreferredQuotaTitle(title, provider: provider),
+            valueText: codexQuotaValueText(
+                window: window,
+                provider: provider,
+                snapshot: snapshot,
+                displayPercent: displayPercent
+            ),
             resetText: codexResetCountdownText(to: window.resetAt),
-            percent: clamped,
-            barColor: codexQuotaBarColor(remainingPercent: clamped),
+            percent: displayPercent,
+            barColor: codexQuotaBarColor(remainingPercent: remainingPercent),
             isAvailable: true
         )
     }
@@ -6409,19 +6455,33 @@ struct SettingsView: View {
     }
 
     private func codexQuotaDisplayTitle(_ window: UsageQuotaWindow, provider: ProviderDescriptor) -> String {
+        let baseTitle: String
         if provider.type == .trae {
-            return traeQuotaMetricTitle(baseTitle: window.title)
+            baseTitle = traeQuotaMetricTitle(baseTitle: window.title)
+            return usagePreferredQuotaTitle(baseTitle, provider: provider)
         }
         switch window.kind {
         case .session:
             if provider.type == .ollamaCloud {
-                return viewModel.localizedText("会话", "Session")
+                baseTitle = viewModel.localizedText("会话", "Session")
+            } else {
+                baseTitle = viewModel.text(.quotaFiveHour)
             }
-            return viewModel.text(.quotaFiveHour)
         case .weekly, .modelWeekly:
-            return viewModel.text(.quotaWeekly)
+            baseTitle = viewModel.text(.quotaWeekly)
         default:
-            return window.title
+            baseTitle = window.title
+        }
+        return usagePreferredQuotaTitle(baseTitle, provider: provider)
+    }
+
+    private func usagePreferredQuotaTitle(_ baseTitle: String, provider: ProviderDescriptor) -> String {
+        guard provider.displaysUsedQuota else { return baseTitle }
+        switch viewModel.language {
+        case .zhHans:
+            return "\(baseTitle)已用"
+        case .en:
+            return "\(baseTitle) used"
         }
     }
 
@@ -6429,7 +6489,7 @@ struct SettingsView: View {
         window: UsageQuotaWindow,
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
-        percent: Double
+        displayPercent: Double
     ) -> String {
         if provider.type == .trae, provider.traeDisplaysAmount {
             if let amount = traeAmountValue(
@@ -6446,7 +6506,7 @@ struct SettingsView: View {
             }
             return "-"
         }
-        return "\(Int(percent.rounded()))%"
+        return "\(Int(displayPercent.rounded()))%"
     }
 
     private func traeAmountValue(
@@ -7240,7 +7300,7 @@ struct SettingsView: View {
 
     private var relayTemplatePresets: [RelayTemplatePreset] {
         RelayAdapterRegistry.shared
-            .availableManifests()
+            .builtInManifests()
             .map { manifest in
                 RelayTemplatePreset(
                     manifest: manifest,

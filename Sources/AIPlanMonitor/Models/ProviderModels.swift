@@ -1806,6 +1806,8 @@ extension AppConfig {
         migrated.providers.removeAll { provider in
             provider.id == "kimi-coding" || (provider.type == .kimi && provider.family == .thirdParty)
         }
+        // Remove historical sample relay entries from older builds.
+        migrated.providers.removeAll(where: Self.isLegacyRelayExampleProvider)
 
         for defaultProvider in AppConfig.default.providers {
             if let idx = migrated.providers.firstIndex(where: { $0.id == defaultProvider.id }) {
@@ -1843,6 +1845,40 @@ extension AppConfig {
         }
 
         return migrated
+    }
+
+    private static func isLegacyRelayExampleProvider(_ provider: ProviderDescriptor) -> Bool {
+        guard provider.family == .thirdParty, provider.type == .relay else {
+            return false
+        }
+
+        let normalizedBaseURL = ProviderDescriptor.normalizeRelayBaseURL(
+            provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
+        )
+        let host = URL(string: normalizedBaseURL)?.host?.lowercased()
+        if let host, host == "relay.example.com" || host.hasSuffix(".relay.example.com") {
+            return true
+        }
+
+        let normalizedAdapterID = provider.relayConfig?.adapterID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let usesGenericRelayTemplate = normalizedAdapterID == nil
+            || normalizedAdapterID == ""
+            || normalizedAdapterID == "generic-newapi"
+
+        if usesGenericRelayTemplate,
+           let host,
+           host == "example.com" || host.hasSuffix(".example.com") {
+            return true
+        }
+
+        let trimmedName = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedName = trimmedName.lowercased()
+        let normalizedID = provider.id.lowercased()
+
+        return (usesGenericRelayTemplate && normalizedName.contains("relay example"))
+            || normalizedID.hasPrefix("open-relay-example")
     }
 }
 

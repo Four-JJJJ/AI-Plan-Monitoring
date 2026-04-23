@@ -4,14 +4,14 @@ final class RelayAdapterRegistry: @unchecked Sendable {
     static let shared = RelayAdapterRegistry()
 
     private let fileManager: FileManager
-    private let builtInManifests: [RelayAdapterManifest]
+    private let bundledManifests: [RelayAdapterManifest]
 
     init(
         fileManager: FileManager = .default,
         builtInManifests: [RelayAdapterManifest]? = nil
     ) {
         self.fileManager = fileManager
-        self.builtInManifests = builtInManifests ?? Self.loadBundledManifests()
+        self.bundledManifests = builtInManifests ?? Self.loadBundledManifests()
     }
 
     func manifest(for baseURL: String, preferredID: String? = nil) -> RelayAdapterManifest {
@@ -39,15 +39,25 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         availableManifests().first(where: { $0.id == id }).map(decorate)
     }
 
+    func builtInManifests() -> [RelayAdapterManifest] {
+        bundledManifests
+            .filter { !Self.isLegacyRelayExampleManifest($0) }
+            .sorted { $0.id < $1.id }
+            .map(decorate)
+    }
+
     func availableManifests() -> [RelayAdapterManifest] {
         var merged: [String: RelayAdapterManifest] = [:]
-        for manifest in builtInManifests {
+        for manifest in bundledManifests {
             merged[manifest.id] = manifest
         }
         for manifest in loadLocalManifests() {
             merged[manifest.id] = manifest
         }
-        return merged.values.sorted { $0.id < $1.id }.map(decorate)
+        return merged.values
+            .filter { !Self.isLegacyRelayExampleManifest($0) }
+            .sorted { $0.id < $1.id }
+            .map(decorate)
     }
 
     private func decorate(_ manifest: RelayAdapterManifest) -> RelayAdapterManifest {
@@ -151,6 +161,77 @@ final class RelayAdapterRegistry: @unchecked Sendable {
 
     private static func compareSpecificity(lhs: RelayAdapterManifest, rhs: RelayAdapterManifest) -> Bool {
         lhs.match.hostPatterns.map(\.count).max() ?? 0 > rhs.match.hostPatterns.map(\.count).max() ?? 0
+    }
+
+    private static func isLegacyRelayExampleManifest(_ manifest: RelayAdapterManifest) -> Bool {
+        let normalizedID = manifest.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDisplayName = manifest.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDefaultDisplayName = manifest.match.defaultDisplayName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedHosts = manifest.match.hostPatterns.compactMap(Self.normalizeHostPattern)
+        let hasRelayExampleHost = normalizedHosts.contains(where: Self.isRelayExampleHost)
+        let hasExampleHost = normalizedHosts.contains(where: Self.isExampleHost)
+        let hasRelayExampleID = normalizedID.contains("relay-example")
+        let hasRelayExampleName = normalizedDisplayName.contains("relay example")
+            || (normalizedDefaultDisplayName?.contains("relay example") ?? false)
+
+        if hasRelayExampleHost {
+            return true
+        }
+
+        if hasRelayExampleID || hasRelayExampleName {
+            return true
+        }
+
+        return hasExampleHost && looksLikeGenericRelaySample(manifest)
+    }
+
+    private static func normalizeHostPattern(_ pattern: String) -> String? {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return nil }
+
+        var hostPart = trimmed
+        if let parsedHost = URL(string: trimmed)?.host?.lowercased() {
+            hostPart = parsedHost
+        } else {
+            hostPart = hostPart
+                .replacingOccurrences(of: "https://", with: "")
+                .replacingOccurrences(of: "http://", with: "")
+            if let slash = hostPart.firstIndex(of: "/") {
+                hostPart = String(hostPart[..<slash])
+            }
+            if let query = hostPart.firstIndex(of: "?") {
+                hostPart = String(hostPart[..<query])
+            }
+            if let hash = hostPart.firstIndex(of: "#") {
+                hostPart = String(hostPart[..<hash])
+            }
+        }
+        return hostPart.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isRelayExampleHost(_ hostPattern: String) -> Bool {
+        let host = hostPattern.replacingOccurrences(of: "*.", with: "")
+        return host == "relay.example.com" || host.hasSuffix(".relay.example.com")
+    }
+
+    private static func isExampleHost(_ hostPattern: String) -> Bool {
+        let host = hostPattern.replacingOccurrences(of: "*.", with: "")
+        return host == "example.com" || host.hasSuffix(".example.com")
+    }
+
+    private static func looksLikeGenericRelaySample(_ manifest: RelayAdapterManifest) -> Bool {
+        let endpointPath = manifest.balanceRequest.path.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let remainingExpression = manifest.extract.remaining
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let usedExpression = manifest.extract.used?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        return endpointPath == "/api/user/self"
+            && (remainingExpression.contains("quota") || usedExpression.contains("quota"))
     }
 
     static let genericManifest = RelayAdapterManifest(

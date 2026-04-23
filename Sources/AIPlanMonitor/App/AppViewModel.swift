@@ -433,6 +433,7 @@ final class AppViewModel {
         guard config.showOfficialAccountEmailInMenuBar != enabled else { return }
         config.showOfficialAccountEmailInMenuBar = enabled
         try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
     }
 
     func showOfficialPlanTypeInMenuBar(providerID: String) -> Bool {
@@ -459,6 +460,7 @@ final class AppViewModel {
         provider.officialConfig = official
         config.providers[idx] = provider
         try? configStore.save(config)
+        notifyStatusBarDisplayConfigChanged()
     }
 
     func statusBarProvider() -> ProviderDescriptor? {
@@ -1998,8 +2000,14 @@ final class AppViewModel {
               ) else {
             return
         }
+        let previousDisplaysUsedQuota = config.providers[idx].displaysUsedQuota
+        let previousName = config.providers[idx].name
         config.providers[idx] = updated
         persistAndRestart()
+        if previousDisplaysUsedQuota != updated.displaysUsedQuota
+            || previousName != updated.name {
+            notifyStatusBarDisplayConfigChanged()
+        }
     }
 
     func relayDescriptorForPreview(
@@ -2127,10 +2135,15 @@ final class AppViewModel {
             return
         }
         var provider = config.providers[idx]
+        let previousDisplaysUsedQuota = provider.displaysUsedQuota
         relayConfig.quotaDisplayMode = quotaDisplayMode
         provider.relayConfig = relayConfig
-        config.providers[idx] = provider.normalized()
+        let normalizedProvider = provider.normalized()
+        config.providers[idx] = normalizedProvider
         persistAndRestart()
+        if previousDisplaysUsedQuota != normalizedProvider.displaysUsedQuota {
+            notifyStatusBarDisplayConfigChanged()
+        }
     }
 
     func relayAdapterName(for provider: ProviderDescriptor) -> String? {
@@ -2213,6 +2226,8 @@ final class AppViewModel {
         }
 
         var provider = config.providers[idx]
+        let previousDisplaysUsedQuota = provider.displaysUsedQuota
+        let previousTraeDisplaysAmount = provider.traeDisplaysAmount
         var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type)
         official.sourceMode = sourceMode
         official.webMode = webMode
@@ -2225,6 +2240,10 @@ final class AppViewModel {
         provider.officialConfig = official
         config.providers[idx] = provider
         persistAndRestart()
+        if previousDisplaysUsedQuota != provider.displaysUsedQuota
+            || previousTraeDisplaysAmount != provider.traeDisplaysAmount {
+            notifyStatusBarDisplayConfigChanged()
+        }
     }
 
     var aggregateStatus: AggregateStatus {

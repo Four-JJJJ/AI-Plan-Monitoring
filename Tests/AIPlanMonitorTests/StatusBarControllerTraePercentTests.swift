@@ -2,6 +2,39 @@ import XCTest
 @testable import AIPlanMonitor
 
 final class StatusBarControllerTraePercentTests: XCTestCase {
+    func testFiveHourPercentRespectsUsagePreferenceForSameSessionWindow() {
+        let snapshot = UsageSnapshot(
+            source: "codex-official",
+            status: .ok,
+            remaining: 72,
+            used: 28,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [
+                UsageQuotaWindow(
+                    id: "window-session",
+                    title: "5h limit",
+                    remainingPercent: 72,
+                    usedPercent: 28,
+                    resetAt: nil,
+                    kind: .session
+                )
+            ],
+            sourceLabel: "API"
+        )
+
+        assertPercent(
+            StatusBarController.fiveHourPercent(from: snapshot, displaysUsedQuota: false),
+            equals: 72
+        )
+        assertPercent(
+            StatusBarController.fiveHourPercent(from: snapshot, displaysUsedQuota: true),
+            equals: 28
+        )
+    }
+
     func testTraePrimaryPercentPrefersDollarWindow() {
         let snapshot = UsageSnapshot(
             source: "trae-official",

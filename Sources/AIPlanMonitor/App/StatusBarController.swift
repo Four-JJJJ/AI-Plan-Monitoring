@@ -370,7 +370,10 @@ final class StatusBarController: NSObject {
 
         if provider.type == .codex,
            let activeSlot = viewModel.codexSlotViewModels().first(where: { $0.isActive }),
-           let percent = fiveHourPercent(from: activeSlot.snapshot) {
+           let percent = Self.fiveHourPercent(
+               from: activeSlot.snapshot,
+               displaysUsedQuota: provider.displaysUsedQuota
+           ) {
             return "\(Int(percent.rounded()))%"
         }
 
@@ -448,7 +451,10 @@ final class StatusBarController: NSObject {
     private func statusPercent(for provider: ProviderDescriptor) -> Double? {
         if provider.type == .codex,
            let activeSlot = viewModel.codexSlotViewModels().first(where: { $0.isActive }),
-           let percent = fiveHourPercent(from: activeSlot.snapshot) {
+           let percent = Self.fiveHourPercent(
+               from: activeSlot.snapshot,
+               displaysUsedQuota: provider.displaysUsedQuota
+           ) {
             return percent
         }
         if viewModel.statusBarDisplayStyle == .barNamePercent,
@@ -481,7 +487,7 @@ final class StatusBarController: NSObject {
            ) {
             return percent
         }
-        if let percent = fiveHourPercent(from: snapshot, displaysUsedQuota: provider.displaysUsedQuota) {
+        if let percent = Self.fiveHourPercent(from: snapshot, displaysUsedQuota: provider.displaysUsedQuota) {
             return percent
         }
         if let window = snapshot.quotaWindows.first {
@@ -554,7 +560,10 @@ final class StatusBarController: NSObject {
         return nil
     }
 
-    private func fiveHourPercent(from snapshot: UsageSnapshot, displaysUsedQuota: Bool = false) -> Double? {
+    nonisolated static func fiveHourPercent(
+        from snapshot: UsageSnapshot,
+        displaysUsedQuota: Bool = false
+    ) -> Double? {
         if let session = snapshot.quotaWindows.first(where: { $0.kind == .session }) {
             return displaysUsedQuota ? session.usedPercent : session.remainingPercent
         }

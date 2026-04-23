@@ -408,4 +408,100 @@ final class AppConfigTests: XCTestCase {
             60
         )
     }
+
+    func testMigrationRemovesLegacyRelayExampleProvider() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: " Relay Example ",
+            baseURL: "https://relay.example.com",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-relay-example-legacy"
+        relay.relayConfig?.baseURL = "relay.example.com/path?foo=bar"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationRemovesLegacyRelayExampleProviderEvenWhenRenamed() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "My Relay",
+            baseURL: "https://relay.example.com",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-relay-legacy-random"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationRemovesLegacyRelayExampleProviderEvenWhenAdapterChanged() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Custom Relay",
+            baseURL: "https://relay.example.com",
+            preferredAdapterID: "deepseek"
+        )
+        relay.id = "open-random-relay-legacy"
+        relay.relayConfig?.adapterID = "deepseek"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationKeepsCustomGenericRelayProviderWhenHostIsNotRelayExample() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Custom Generic",
+            baseURL: "https://api.custom-relay.dev",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-custom-relay-dev-1"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNotNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationRemovesLegacyGenericRelayProviderOnExampleDotComHosts() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Relay Fixture",
+            baseURL: "https://relay-fixture.example.com",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-relay-fixture-example-com-1"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationStatusBarFallsBackWhenLegacyRelayExampleWasSelected() {
+        var codex = ProviderDescriptor.defaultOfficialCodex()
+        codex.enabled = true
+
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Relay Example",
+            baseURL: "https://relay.example.com",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-relay-example-statusbar"
+
+        let config = AppConfig(
+            language: .zhHans,
+            statusBarProviderID: relay.id,
+            statusBarMultiUsageEnabled: true,
+            statusBarMultiProviderIDs: [relay.id, codex.id],
+            providers: [relay, codex]
+        )
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertEqual(migrated.statusBarProviderID, codex.id)
+        XCTAssertEqual(migrated.statusBarMultiProviderIDs, [codex.id])
+    }
 }
