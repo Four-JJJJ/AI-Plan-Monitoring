@@ -55,6 +55,7 @@ final class SingleInstanceLock {
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
     private var activationObserver: NSObjectProtocol?
+    private let postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app stays menu-bar only even if started from terminal context.
@@ -68,7 +69,9 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         }
 
         startActivationBridgeObservation()
-        statusBarController = StatusBarController(viewModel: AppViewModel())
+        let viewModel = AppViewModel()
+        statusBarController = StatusBarController(viewModel: viewModel)
+        presentPostUpdateReleaseNotesIfNeeded(currentVersion: viewModel.currentAppVersion)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -115,5 +118,18 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard let activationObserver else { return }
         DistributedNotificationCenter.default().removeObserver(activationObserver)
         self.activationObserver = nil
+    }
+
+    @MainActor
+    private func presentPostUpdateReleaseNotesIfNeeded(currentVersion: String) {
+        guard let releaseNotes = postUpdateReleaseNotesStore.consumePresentationIfNeeded(
+            currentVersion: currentVersion
+        ) else {
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            ReleaseNotesWindowController.shared.show(releaseNotes: releaseNotes)
+        }
     }
 }

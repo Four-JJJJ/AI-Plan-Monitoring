@@ -618,12 +618,20 @@ struct SettingsView: View {
                     .layoutPriority(3)
             }
 
-            settingsTopMetaItem(
-                text: currentVersionTitle,
-                iconName: "settings_version_icon",
-                fallbackIcon: "chevron.left.forwardslash.chevron.right",
-                textColor: settingsHintColor
-            )
+            Button {
+                viewModel.openCurrentVersionReleaseNotes()
+            } label: {
+                settingsTopMetaItem(
+                    text: currentVersionTitle,
+                    iconName: "settings_version_icon",
+                    fallbackIcon: "chevron.left.forwardslash.chevron.right",
+                    textColor: settingsHintColor
+                )
+                .padding(.horizontal, 4)
+                .frame(height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
             Button {
                 viewModel.checkForAppUpdate(force: true)

@@ -62,6 +62,7 @@ actor AppUpdateService {
     static let repositoryURL = URL(string: "https://github.com/\(owner)/\(repository)")!
     static let releasesURL = URL(string: "https://github.com/\(owner)/\(repository)/releases/latest")!
     static let metadataURL = URL(string: "https://github.com/\(owner)/\(repository)/releases/latest/download/latest.json")!
+    static let apiBaseURL = URL(string: "https://api.github.com/repos/\(owner)/\(repository)")!
 
     private struct ReleaseManifest: Decodable {
         var version: String
@@ -93,6 +94,10 @@ actor AppUpdateService {
             case notesURL = "notes_url"
             case assets
         }
+    }
+
+    private struct GitHubReleaseResponse: Decodable {
+        var body: String?
     }
 
     private let session: URLSession
@@ -137,6 +142,39 @@ actor AppUpdateService {
             zipAsset: manifest.assets.macOSZip.map { AppUpdateAsset(url: $0.url, sha256: $0.sha256, size: $0.size) },
             dmgAsset: manifest.assets.macOSDMG.map { AppUpdateAsset(url: $0.url, sha256: $0.sha256, size: $0.size) }
         )
+    }
+
+    func fetchReleaseNotesBody(forVersion version: String) async throws -> String {
+        let candidates = Self.releaseTagCandidates(forVersion: version)
+
+        for tag in candidates {
+            let endpoint = Self.apiBaseURL
+                .appendingPathComponent("releases", isDirectory: true)
+                .appendingPathComponent("tags", isDirectory: true)
+                .appendingPathComponent(tag)
+
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 15
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("AIPlanMonitor", forHTTPHeaderField: "User-Agent")
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            if http.statusCode == 404 {
+                continue
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+
+            let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+            return release.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+
+        throw URLError(.fileDoesNotExist)
     }
 
     func prepareUpdate(_ update: AppUpdateInfo) async throws -> PreparedAppUpdate {
@@ -226,6 +264,29 @@ actor AppUpdateService {
             return String(trimmed.dropFirst())
         }
         return trimmed
+    }
+
+    static func releasePageURL(forVersion version: String) -> URL {
+        let tag = releaseTagCandidates(forVersion: version).first ?? version
+        return repositoryURL
+            .appendingPathComponent("releases", isDirectory: true)
+            .appendingPathComponent("tag", isDirectory: true)
+            .appendingPathComponent(tag)
+    }
+
+    static func releaseTagCandidates(forVersion version: String) -> [String] {
+        let normalized = normalizeVersion(version)
+        guard !normalized.isEmpty else { return [] }
+
+        let tags: [String] = ["v\(normalized)", normalized]
+        var deduped: [String] = []
+        var seen = Set<String>()
+        for tag in tags {
+            if seen.insert(tag).inserted {
+                deduped.append(tag)
+            }
+        }
+        return deduped
     }
 
     private static func sha256Hex(for fileURL: URL) throws -> String {
