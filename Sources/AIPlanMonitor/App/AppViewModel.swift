@@ -24,6 +24,7 @@ final class AppViewModel {
     private let claudeDesktopAuthService = ClaudeDesktopAuthService()
     private let launchAtLoginService = LaunchAtLoginService()
     private let notifications = NotificationService()
+    private let postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring
     @ObservationIgnored private let localSessionSignalMonitor = LocalSessionCompletionSignalMonitor()
     private let providerFactory: ProviderFactory
     @ObservationIgnored private let localSessionRefreshCoordinator: LocalSessionRefreshCoordinator
@@ -82,6 +83,7 @@ final class AppViewModel {
     private var notificationPermissionPollingTask: Task<Void, Never>?
     @ObservationIgnored private var permissionRefreshTask: Task<Void, Never>?
     private var preparedUpdate: PreparedAppUpdate?
+    private var preparedUpdateInfo: AppUpdateInfo?
     private var updateFlowVersionInFlight: String?
     private var updateInstallBufferTask: Task<Void, Never>?
     private let updateInstallBufferDelaySeconds: TimeInterval
@@ -94,10 +96,12 @@ final class AppViewModel {
 
     init(
         appUpdateService: any AppUpdateServicing = AppUpdateService(),
+        postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
         self.appUpdateService = appUpdateService
+        self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
         self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
         self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
         let shouldPersistConfigDuringBootstrap: Bool
@@ -149,10 +153,12 @@ final class AppViewModel {
         testingConfig: AppConfig = .default,
         testingCurrentAppVersion: String = "0.0.0",
         appUpdateService: any AppUpdateServicing,
+        postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
         self.appUpdateService = appUpdateService
+        self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
         self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
         self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
         self.config = testingConfig.migratedWithSiteDefaults()
@@ -248,6 +254,17 @@ final class AppViewModel {
 
     func openRepositoryPage() {
         NSWorkspace.shared.open(AppUpdateService.repositoryURL)
+    }
+
+    func openCurrentVersionReleaseNotes() {
+        ReleaseNotesWindowController.shared.show(
+            releaseNotes: PendingPostUpdateReleaseNotes(
+                version: currentAppVersion,
+                releaseURL: AppUpdateService.releasePageURL(forVersion: currentAppVersion),
+                notesURL: nil,
+                createdAt: Date()
+            )
+        )
     }
 
     func openLatestReleaseDownload() {
@@ -745,6 +762,7 @@ final class AppViewModel {
 
     private func clearPreparedUpdateState() {
         preparedUpdate = nil
+        preparedUpdateInfo = nil
         updatePreparedVersion = nil
         updateFlowVersionInFlight = nil
         cancelUpdateInstallBuffering()
@@ -812,6 +830,9 @@ final class AppViewModel {
         updateInstallBufferingInFlight = false
         updateInstallErrorMessage = nil
         updateInstallationInFlight = true
+        if let preparedUpdateInfo, preparedUpdateInfo.latestVersion == preparedUpdate.version {
+            postUpdateReleaseNotesStore.schedulePresentation(for: preparedUpdateInfo)
+        }
 
         Task { [weak self] in
             guard let self else { return }
@@ -855,6 +876,7 @@ final class AppViewModel {
             do {
                 let prepared = try await self.appUpdateService.prepareUpdate(update)
                 self.preparedUpdate = prepared
+                self.preparedUpdateInfo = update
                 self.updatePreparedVersion = prepared.version
                 self.updateDownloadInFlight = false
                 self.updateFlowVersionInFlight = nil

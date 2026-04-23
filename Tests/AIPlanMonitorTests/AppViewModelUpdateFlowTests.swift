@@ -6,6 +6,7 @@ import XCTest
 final class AppViewModelUpdateFlowTests: XCTestCase {
     func testDownloadSuccessTransitionsToBufferingThenAttemptsInstall() async {
         let service = StubAppUpdateService()
+        let releaseNotesStore = StubPostUpdateReleaseNotesStore()
         await service.enqueueFetch(.success(makeUpdate(version: "2.0.0")))
         await service.enqueuePrepare(.success(makePrepared(version: "2.0.0")))
         await service.enqueueInstall(.failure(StubUpdateError.installFailed))
@@ -13,6 +14,7 @@ final class AppViewModelUpdateFlowTests: XCTestCase {
         let viewModel = AppViewModel(
             testingCurrentAppVersion: "1.0.0",
             appUpdateService: service,
+            postUpdateReleaseNotesStore: releaseNotesStore,
             updateInstallBufferDelaySeconds: 0.12
         )
 
@@ -32,6 +34,7 @@ final class AppViewModelUpdateFlowTests: XCTestCase {
         await assertEventually("should attempt install after buffering delay") {
             await service.installCallCount() == 1
         }
+        XCTAssertEqual(releaseNotesStore.scheduledVersions, ["2.0.0"])
         await assertEventually("failed install should expose retry state") {
             if case .failed = viewModel.menuUpdateDisplayState.kind {
                 return viewModel.updateInstallErrorMessage != nil
@@ -211,6 +214,29 @@ final class AppViewModelUpdateFlowTests: XCTestCase {
         let finalResult = await condition()
         XCTAssertTrue(finalResult, message)
     }
+}
+
+private final class StubPostUpdateReleaseNotesStore: PostUpdateReleaseNotesStoring {
+    private let lock = NSLock()
+    private var storedScheduledVersions: [String] = []
+
+    var scheduledVersions: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedScheduledVersions
+    }
+
+    func schedulePresentation(for update: AppUpdateInfo) {
+        lock.lock()
+        storedScheduledVersions.append(update.latestVersion)
+        lock.unlock()
+    }
+
+    func consumePresentationIfNeeded(currentVersion: String) -> PendingPostUpdateReleaseNotes? {
+        nil
+    }
+
+    func reset() {}
 }
 
 private actor StubAppUpdateService: AppUpdateServicing {
