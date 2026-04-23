@@ -1227,6 +1227,18 @@ final class AppViewModel {
         credentialsJSON: String?
     ) -> String {
         do {
+            if try claudeProfileStore.updateProfileMetadataIfCredentialInputsUnchanged(
+                slotID: slotID,
+                displayName: displayName,
+                note: note,
+                source: source,
+                configDir: configDir,
+                credentialsJSON: credentialsJSON
+            ) != nil {
+                syncClaudeProfilesCurrentState()
+                return localizedText("Claude 账号备注已更新", "Claude profile note updated")
+            }
+
             _ = try claudeProfileStore.saveProfile(
                 slotID: slotID,
                 displayName: displayName,

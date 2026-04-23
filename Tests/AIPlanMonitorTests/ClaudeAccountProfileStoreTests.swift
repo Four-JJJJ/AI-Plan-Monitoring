@@ -379,6 +379,123 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         XCTAssertTrue(profiles.isEmpty)
     }
 
+    func testMetadataUpdateForConfigProfileDoesNotReadMissingCredentialsFile() throws {
+        let store = makeStore()
+        let credentialsJSON = sampleCredentialsJSON(
+            accountID: "acc-metadata",
+            email: "metadata@example.com",
+            accessToken: "access-metadata"
+        )
+        let configDir = makeConfigDirectory(credentialsJSON: credentialsJSON)
+        let fingerprint = try ClaudeAccountProfileStore.parseCredentialsJSON(credentialsJSON).credentialFingerprint
+
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Claude A",
+            note: nil,
+            source: .configDir,
+            configDir: configDir,
+            credentialsJSON: nil,
+            currentFingerprint: fingerprint
+        )
+        let before = try XCTUnwrap(store.profile(slotID: .a))
+        try FileManager.default.removeItem(
+            atPath: ClaudeAccountProfileStore.credentialsFilePath(configDirectory: configDir)
+        )
+
+        let updated = try XCTUnwrap(
+            store.updateProfileMetadataIfCredentialInputsUnchanged(
+                slotID: .a,
+                displayName: "Claude A",
+                note: "工作账号",
+                source: .configDir,
+                configDir: configDir,
+                credentialsJSON: nil
+            )
+        )
+
+        XCTAssertEqual(updated.note, "工作账号")
+        XCTAssertEqual(updated.source, before.source)
+        XCTAssertEqual(updated.configDir, before.configDir)
+        XCTAssertEqual(updated.credentialsJSON, before.credentialsJSON)
+        XCTAssertEqual(updated.accountId, before.accountId)
+        XCTAssertEqual(updated.accountEmail, before.accountEmail)
+        XCTAssertEqual(updated.credentialFingerprint, before.credentialFingerprint)
+        XCTAssertEqual(updated.lastImportedAt, before.lastImportedAt)
+        XCTAssertEqual(updated.isCurrentSystemAccount, before.isCurrentSystemAccount)
+        XCTAssertEqual(store.profile(slotID: .a)?.note, "工作账号")
+    }
+
+    func testMetadataUpdateNormalizesEmptyNote() throws {
+        let store = makeStore()
+        let credentialsJSON = sampleCredentialsJSON(
+            accountID: "acc-empty-note",
+            email: "empty-note@example.com",
+            accessToken: "access-empty-note"
+        )
+
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Manual A",
+            note: "旧备注",
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: credentialsJSON,
+            currentFingerprint: nil
+        )
+
+        let updated = try XCTUnwrap(
+            store.updateProfileMetadataIfCredentialInputsUnchanged(
+                slotID: .a,
+                displayName: "Manual A",
+                note: "  \n\t  ",
+                source: .manualCredentials,
+                configDir: nil,
+                credentialsJSON: "\n\(credentialsJSON)\n"
+            )
+        )
+
+        XCTAssertNil(updated.note)
+        XCTAssertNil(store.profile(slotID: .a)?.note)
+    }
+
+    func testMetadataUpdateDoesNotRunWhenCredentialInputsChange() throws {
+        let store = makeStore()
+        let firstCredentials = sampleCredentialsJSON(
+            accountID: "acc-first",
+            email: "first@example.com",
+            accessToken: "access-first"
+        )
+        let secondCredentials = sampleCredentialsJSON(
+            accountID: "acc-second",
+            email: "second@example.com",
+            accessToken: "access-second"
+        )
+
+        _ = try store.saveProfile(
+            slotID: .a,
+            displayName: "Manual A",
+            note: "旧备注",
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: firstCredentials,
+            currentFingerprint: nil
+        )
+        let before = try XCTUnwrap(store.profile(slotID: .a))
+
+        let updated = try store.updateProfileMetadataIfCredentialInputsUnchanged(
+            slotID: .a,
+            displayName: "Manual A",
+            note: "新备注",
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: secondCredentials
+        )
+
+        XCTAssertNil(updated)
+        XCTAssertEqual(store.profile(slotID: .a), before)
+    }
+
     func testProfilesBackfillEmailFromClaudeConfigForLegacyStoredProfile() throws {
         let storeFile = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("claude-profile-legacy-\(UUID().uuidString).json")

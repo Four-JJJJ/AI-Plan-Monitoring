@@ -144,6 +144,44 @@ final class ClaudeAccountProfileStore {
     }
 
     @discardableResult
+    func updateProfileMetadataIfCredentialInputsUnchanged(
+        slotID: CodexSlotID,
+        displayName: String,
+        note: String?,
+        source: ClaudeProfileSource,
+        configDir: String?,
+        credentialsJSON: String?
+    ) throws -> ClaudeAccountProfile? {
+        let resolvedConfigDir = Self.normalizedConfigDirectory(configDir)
+        var items = load()
+        guard let existingIndex = items.firstIndex(where: { $0.slotID == slotID }) else {
+            return nil
+        }
+
+        let existingProfile = items[existingIndex]
+        guard Self.credentialInputsUnchanged(
+            profile: existingProfile,
+            source: source,
+            configDir: resolvedConfigDir,
+            credentialsJSON: credentialsJSON
+        ) else {
+            return nil
+        }
+
+        var updatedProfile = existingProfile
+        updatedProfile.displayName = Self.fallbackDisplayName(displayName, slotID: slotID)
+        updatedProfile.note = Self.normalizedNote(note)
+        updatedProfile = normalizedProfile(updatedProfile)
+        guard updatedProfile != existingProfile else {
+            return updatedProfile
+        }
+
+        items[existingIndex] = updatedProfile
+        try save(items, ignoredFingerprints: loadIgnoredFingerprints())
+        return updatedProfile
+    }
+
+    @discardableResult
     func updateStoredCredentials(slotID: CodexSlotID, credentialsJSON: String) -> ClaudeAccountProfile? {
         let trimmed = credentialsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -658,6 +696,35 @@ final class ClaudeAccountProfileStore {
             return nil
         }
         return trimmed
+    }
+
+    private static func credentialInputsUnchanged(
+        profile: ClaudeAccountProfile,
+        source: ClaudeProfileSource,
+        configDir: String?,
+        credentialsJSON: String?
+    ) -> Bool {
+        guard profile.source == source else {
+            return false
+        }
+        guard normalizedConfigDirectory(profile.configDir) == normalizedConfigDirectory(configDir) else {
+            return false
+        }
+
+        switch source {
+        case .configDir:
+            return true
+        case .manualCredentials:
+            return normalizedCredentialsJSON(profile.credentialsJSON) == normalizedCredentialsJSON(credentialsJSON)
+        }
+    }
+
+    private static func normalizedCredentialsJSON(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 
     private static func normalizedFingerprint(_ value: String?) -> String? {
