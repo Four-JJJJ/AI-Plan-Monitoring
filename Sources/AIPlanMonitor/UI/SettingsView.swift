@@ -5469,10 +5469,6 @@ struct SettingsView: View {
     private func claudeImportNextProfileCard(nextSlotID: CodexSlotID) -> some View {
         let oauthState = viewModel.oauthImportState(for: .claude)
         let oauthRunning = oauthState?.isRunning ?? false
-        let oauthEnabledBinding = Binding<Bool>(
-            get: { viewModel.claudeOAuthImportEnabled() },
-            set: { viewModel.setClaudeOAuthImportEnabled($0) }
-        )
 
         return officialAccountMonitorCard {
             VStack(alignment: .leading, spacing: 0) {
@@ -5498,7 +5494,7 @@ struct SettingsView: View {
 
                     codexAccountActionButton(
                         viewModel.localizedText("OAuth 添加", "Add via OAuth"),
-                        disabled: oauthRunning || !oauthEnabledBinding.wrappedValue
+                        disabled: oauthRunning
                     ) {
                         viewModel.startOAuthImport(providerType: .claude, slotID: nextSlotID)
                     }
@@ -5507,23 +5503,6 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.top, 8)
-
-                HStack(spacing: 8) {
-                    Text(viewModel.localizedText("高级 OAuth 导入", "Advanced OAuth import"))
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(settingsHintColor)
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: oauthEnabledBinding)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-                .padding(.top, 8)
-
-                Text(viewModel.localizedText("默认关闭。仅在你确认需要从本机 Claude 登录态自动导入时再开启。", "Disabled by default. Turn on only when you explicitly want to import from local Claude login state."))
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(settingsHintColor)
-                    .lineLimit(2)
-                    .padding(.top, 6)
 
                 if let oauthState {
                     Text(oauthImportStateText(oauthState))

@@ -64,6 +64,125 @@ final class OAuthImportOrchestratorTests: XCTestCase {
         XCTAssertEqual(error, .missingCredential)
     }
 
+    func testClaudeUsesAuthLoginByDefault() async {
+        let recorder = CommandRecorder()
+        let orchestrator = OAuthImportOrchestrator(
+            commandRunner: { command, _ in
+                await recorder.append(command)
+                return OAuthImportCommandResult(status: 0, timedOut: false, wasCancelled: false, stdout: "ok", stderr: "")
+            },
+            credentialLoader: { provider in
+                guard provider == .claude else { return nil }
+                return OAuthImportCredential(
+                    rawJSON: Self.sampleClaudeCredentialsJSON(email: "claude@example.com"),
+                    fingerprint: "finger-claude",
+                    accountEmail: "claude@example.com"
+                )
+            }
+        )
+
+        let result = await orchestrator.importAccount(provider: .claude, slotID: .a)
+
+        guard case .success(let imported) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(imported.provider, .claude)
+        XCTAssertEqual(imported.mode, .browserCallback)
+
+        let commands = await recorder.commands()
+        XCTAssertEqual(
+            commands,
+            [OAuthImportCLICommand(provider: .claude, mode: .browserCallback)]
+        )
+        XCTAssertEqual(commands.first?.prefersLegacyLogin, false)
+    }
+
+    func testClaudeFallsBackToLegacyLoginWhenAuthSubcommandIsUnsupported() async {
+        let recorder = CommandRecorder()
+        let orchestrator = OAuthImportOrchestrator(
+            commandRunner: { command, _ in
+                await recorder.append(command)
+                if command.provider == .claude,
+                   command.mode == .browserCallback,
+                   !command.prefersLegacyLogin {
+                    return OAuthImportCommandResult(
+                        status: 1,
+                        timedOut: false,
+                        wasCancelled: false,
+                        stdout: "",
+                        stderr: "unknown command 'auth'"
+                    )
+                }
+                return OAuthImportCommandResult(status: 0, timedOut: false, wasCancelled: false, stdout: "ok", stderr: "")
+            },
+            credentialLoader: { provider in
+                guard provider == .claude else { return nil }
+                return OAuthImportCredential(
+                    rawJSON: Self.sampleClaudeCredentialsJSON(email: "claude@example.com"),
+                    fingerprint: "finger-claude",
+                    accountEmail: "claude@example.com"
+                )
+            }
+        )
+
+        let result = await orchestrator.importAccount(provider: .claude, slotID: .a)
+
+        guard case .success(let imported) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(imported.provider, .claude)
+        XCTAssertEqual(imported.mode, .browserCallback)
+
+        let commands = await recorder.commands()
+        XCTAssertEqual(
+            commands,
+            [
+                OAuthImportCLICommand(provider: .claude, mode: .browserCallback),
+                OAuthImportCLICommand(provider: .claude, mode: .browserCallback, prefersLegacyLogin: true)
+            ]
+        )
+    }
+
+    func testClaudeDoesNotFallbackForNonCompatibilityFailure() async {
+        let recorder = CommandRecorder()
+        let orchestrator = OAuthImportOrchestrator(
+            commandRunner: { command, _ in
+                await recorder.append(command)
+                return OAuthImportCommandResult(
+                    status: 1,
+                    timedOut: false,
+                    wasCancelled: false,
+                    stdout: "",
+                    stderr: "network unreachable"
+                )
+            },
+            credentialLoader: { provider in
+                guard provider == .claude else { return nil }
+                return OAuthImportCredential(
+                    rawJSON: Self.sampleClaudeCredentialsJSON(email: "claude@example.com"),
+                    fingerprint: "finger-claude",
+                    accountEmail: "claude@example.com"
+                )
+            }
+        )
+
+        let result = await orchestrator.importAccount(provider: .claude, slotID: .a)
+
+        guard case .failure(let error) = result else {
+            return XCTFail("expected failure, got \(result)")
+        }
+        guard case .commandFailed(let message) = error else {
+            return XCTFail("expected commandFailed, got \(error)")
+        }
+        XCTAssertTrue(message.contains("network unreachable"))
+
+        let commands = await recorder.commands()
+        XCTAssertEqual(
+            commands,
+            [OAuthImportCLICommand(provider: .claude, mode: .browserCallback)]
+        )
+    }
+
     private static func sampleCodexAuthJSON(accountID: String, email: String) -> String {
         let payload = Data(#"{"email":"\#(email)"}"#.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -76,6 +195,18 @@ final class OAuthImportOrchestratorTests: XCTestCase {
             "refresh_token": "refresh-token-\#(accountID)",
             "account_id": "\#(accountID)",
             "id_token": "header.\#(payload).signature"
+          }
+        }
+        """#
+    }
+
+    private static func sampleClaudeCredentialsJSON(email: String) -> String {
+        #"""
+        {
+          "claudeAiOauth": {
+            "accessToken": "claude-access-token",
+            "refreshToken": "claude-refresh-token",
+            "email": "\#(email)"
           }
         }
         """#

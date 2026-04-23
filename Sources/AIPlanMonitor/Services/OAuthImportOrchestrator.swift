@@ -80,6 +80,7 @@ enum OAuthImportError: LocalizedError, Equatable {
 struct OAuthImportCLICommand: Equatable {
     var provider: OAuthImportProvider
     var mode: OAuthImportMode
+    var prefersLegacyLogin: Bool = false
 }
 
 struct OAuthImportCommandResult: Equatable {
@@ -104,6 +105,41 @@ actor OAuthImportOrchestrator {
 
     private var runningProcesses: [OAuthImportProvider: Process] = [:]
     private var cancellationRequests: Set<OAuthImportProvider> = []
+
+    private struct ClaudeBrowserCaptureContext {
+        let helperDirectoryPath: String
+    }
+
+    private final class CommandOutputAccumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stdout: String = ""
+        private var stderr: String = ""
+
+        func appendStdout(_ text: String) {
+            append(text: text, isStdout: true)
+        }
+
+        func appendStderr(_ text: String) {
+            append(text: text, isStdout: false)
+        }
+
+        func snapshot() -> (stdout: String, stderr: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (stdout, stderr)
+        }
+
+        private func append(text: String, isStdout: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+
+            if isStdout {
+                stdout += text
+            } else {
+                stderr += text
+            }
+        }
+    }
 
     init(
         commandRunner: (@Sendable (OAuthImportCLICommand, TimeInterval) async -> OAuthImportCommandResult)? = nil,
@@ -225,7 +261,7 @@ actor OAuthImportOrchestrator {
         startedAt: Date,
         stateHandler: StateHandler?
     ) async -> Result<OAuthImportResult, OAuthImportError> {
-        let command = OAuthImportCLICommand(provider: .claude, mode: .browserCallback)
+        let preferredCommand = OAuthImportCLICommand(provider: .claude, mode: .browserCallback)
 
         await emitState(
             provider: .claude,
@@ -246,7 +282,19 @@ actor OAuthImportOrchestrator {
             stateHandler: stateHandler
         )
 
-        let commandResult = await execute(command: command, timeout: 240)
+        let preferredResult = await execute(command: preferredCommand, timeout: 240)
+        let commandResult: OAuthImportCommandResult
+        if shouldFallbackToClaudeLegacyLogin(preferredResult) {
+            let legacyCommand = OAuthImportCLICommand(
+                provider: .claude,
+                mode: .browserCallback,
+                prefersLegacyLogin: true
+            )
+            commandResult = await execute(command: legacyCommand, timeout: 240)
+        } else {
+            commandResult = preferredResult
+        }
+
         if let failure = commandFailure(from: commandResult) {
             let detail = mergedCommandOutput(commandResult)
             await emitState(
@@ -268,6 +316,22 @@ actor OAuthImportOrchestrator {
             startedAt: startedAt,
             stateHandler: stateHandler
         )
+    }
+
+    private func shouldFallbackToClaudeLegacyLogin(_ result: OAuthImportCommandResult) -> Bool {
+        guard result.status != 0, !result.timedOut, !result.wasCancelled else { return false }
+        let combined = mergedCommandOutput(result).lowercased()
+        guard combined.contains("auth") else { return false }
+
+        let compatibilityMarkers = [
+            "unknown command",
+            "unknown subcommand",
+            "no such command",
+            "invalid command",
+            "unrecognized command",
+            "did you mean"
+        ]
+        return compatibilityMarkers.contains { combined.contains($0) }
     }
 
     private func finishImport(
@@ -447,6 +511,15 @@ actor OAuthImportOrchestrator {
         if command.provider == .claude {
             environment.removeValue(forKey: "CLAUDE_CODE_OAUTH_TOKEN")
         }
+        let browserCapture = prepareClaudeBrowserCapture(
+            command: command,
+            baseEnvironment: &environment
+        )
+        defer {
+            if let helperDirectoryPath = browserCapture?.helperDirectoryPath {
+                try? FileManager.default.removeItem(atPath: helperDirectoryPath)
+            }
+        }
         process.environment = environment
         process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
 
@@ -454,6 +527,20 @@ actor OAuthImportOrchestrator {
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
+
+        let outputAccumulator = CommandOutputAccumulator()
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            guard let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty else { return }
+            outputAccumulator.appendStdout(chunk)
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            guard let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty else { return }
+            outputAccumulator.appendStderr(chunk)
+        }
 
         let inputPipe = Pipe()
         process.standardInput = inputPipe
@@ -497,13 +584,29 @@ actor OAuthImportOrchestrator {
             }
         }
 
-        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
             _ = await waitOnSemaphore(finished, timeout: 1.0)
         }
+
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+
+        let remainingOutput = String(
+            data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        if !remainingOutput.isEmpty {
+            outputAccumulator.appendStdout(remainingOutput)
+        }
+        let remainingError = String(
+            data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        if !remainingError.isEmpty {
+            outputAccumulator.appendStderr(remainingError)
+        }
+        let (output, error) = outputAccumulator.snapshot()
 
         let cancelled = cancellationRequests.contains(command.provider)
         runningProcesses.removeValue(forKey: command.provider)
@@ -514,6 +617,55 @@ actor OAuthImportOrchestrator {
             wasCancelled: cancelled,
             stdout: output,
             stderr: error
+        )
+    }
+
+    private func prepareClaudeBrowserCapture(
+        command: OAuthImportCLICommand,
+        baseEnvironment: inout [String: String]
+    ) -> ClaudeBrowserCaptureContext? {
+        guard command.provider == .claude, command.mode == .browserCallback else { return nil }
+
+        let fileManager = FileManager.default
+        let helperDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("aiplan-claude-open-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+        } catch {
+            return nil
+        }
+
+        let helperScriptPath = helperDirectory.appendingPathComponent("open").path
+        let openedFlagPath = helperDirectory.appendingPathComponent("opened.flag").path
+        let helperScript = """
+        #!/bin/sh
+        opened_flag="\(openedFlagPath)"
+        target=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) target="$arg"; break ;;
+          esac
+        done
+        if [ -n "$target" ] && [ ! -e "$opened_flag" ]; then
+          : > "$opened_flag"
+          /usr/bin/open "$target" >/dev/null 2>&1 &
+        fi
+        exit 0
+        """
+        do {
+            try helperScript.write(toFile: helperScriptPath, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperScriptPath)
+        } catch {
+            try? fileManager.removeItem(at: helperDirectory)
+            return nil
+        }
+
+        let existingPath = baseEnvironment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        baseEnvironment["PATH"] = "\(helperDirectory.path):\(existingPath)"
+        baseEnvironment["BROWSER"] = helperScriptPath
+        return ClaudeBrowserCaptureContext(
+            helperDirectoryPath: helperDirectory.path
         )
     }
 
@@ -536,7 +688,10 @@ actor OAuthImportOrchestrator {
                 return ["login", deviceAuthFallbackFlag ?? "--device-auth"]
             }
         case .claude:
-            return ["login"]
+            if command.prefersLegacyLogin {
+                return ["login"]
+            }
+            return ["auth", "login"]
         }
     }
 

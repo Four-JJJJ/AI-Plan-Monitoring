@@ -899,26 +899,11 @@ final class AppViewModel {
     }
 
     func claudeOAuthImportEnabled() -> Bool {
-        guard let provider = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
-            return ProviderDescriptor.defaultOfficialConfig(type: .claude).oauthAccountImportEnabled
-                ?? false
-        }
-        return provider.officialConfig?.oauthAccountImportEnabled
-            ?? ProviderDescriptor.defaultOfficialConfig(type: .claude).oauthAccountImportEnabled
-            ?? false
+        true
     }
 
     func setClaudeOAuthImportEnabled(_ enabled: Bool) {
-        guard let index = config.providers.firstIndex(where: { $0.type == .claude && $0.family == .official }) else {
-            return
-        }
-        var provider = config.providers[index]
-        var official = provider.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
-        guard official.oauthAccountImportEnabled != enabled else { return }
-        official.oauthAccountImportEnabled = enabled
-        provider.officialConfig = official
-        config.providers[index] = provider
-        try? configStore.save(config)
+        _ = enabled
     }
 
     func startOAuthImport(providerType: ProviderType, slotID: CodexSlotID) {
@@ -927,21 +912,6 @@ final class AppViewModel {
             guard codexOAuthImportTask == nil else { return }
         case .claude:
             guard claudeOAuthImportTask == nil else { return }
-            guard claudeOAuthImportEnabled() else {
-                claudeOAuthImportState = OAuthImportState(
-                    provider: .claude,
-                    slotID: slotID,
-                    mode: .browserCallback,
-                    phase: .failed,
-                    detail: localizedText(
-                        "Claude OAuth 导入默认关闭，请先启用“高级 OAuth 导入”。",
-                        "Claude OAuth import is disabled by default. Enable advanced OAuth import first."
-                    ),
-                    startedAt: Date(),
-                    updatedAt: Date()
-                )
-                return
-            }
         default:
             return
         }
