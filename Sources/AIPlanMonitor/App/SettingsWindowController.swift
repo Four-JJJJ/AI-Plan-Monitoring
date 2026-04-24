@@ -7,18 +7,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private var hostingController: NSHostingController<AnyView>?
+    private var activationPolicyBeforeShowingSettings: NSApplication.ActivationPolicy?
 
     private override init() {
         super.init()
     }
 
     func show(viewModel: AppViewModel) {
-        let targetContentSize = NSSize(width: 960, height: 670)
+        showAppInDockForSettingsWindow()
+
+        let initialContentSize = NSSize(width: 1416, height: 912)
+        let minimumContentSize = NSSize(width: 1248, height: 816)
         if window == nil {
-            // 窗口基础尺寸：对应设置页整体画布宽高（与 Figma 画板尺寸对齐）。
+            // 窗口基础尺寸：首次打开使用推荐尺寸，之后允许用户自由拖拽调整。
             let panel = NSWindow(
-                contentRect: NSRect(origin: .zero, size: targetContentSize),
-                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                contentRect: NSRect(origin: .zero, size: initialContentSize),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
@@ -35,36 +39,35 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.setContentBorderThickness(0, for: .minY)
             // 整个窗口使用纯不透明背景。
             panel.isOpaque = true
-            // 窗口背景色（标题栏和内容区外层底色）。
-            panel.backgroundColor = NSColor(
-                red: 35.0 / 255.0,
-                green: 35.0 / 255.0,
-                blue: 35.0 / 255.0,
-                alpha: 1
-            )
-            // 强制深色外观，避免跟随系统浅色导致样式偏差。
-            panel.appearance = NSAppearance(named: .darkAqua)
+            // 首次创建时使用深色兜底；展示前会按当前设置外观重新应用。
+            SettingsWindowAppearanceResolver.apply(to: panel, usesLightAppearance: false)
             // 允许拖动背景区域移动窗口，避免顶部透明区域无法拖动。
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            // 固定“内容区”为 960x670（min/max 需使用 frameRect 尺寸）。
-            let fixedFrameSize = panel.frameRect(
-                forContentRect: NSRect(origin: .zero, size: targetContentSize)
+            let minimumFrameSize = panel.frameRect(
+                forContentRect: NSRect(origin: .zero, size: minimumContentSize)
             ).size
-            panel.minSize = fixedFrameSize
-            panel.maxSize = fixedFrameSize
-            panel.setContentSize(targetContentSize)
+            panel.minSize = minimumFrameSize
+            panel.setContentSize(initialContentSize)
             panel.center()
             window = panel
         }
 
+        if let panel = window {
+            applySettingsWindowAppearance(to: panel, mode: viewModel.statusBarAppearanceMode)
+        }
+
         let rootView = AnyView(
             SettingsView(viewModel: viewModel, onDone: { [weak self] in
-                self?.window?.orderOut(nil)
+                self?.hideSettingsWindow()
             })
-            // SwiftUI 内容区尺寸：与目标 contentRect 保持一致。
-            .frame(width: targetContentSize.width, height: targetContentSize.height)
+            .frame(
+                minWidth: minimumContentSize.width,
+                maxWidth: .infinity,
+                minHeight: minimumContentSize.height,
+                maxHeight: .infinity
+            )
         )
 
         if let hostingController {
@@ -74,7 +77,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             hostingController = controller
             window?.contentViewController = controller
         }
-        window?.setContentSize(targetContentSize)
         ensureSingleBorderContentAppearance()
 
         NSApp.activate(ignoringOtherApps: true)
@@ -93,6 +95,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         layoutTrafficLights(in: panel)
     }
 
+    func windowWillClose(_ notification: Notification) {
+        restoreActivationPolicyAfterSettingsWindow()
+    }
+
+    private func showAppInDockForSettingsWindow() {
+        guard NSApp.activationPolicy() != .regular else { return }
+        if activationPolicyBeforeShowingSettings == nil {
+            activationPolicyBeforeShowingSettings = NSApp.activationPolicy()
+        }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    private func hideSettingsWindow() {
+        window?.orderOut(nil)
+        restoreActivationPolicyAfterSettingsWindow()
+    }
+
+    private func restoreActivationPolicyAfterSettingsWindow() {
+        guard let activationPolicyBeforeShowingSettings else { return }
+        NSApp.setActivationPolicy(activationPolicyBeforeShowingSettings)
+        self.activationPolicyBeforeShowingSettings = nil
+    }
+
     private func ensureSingleBorderContentAppearance() {
         guard let panel = window, let contentView = panel.contentView else { return }
         // 只保留 NSWindow 外层边界；内容视图不再额外绘制轮廓。
@@ -100,6 +125,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         contentView.layer?.borderWidth = 0
         contentView.layer?.cornerRadius = 0
         contentView.layer?.masksToBounds = false
+    }
+
+    private func applySettingsWindowAppearance(
+        to panel: NSWindow,
+        mode: StatusBarAppearanceMode
+    ) {
+        let luminance = mode == .followWallpaper
+            ? SettingsWindowAppearanceResolver.wallpaperLuminance(for: panel.screen ?? NSScreen.main)
+            : nil
+        let usesLightAppearance = SettingsWindowAppearanceResolver.usesLightAppearance(
+            mode: mode,
+            wallpaperLuminance: luminance
+        )
+        SettingsWindowAppearanceResolver.apply(to: panel, usesLightAppearance: usesLightAppearance)
     }
 
     private func layoutTrafficLights(in panel: NSWindow) {
