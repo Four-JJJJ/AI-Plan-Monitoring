@@ -39,15 +39,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.setContentBorderThickness(0, for: .minY)
             // 整个窗口使用纯不透明背景。
             panel.isOpaque = true
-            // 窗口背景色（标题栏和内容区外层底色）。
-            panel.backgroundColor = NSColor(
-                red: 35.0 / 255.0,
-                green: 35.0 / 255.0,
-                blue: 35.0 / 255.0,
-                alpha: 1
-            )
-            // 强制深色外观，避免跟随系统浅色导致样式偏差。
-            panel.appearance = NSAppearance(named: .darkAqua)
+            // 首次创建时使用深色兜底；展示前会按当前设置外观重新应用。
+            SettingsWindowAppearanceResolver.apply(to: panel, usesLightAppearance: false)
             // 允许拖动背景区域移动窗口，避免顶部透明区域无法拖动。
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
@@ -59,6 +52,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.setContentSize(initialContentSize)
             panel.center()
             window = panel
+        }
+
+        if let panel = window {
+            applySettingsWindowAppearance(to: panel, mode: viewModel.statusBarAppearanceMode)
         }
 
         let rootView = AnyView(
@@ -128,6 +125,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         contentView.layer?.borderWidth = 0
         contentView.layer?.cornerRadius = 0
         contentView.layer?.masksToBounds = false
+    }
+
+    private func applySettingsWindowAppearance(
+        to panel: NSWindow,
+        mode: StatusBarAppearanceMode
+    ) {
+        let luminance = mode == .followWallpaper
+            ? SettingsWindowAppearanceResolver.wallpaperLuminance(for: panel.screen ?? NSScreen.main)
+            : nil
+        let usesLightAppearance = SettingsWindowAppearanceResolver.usesLightAppearance(
+            mode: mode,
+            wallpaperLuminance: luminance
+        )
+        SettingsWindowAppearanceResolver.apply(to: panel, usesLightAppearance: usesLightAppearance)
     }
 
     private func layoutTrafficLights(in panel: NSWindow) {

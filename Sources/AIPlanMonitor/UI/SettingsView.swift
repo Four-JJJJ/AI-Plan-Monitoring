@@ -88,31 +88,50 @@ struct SettingsView: View {
     @State private var localUsageTrendSelectedAccountKeys: [String: String] = [:]
     @State private var localUsageTrendQueryLastRefreshedAt: [String: Date] = [:]
     @State private var localUsageTrendExpandedAccountSelectorProviderID: String?
+    @State private var settingsWallpaperLuminance: Double?
 
     private let settingsClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let localUsageTrendRefreshTTL: TimeInterval = 60
 
     // MARK: - 设置页视觉 Token（改这里可全局影响样式）
-    // 整个设置页外层深色圆角容器背景。
-    private let panelBackground = Color(hex: 0x232323)
-    // “通用设置”主内容滚动区域的纯黑底。
-    private let cardBackground = Color.black
-    // 通用描边色：用于模型面板、卡片边框等 30% 白色描边，保证暗底可见性。
-    private let outlineColor = Color.white.opacity(0.30)
+    // 整个设置页外层背景。
+    private var panelBackground: Color {
+        settingsUsesLightAppearance ? Color(hex: 0xF3F4F6) : Color(hex: 0x232323)
+    }
+
+    // “通用设置”主内容滚动区域底色。
+    private var cardBackground: Color {
+        settingsUsesLightAppearance ? Color(hex: 0xFFFFFF) : Color.black
+    }
+
+    // 通用描边色：用于模型面板、卡片边框等。
+    private var outlineColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.14) : Color.white.opacity(0.30)
+    }
     // 内层卡片/黑色内容容器圆角。
     private let cardCornerRadius: CGFloat = 8
     private let settingsShellCornerRadius: CGFloat = 20
     private let settingsSidebarCornerRadius: CGFloat = 20
     private let settingsSectionCornerRadius: CGFloat = 8
-    private let settingsShellStrokeColor = Color.white.opacity(0.08)
-    private let settingsSidebarFillColor = Color.white.opacity(0.03)
-    private let settingsSectionFillColor = Color.white.opacity(0.04)
+    private var settingsShellStrokeColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.08) : Color.white.opacity(0.08)
+    }
+
+    private var settingsSidebarFillColor: Color {
+        settingsUsesLightAppearance ? Color.white.opacity(0.78) : Color.white.opacity(0.03)
+    }
+
+    private var settingsSectionFillColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.035) : Color.white.opacity(0.04)
+    }
     private let settingsAccentBlue = Color(hex: 0x168DFF)
     private let settingsAccentGreen = Color(hex: 0x31D158)
     private let settingsAccentPurple = Color(hex: 0xC93BFF)
     private let settingsAccentCyan = Color(hex: 0x12D6F3)
-    // 分割线颜色（与 15% 白描边风格一致）。
-    private let dividerColor = Color.white.opacity(0.15)
+    // 分割线颜色。
+    private var dividerColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.12) : Color.white.opacity(0.15)
+    }
     // 模型设置详情项垂直间距（设计稿统一 24px）。
     private let modelSettingsItemSpacing: CGFloat = 24
     // 本地扫描区内部内容项间距（设计稿统一 12px）。
@@ -132,19 +151,90 @@ struct SettingsView: View {
     private let settingsHintMultilineSpacing: CGFloat = 3
 
     // 标题文字颜色。
-    private let settingsTitleColor = Color.white.opacity(0.80)
+    private var settingsTitleColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.82) : Color.white.opacity(0.80)
+    }
+
     // 常规正文颜色。
-    private let settingsBodyColor = Color.white.opacity(0.80)
-    // 次级提示色（55% 白）。
-    private let settingsHintColor = Color.white.opacity(0.55)
-    // 更弱提示色（40% 白），用于“检查失败”等弱错误提示。
-    private let settingsMutedHintColor = Color.white.opacity(0.40)
+    private var settingsBodyColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.78) : Color.white.opacity(0.80)
+    }
+
+    // 次级提示色。
+    private var settingsHintColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.56) : Color.white.opacity(0.55)
+    }
+
+    // 更弱提示色，用于“检查失败”等弱错误提示。
+    private var settingsMutedHintColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.40) : Color.white.opacity(0.40)
+    }
     private let settingsUpdatePositiveColor = Color(hex: 0x69BD64)
     private let settingsUpdateNegativeColor = Color(hex: 0xD05757)
-    // 输入框填充色（white_15）。
-    private let settingsInputFillColor = Color.white.opacity(0.15)
-    // 输入框占位色（white_30）。
-    private let settingsInputPlaceholderColor = Color.white.opacity(0.30)
+    // 输入框填充色。
+    private var settingsInputFillColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.06) : Color.white.opacity(0.15)
+    }
+
+    // 输入框占位色。
+    private var settingsInputPlaceholderColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.35) : Color.white.opacity(0.30)
+    }
+    private var settingsSubtlePanelFillColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.035) : Color.white.opacity(0.03)
+    }
+
+    private var settingsSubtlePanelStrokeColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.08) : Color.white.opacity(0.06)
+    }
+
+    private var settingsSelectedRowFillColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.12) : Color.white.opacity(0.30)
+    }
+
+    private var settingsSelectedRowStrokeColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.52) : Color.white.opacity(0.80)
+    }
+
+    private var settingsRowStrokeColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.12) : Color.white.opacity(0.30)
+    }
+
+    private var settingsDropIndicatorColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.90) : Color.white.opacity(0.90)
+    }
+
+    private var settingsControlFillColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.05) : Color(hex: 0x2A2B2F)
+    }
+
+    private var settingsControlStrokeColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.12) : Color.white.opacity(0.12)
+    }
+
+    private var settingsPopoverFillColor: Color {
+        settingsUsesLightAppearance ? Color.white : Color(hex: 0x1F2024)
+    }
+
+    private var settingsPopoverSelectedFillColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.12) : Color.white.opacity(0.12)
+    }
+
+    private var settingsQuotaTrackColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.14) : Color.white.opacity(0.30)
+    }
+
+    private var settingsTrendPrimaryColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.78) : Color.white.opacity(0.62)
+    }
+
+    private var settingsTrendMutedColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.16) : Color.white.opacity(0.22)
+    }
+
+    private var settingsSliderTintColor: Color {
+        settingsUsesLightAppearance ? settingsAccentBlue : Color.white.opacity(0.80)
+    }
     // API 余额页右侧配置项统一标签列宽（设计稿为 60）。
     private let thirdPartyConfigLabelWidth: CGFloat = 60
     private let thirdPartyConfigLabelSpacing: CGFloat = 12
@@ -302,18 +392,29 @@ struct SettingsView: View {
         }
         // 设置内容需要覆盖标题栏区域，避免系统安全区留下顶部分层。
         .ignoresSafeArea()
-        .environment(\.colorScheme, .dark)
+        .environment(\.colorScheme, settingsColorScheme)
         .onAppear {
             seedInputsFromConfig()
             syncSelection()
             resetProviderReorderState()
+            refreshSettingsAppearanceSample()
+            applySettingsWindowAppearance()
             viewModel.refreshPermissionStatusesNow()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshSettingsAppearanceSample()
+            applySettingsWindowAppearance()
             viewModel.refreshPermissionStatusesNow()
         }
         .onReceive(settingsClock) { value in
             settingsNow = value
+        }
+        .onChange(of: viewModel.statusBarAppearanceMode) { _, _ in
+            refreshSettingsAppearanceSample()
+            applySettingsWindowAppearance()
+        }
+        .onChange(of: settingsWallpaperLuminance) { _, _ in
+            applySettingsWindowAppearance()
         }
         .onChange(of: viewModel.config.providers.map(\.id)) { _, _ in
             seedInputsFromConfig()
@@ -430,6 +531,31 @@ struct SettingsView: View {
             .padding(.bottom, 16)
             .padding(.top, 44)
         }
+    }
+
+    private var settingsColorScheme: ColorScheme {
+        settingsUsesLightAppearance ? .light : .dark
+    }
+
+    private var settingsUsesLightAppearance: Bool {
+        SettingsWindowAppearanceResolver.usesLightAppearance(
+            mode: viewModel.statusBarAppearanceMode,
+            wallpaperLuminance: settingsWallpaperLuminance
+        )
+    }
+
+    private func refreshSettingsAppearanceSample() {
+        guard viewModel.statusBarAppearanceMode == .followWallpaper else {
+            settingsWallpaperLuminance = nil
+            return
+        }
+        let screen = NSApp.keyWindow?.screen ?? NSScreen.main
+        settingsWallpaperLuminance = SettingsWindowAppearanceResolver.wallpaperLuminance(for: screen)
+    }
+
+    private func applySettingsWindowAppearance() {
+        guard let window = NSApp.windows.first(where: { $0.title == "AI Plan Monitor Settings" }) ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        SettingsWindowAppearanceResolver.apply(to: window, usesLightAppearance: settingsUsesLightAppearance)
     }
 
     private var settingsNavigationSidebar: some View {
@@ -618,11 +744,11 @@ struct SettingsView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+                .fill(settingsSubtlePanelFillColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
         )
     }
 
@@ -651,11 +777,11 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(0.03))
+                    .fill(settingsSubtlePanelFillColor)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                    .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
@@ -684,11 +810,11 @@ struct SettingsView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+                .fill(settingsSubtlePanelFillColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
         )
     }
 
@@ -786,14 +912,14 @@ struct SettingsView: View {
         case .general:
             settingsSingleSectionContent(
                 title: viewModel.localizedText("常规", "General"),
-                subtitle: viewModel.localizedText("设置语言、开机启动和基础应用行为。", "Configure language, launch at login, and basic app behavior.")
+                subtitle: viewModel.localizedText("设置语言、设置窗口外观、开机启动和基础应用行为。", "Configure language, settings window appearance, launch at login, and basic app behavior.")
             ) {
                 appBehaviorSection
             }
         case .menuBar:
             settingsSingleSectionContent(
                 title: viewModel.localizedText("菜单栏", "Menubar"),
-                subtitle: viewModel.localizedText("控制菜单栏显示模式、外观和信息密度。", "Control menubar display mode, appearance, and information density.")
+                subtitle: viewModel.localizedText("控制菜单栏显示哪些服务、如何展示以及信息密度。", "Control which services appear in the menubar, how they render, and information density.")
             ) {
                 menuBarPreferencesSection
             }
@@ -1037,7 +1163,7 @@ struct SettingsView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(settingsShellStrokeColor, lineWidth: 1)
         )
     }
 
@@ -1144,9 +1270,12 @@ struct SettingsView: View {
             SettingsOverviewCardItem(
                 id: "menubar",
                 icon: "menubar.rectangle",
-                title: viewModel.localizedText("菜单栏模式", "Menubar Mode"),
+                title: viewModel.localizedText("界面与菜单栏", "Interface & Menubar"),
                 value: isMulti ? viewModel.localizedText("多模型", "Multi") : viewModel.localizedText("单模型", "Single"),
-                detail: "\(statusBarAppearanceModeSummary) · \(statusBarDisplayStyleSummary)",
+                detail: viewModel.localizedText(
+                    "设置窗口 \(statusBarAppearanceModeSummary) · 菜单栏 \(statusBarDisplayStyleSummary)",
+                    "Settings window \(statusBarAppearanceModeSummary) · Menubar \(statusBarDisplayStyleSummary)"
+                ),
                 accent: settingsAccentCyan
             )
         ]
@@ -1189,7 +1318,10 @@ struct SettingsView: View {
                 icon: "pin.circle",
                 title: viewModel.localizedText("菜单栏来源", "Menubar Sources"),
                 value: "\(statusBarSourceCount)",
-                detail: "\(statusBarAppearanceModeSummary) · \(statusBarDisplayStyleSummary)",
+                detail: viewModel.localizedText(
+                    "设置窗口 \(statusBarAppearanceModeSummary) · 菜单栏 \(statusBarDisplayStyleSummary)",
+                    "Settings window \(statusBarAppearanceModeSummary) · Menubar \(statusBarDisplayStyleSummary)"
+                ),
                 accent: settingsAccentCyan
             )
         ]
@@ -1421,6 +1553,10 @@ struct SettingsView: View {
 
     private func settingsTabButton(_ tab: SettingsTab) -> some View {
         let isSelected = selectedSettingsTab == tab
+        let selectedTextColor = settingsUsesLightAppearance ? settingsAccentBlue : Color.black
+        let idleTextColor = settingsBodyColor
+        let selectedFillColor = settingsUsesLightAppearance ? settingsAccentBlue.opacity(0.14) : Color.white.opacity(0.8)
+        let idleFillColor = settingsUsesLightAppearance ? Color.black.opacity(0.04) : Color.white.opacity(0.15)
 
         return Button {
             selectedSettingsTab = tab
@@ -1433,13 +1569,13 @@ struct SettingsView: View {
             Text(settingsTabTitle(tab))
                 // tab 文字字号与选中态字重。
                 .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
+                .foregroundStyle(isSelected ? selectedTextColor : idleTextColor)
                 .padding(.horizontal, 12)
                 .frame(height: 28)
                 .background(
                     // tab 背景：选中是亮底，未选中是 white_15。
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.8) : Color.white.opacity(0.15))
+                        .fill(isSelected ? selectedFillColor : idleFillColor)
                 )
                 .contentShape(Rectangle())
         }
@@ -1620,7 +1756,7 @@ struct SettingsView: View {
         appliesTintToBundledImage: Bool = false
     ) -> some View {
         if let image = bundledImage(named: name) {
-            if appliesTintToBundledImage {
+            if appliesTintToBundledImage || settingsUsesLightAppearance {
                 // 图标按原始宽高比缩放，避免不同视觉比例被拉伸。
                 Image(nsImage: image)
                     .renderingMode(.template)
@@ -1894,11 +2030,11 @@ struct SettingsView: View {
         .frame(height: 38)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.white.opacity(0.30) : Color.clear)
+                .fill(isSelected ? settingsSelectedRowFillColor : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor, lineWidth: 1)
         )
         .overlay(alignment: dropTargetInsertAfter ? .bottom : .top) {
             if provider.enabled,
@@ -1906,7 +2042,7 @@ struct SettingsView: View {
                draggingProviderID != provider.id,
                dropTargetProviderID == provider.id {
                 Rectangle()
-                    .fill(Color.white.opacity(0.90))
+                    .fill(settingsDropIndicatorColor)
                     .frame(height: 2)
                     .padding(.horizontal, 8)
             }
@@ -1923,7 +2059,7 @@ struct SettingsView: View {
     private func reorderHandle() -> some View {
         Image(systemName: "line.3.horizontal")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.50))
+            .foregroundStyle(settingsHintColor)
             .frame(width: 14, height: 14)
             .contentShape(Rectangle())
     }
@@ -2100,6 +2236,11 @@ struct SettingsView: View {
             Spacer()
                 .frame(height: 24)
 
+            settingsAppearanceModeSection
+
+            Spacer()
+                .frame(height: 24)
+
             VStack(alignment: .leading, spacing: 8) {
                 let launchAtLoginBinding = Binding(
                     get: { viewModel.launchAtLoginEnabled },
@@ -2136,11 +2277,6 @@ struct SettingsView: View {
     private var menuBarPreferencesSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusBarMultiUsageSection
-
-            Spacer()
-                .frame(height: 24)
-
-            statusBarAppearanceModeSection
 
             Spacer()
                 .frame(height: 24)
@@ -2226,15 +2362,15 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var statusBarAppearanceModeSection: some View {
+    private var settingsAppearanceModeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                Text(settingsStatusBarAppearanceModeTitle)
+                Text(settingsAppearanceModeTitle)
                     .font(settingsLabelFont)
                     .foregroundStyle(settingsBodyColor)
                     .frame(width: 48, alignment: .leading)
 
-                statusBarAppearanceModeSegmentControl
+                settingsAppearanceModeSegmentControl
 
                 Spacer(minLength: 0)
             }
@@ -2243,7 +2379,7 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var statusBarAppearanceModeSegmentControl: some View {
+    private var settingsAppearanceModeSegmentControl: some View {
         Picker("", selection: Binding(
             get: { viewModel.statusBarAppearanceMode.id },
             set: { newValue in
@@ -2252,9 +2388,9 @@ struct SettingsView: View {
                 }
             }
         )) {
-            Text(settingsStatusBarAppearanceFollowWallpaper).tag(StatusBarAppearanceMode.followWallpaper.id)
-            Text(settingsStatusBarAppearanceDark).tag(StatusBarAppearanceMode.dark.id)
-            Text(settingsStatusBarAppearanceLight).tag(StatusBarAppearanceMode.light.id)
+            Text(settingsAppearanceFollowWallpaper).tag(StatusBarAppearanceMode.followWallpaper.id)
+            Text(settingsAppearanceDark).tag(StatusBarAppearanceMode.dark.id)
+            Text(settingsAppearanceLight).tag(StatusBarAppearanceMode.light.id)
         }
         .pickerStyle(.segmented)
         .controlSize(.small)
@@ -2298,14 +2434,14 @@ struct SettingsView: View {
         ]
         return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black)
+                .fill(settingsUsesLightAppearance ? Color(hex: 0xF4F5F7) : Color.black)
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(settingsRowStrokeColor, lineWidth: 1)
 
             HStack(spacing: 16) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(spacing: 4) {
-                        if let image = bundledImage(named: item.icon) {
+                        if let image = themedBundledImage(named: item.icon) {
                             Image(nsImage: image)
                                 .resizable()
                                 .scaledToFit()
@@ -2314,7 +2450,7 @@ struct SettingsView: View {
                         }
                         Text(item.value)
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.8))
+                            .foregroundStyle(settingsBodyColor)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .fixedSize(horizontal: true, vertical: false)
@@ -2337,30 +2473,30 @@ struct SettingsView: View {
         ]
         return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black)
+                .fill(settingsUsesLightAppearance ? Color(hex: 0xF4F5F7) : Color.black)
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(settingsRowStrokeColor, lineWidth: 1)
 
             HStack(spacing: 16) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(spacing: 4) {
                         ZStack(alignment: .bottom) {
                             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(Color.white.opacity(0.30))
+                                .fill(settingsQuotaTrackColor)
                                 .frame(width: 10, height: 20)
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                .fill(Color.white.opacity(0.8))
+                                .fill(settingsUsesLightAppearance ? Color.black.opacity(0.72) : Color.white.opacity(0.8))
                                 .frame(width: 6, height: max(0, round(16 * item.percent / 100)))
                                 .offset(y: -2)
                         }
                         VStack(alignment: .leading, spacing: 0) {
                             Text(item.name)
                                 .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(Color.white.opacity(0.80))
+                                .foregroundStyle(settingsHintColor)
                                 .lineLimit(1)
                             Text(item.value)
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.8))
+                                .foregroundStyle(settingsBodyColor)
                                 .lineLimit(1)
                         }
                         .offset(y: 1)
@@ -2782,19 +2918,19 @@ struct SettingsView: View {
         viewModel.text(.statusBarDisplayStyle)
     }
 
-    private var settingsStatusBarAppearanceModeTitle: String {
+    private var settingsAppearanceModeTitle: String {
         viewModel.text(.statusBarAppearanceMode)
     }
 
-    private var settingsStatusBarAppearanceFollowWallpaper: String {
+    private var settingsAppearanceFollowWallpaper: String {
         viewModel.text(.statusBarAppearanceFollowWallpaper)
     }
 
-    private var settingsStatusBarAppearanceDark: String {
+    private var settingsAppearanceDark: String {
         viewModel.text(.statusBarAppearanceDark)
     }
 
-    private var settingsStatusBarAppearanceLight: String {
+    private var settingsAppearanceLight: String {
         viewModel.text(.statusBarAppearanceLight)
     }
 
@@ -2991,12 +3127,12 @@ struct SettingsView: View {
 
             if let provider {
                 providerIcon(for: provider, size: 12)
-            } else if let image = bundledImage(named: relayPresetIconName(for: preset)) {
+            } else if let image = themedBundledImage(named: relayPresetIconName(for: preset)) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 12, height: 12)
-            } else if let image = bundledImage(named: "relay_icon") {
+            } else if let image = themedBundledImage(named: "relay_icon") {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -3006,7 +3142,7 @@ struct SettingsView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 12, height: 12)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(settingsBodyColor)
             }
 
             Text(preset.displayName)
@@ -3019,11 +3155,11 @@ struct SettingsView: View {
         .frame(height: 38)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.white.opacity(0.30) : Color.clear)
+                .fill(isSelected ? settingsSelectedRowFillColor : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -3169,7 +3305,7 @@ struct SettingsView: View {
                 in: 0...100
             )
             .frame(width: 200)
-            .tint(Color.white.opacity(0.80))
+            .tint(settingsSliderTintColor)
 
             officialThresholdStepper(provider)
         }
@@ -3337,7 +3473,7 @@ struct SettingsView: View {
                 in: 0...100
             )
             .frame(width: 200)
-            .tint(Color.white.opacity(0.80))
+            .tint(settingsSliderTintColor)
 
             officialThresholdStepper(provider)
         }
@@ -4132,7 +4268,7 @@ struct SettingsView: View {
                         : minBarHeight
 
                     Capsule()
-                        .fill(value > 0 ? Color.white.opacity(0.62) : Color.white.opacity(0.22))
+                        .fill(value > 0 ? settingsTrendPrimaryColor : settingsTrendMutedColor)
                         .frame(width: barWidth, height: barHeight)
                 }
             }
@@ -4164,7 +4300,7 @@ struct SettingsView: View {
             }
             .frame(height: 14)
             .font(.system(size: 10, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.45))
+            .foregroundStyle(settingsHintColor)
         } else {
             Color.clear
                 .frame(height: 14)
@@ -4197,9 +4333,9 @@ struct SettingsView: View {
 
             HStack(spacing: 0) {
                 ForEach(displayPoints) { point in
-                    Text(localUsageWeeklyLabel(point.startAt))
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.45))
+                        Text(localUsageWeeklyLabel(point.startAt))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(settingsHintColor)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -4249,7 +4385,7 @@ struct SettingsView: View {
                     }
                 }
                 .stroke(
-                    Color.white.opacity(0.62),
+                    settingsTrendPrimaryColor,
                     style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
                 )
             }
@@ -4340,7 +4476,7 @@ struct SettingsView: View {
         .frame(height: 24)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                .stroke(settingsRowStrokeColor, lineWidth: 1)
         )
     }
 
@@ -4349,17 +4485,17 @@ struct SettingsView: View {
         HStack(spacing: 4) {
             Text(label)
                 .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.40))
+                .foregroundStyle(settingsHintColor)
 
             Text(LocalTrendValueFormatter.metricValueText(value: period.totalTokens, metric: .tokens, language: viewModel.language))
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.80))
+                .foregroundStyle(settingsBodyColor)
 
             localUsageTrendSummaryDivider
 
             Text(localUsageTrendResponseText(period.responses))
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.80))
+                .foregroundStyle(settingsBodyColor)
         }
         .lineLimit(1)
         .minimumScaleFactor(0.85)
@@ -4368,7 +4504,7 @@ struct SettingsView: View {
 
     private var localUsageTrendSummaryDivider: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(Color.white.opacity(0.30))
+            .fill(settingsRowStrokeColor)
             .frame(width: 1, height: 8)
     }
 
@@ -4412,7 +4548,7 @@ struct SettingsView: View {
         if loading {
             return LocalUsageTrendChartStatus(
                 text: viewModel.localizedText("加载中...", "Loading..."),
-                color: Color.white.opacity(0.30)
+                color: settingsMutedHintColor
             )
         }
         if let error, !error.isEmpty {
@@ -4433,12 +4569,12 @@ struct SettingsView: View {
                     )
                     return LocalUsageTrendChartStatus(
                         text: text,
-                        color: Color.white.opacity(0.30)
+                        color: settingsMutedHintColor
                     )
                 }
                 return LocalUsageTrendChartStatus(
                     text: viewModel.localizedText("当前账号暂无可归属事件", "No attributable events for current account"),
-                    color: Color.white.opacity(0.30)
+                    color: settingsMutedHintColor
                 )
             }
             let noDataText = provider.type == .gemini
@@ -4446,7 +4582,7 @@ struct SettingsView: View {
                 : viewModel.localizedText("暂无数据", "No data")
             return LocalUsageTrendChartStatus(
                 text: noDataText,
-                color: Color.white.opacity(0.30)
+                color: settingsMutedHintColor
             )
         }
         return nil
@@ -4489,7 +4625,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Text(selectorText)
                     .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.80))
+                    .foregroundStyle(settingsBodyColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -4497,7 +4633,7 @@ struct SettingsView: View {
 
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.80))
+                    .foregroundStyle(settingsHintColor)
                     .frame(width: 14, height: 14, alignment: .center)
             }
             .padding(.leading, 12)
@@ -4505,11 +4641,11 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(hex: 0x2A2B2F))
+                    .fill(settingsControlFillColor)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    .stroke(settingsControlStrokeColor, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
@@ -4555,14 +4691,14 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Text(option.label)
                             .font(.system(size: 12, weight: option.id == selectedID ? .semibold : .regular))
-                            .foregroundStyle(Color.white.opacity(option.id == selectedID ? 0.90 : 0.78))
+                            .foregroundStyle(option.id == selectedID ? settingsTitleColor : settingsBodyColor)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 8)
                         if option.id == selectedID {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.85))
+                                .foregroundStyle(settingsAccentBlue)
                         }
                     }
                     .padding(.horizontal, 10)
@@ -4570,7 +4706,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(option.id == selectedID ? Color.white.opacity(0.12) : Color.clear)
+                            .fill(option.id == selectedID ? settingsPopoverSelectedFillColor : Color.clear)
                     )
                     .contentShape(Rectangle())
                 }
@@ -4581,11 +4717,11 @@ struct SettingsView: View {
         .frame(width: 260, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(hex: 0x1F2024))
+                .fill(settingsPopoverFillColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                .stroke(settingsControlStrokeColor, lineWidth: 1)
         )
     }
 
@@ -5245,7 +5381,7 @@ struct SettingsView: View {
 
             if let planType, !planType.isEmpty {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.white.opacity(0.40))
+                    .fill(settingsRowStrokeColor)
                     .frame(width: 1, height: 8)
 
                 Text(planType)
@@ -5253,8 +5389,8 @@ struct SettingsView: View {
                     .foregroundStyle(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.80),
-                                Color(red: 1.0, green: 0.819, blue: 0.225, opacity: 0.80)
+                                settingsUsesLightAppearance ? Color.black.opacity(0.82) : Color.white.opacity(0.80),
+                                Color(red: 1.0, green: 0.74, blue: 0.18, opacity: settingsUsesLightAppearance ? 0.95 : 0.80)
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
@@ -6309,7 +6445,7 @@ struct SettingsView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            .stroke(outlineColor, lineWidth: 1)
                     )
                 }
 
@@ -6341,7 +6477,7 @@ struct SettingsView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            .stroke(outlineColor, lineWidth: 1)
                     )
                 }
 
@@ -6353,7 +6489,7 @@ struct SettingsView: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.white.opacity(0.08))
+                                .fill(settingsInputFillColor)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -6530,7 +6666,7 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 Text(metric.title)
                     .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(settingsHintColor)
                     .lineSpacing(0)
                     .lineLimit(1)
 
@@ -6539,18 +6675,20 @@ struct SettingsView: View {
                 HStack(spacing: 2) {
                     if let image = bundledImage(named: "menu_reset_clock_icon") {
                         Image(nsImage: image)
+                            .renderingMode(.template)
                             .resizable()
                             .scaledToFit()
                             .frame(width: 10, height: 10)
+                            .foregroundStyle(settingsHintColor)
                     } else {
                         Image(systemName: "clock")
                             .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.80))
+                            .foregroundStyle(settingsHintColor)
                     }
 
                     Text(metric.resetText)
                         .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.40))
+                        .foregroundStyle(settingsMutedHintColor)
                         .monospacedDigit()
                         .lineSpacing(0)
                         .frame(minWidth: 42, alignment: .trailing)
@@ -6567,7 +6705,7 @@ struct SettingsView: View {
             HStack(spacing: 5) {
                 Text(metric.valueText)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.80))
+                    .foregroundStyle(settingsBodyColor)
                     .lineSpacing(0)
                     .frame(width: MetricValueLayoutFormatter.metricValueColumnWidth, alignment: .leading)
                     .lineLimit(1)
@@ -6575,7 +6713,7 @@ struct SettingsView: View {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(0.30))
+                            .fill(settingsQuotaTrackColor)
                         if let percent = metric.percent, percent > 0 {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(metric.barColor)
@@ -6606,7 +6744,7 @@ struct SettingsView: View {
 
     private func codexAccountIcon(size: CGFloat) -> some View {
         Group {
-            if let image = bundledImage(named: "menu_codex_icon") {
+            if let image = themedBundledImage(named: "menu_codex_icon") {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -6622,7 +6760,7 @@ struct SettingsView: View {
 
     private func claudeAccountIcon(size: CGFloat) -> some View {
         Group {
-            if let image = bundledImage(named: "menu_claude_icon") {
+            if let image = themedBundledImage(named: "menu_claude_icon") {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -6698,7 +6836,7 @@ struct SettingsView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            .stroke(outlineColor, lineWidth: 1)
                     )
                 }
 
@@ -6709,7 +6847,7 @@ struct SettingsView: View {
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
+                            .fill(settingsInputFillColor)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -8437,7 +8575,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func providerIcon(for provider: ProviderDescriptor, size: CGFloat) -> some View {
-        if let image = bundledImage(named: iconName(for: provider)) {
+        if let image = themedBundledImage(named: iconName(for: provider)) {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
@@ -8446,9 +8584,17 @@ struct SettingsView: View {
             Image(systemName: fallbackIcon(for: provider))
                 .resizable()
                 .scaledToFit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(settingsBodyColor)
                 .frame(width: size, height: size)
         }
+    }
+
+    private func themedBundledImage(named name: String) -> NSImage? {
+        if settingsUsesLightAppearance,
+           let darkImage = bundledImage(named: "\(name)_dark") {
+            return darkImage
+        }
+        return bundledImage(named: name)
     }
 
     private func bundledImage(named name: String) -> NSImage? {
@@ -8825,7 +8971,7 @@ struct SettingsView: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(settingsSubtlePanelFillColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -8862,7 +9008,7 @@ struct SettingsView: View {
                 providerIcon(for: provider, size: 12)
                 Text(sidebarDisplayName(for: provider))
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(settingsBodyColor)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text(summaryStatus.text)
@@ -8875,25 +9021,26 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(viewModel.text(.balanceLabel))
                     .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(settingsHintColor)
 
                 HStack(spacing: 6) {
                     if let image = bundledImage(named: "menu_balance_icon") {
                         Image(nsImage: image)
+                            .renderingMode(.template)
                             .resizable()
                             .scaledToFit()
                             .frame(width: 16, height: 16)
-                            .opacity(0.9)
+                            .foregroundStyle(settingsBodyColor)
                     } else {
                         Image(systemName: "dollarsign.circle.fill")
                             .resizable()
                             .scaledToFit()
                             .frame(width: 16, height: 16)
-                            .foregroundStyle(Color.white.opacity(0.9))
+                            .foregroundStyle(settingsBodyColor)
                     }
                     Text(balanceText)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(settingsBodyColor)
                 }
             }
 
@@ -8930,7 +9077,7 @@ struct SettingsView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black)
+                .fill(cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -9209,16 +9356,16 @@ private extension View {
     func relayCompactInput() -> some View {
         self
             .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.80))
+            .foregroundStyle(Color.primary.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.15))
+                    .fill(Color.primary.opacity(0.08))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             )
     }
 
@@ -9226,16 +9373,16 @@ private extension View {
         // Relay 基础输入框样式（与 token 输入框保持一致）。
         self
             .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.80))
+            .foregroundStyle(Color.primary.opacity(0.80))
             .padding(.horizontal, 8)
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.15))
+                    .fill(Color.primary.opacity(0.08))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             )
     }
 }
