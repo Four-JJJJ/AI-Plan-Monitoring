@@ -43,7 +43,8 @@ jobs:
           if [[ -n "$INPUT_VERSION" ]]; then
             TAG="$INPUT_VERSION"
           elif [[ -z "$TAG" ]]; then
-            TAG="v$(tr -d '[:space:]' < VERSION)"
+            echo "No version was provided by tag or workflow input." >&2
+            exit 1
           fi
 
           if [[ "$TAG" != v* ]]; then
@@ -59,6 +60,12 @@ jobs:
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Sync VERSION file
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ steps.version.outputs.version }}" > VERSION
 
       - name: Build release assets
         shell: bash
