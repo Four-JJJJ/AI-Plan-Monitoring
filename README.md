@@ -1,164 +1,224 @@
 # AI Plan Monitor
 
-一个面向 macOS 的菜单栏应用，用来统一监控 AI 官方订阅额度、模型使用窗口、第三方中转余额和本地桌面端账号状态。
+一个面向 macOS 的菜单栏应用，用来把 AI 官方订阅额度、模型使用窗口、第三方中转余额，以及本地桌面端账号状态统一收进一个地方。
 
-[下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
+[下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
 
-## 更新说明
+## 最新更新
 
-### V1.7.0
+### V1.8.0
 
-1. 新增 Official OpenCode Go 监控支持，官方来源覆盖继续扩展。
-2. 修复 Claude OAuth 无法唤起网页登录的问题，并同步修复 Claude 档案备注更新异常。
-3. 修复 Codex 手动刷新后的会话倒计时稳定性，减少刷新后显示抖动。
-4. 修复 Trae SOLO 订阅刷新稳定性，降低短时间内状态不一致概率。
-5. 优化菜单显示配置同步与中转示例默认项清理，更新后发布说明支持应用内展示。
+1. 重构设置页结构，重新整理信息层级和交互布局，日常配置更集中也更清晰。
+2. 修复设置窗口浅色、深色与跟随壁纸场景下的外观表现，提升设置窗口与状态栏主题的一致性。
+3. 优化 GitHub Actions 发布流程，自动同步 `VERSION` 文件，减少版本号与 release 资源不一致的问题。
 
-## 这是什么
+## 它解决什么问题
 
-AI Plan Monitor 解决的是一个很实际的问题：现在 AI 服务的额度信息非常分散。
+现在 AI 用量信息通常散落在很多地方：
 
-- 官方服务各自有不同的配额页面和重置规则
-- 第三方中转站点经常需要自己研究 Cookie、Bearer、用户 ID、GroupId、组织 ID
-- 本地桌面端工具的使用量很多时候又不在公开网页里
+- 官方产品各自有不同的额度页、重置周期和展示方式
+- 第三方中转站经常需要自己处理 Cookie、Bearer、用户 ID、GroupId 或组织上下文
+- 本地桌面端工具的使用状态，很多时候又不在公开网页里
 
-这个项目把这些信息统一收回到一个 macOS 菜单栏应用里，让你不用来回打开多个后台页面，就能快速知道：
+AI Plan Monitor 的目标很直接：
 
-- 哪个官方模型额度快用完了
-- 5 小时窗口、周额度、月额度什么时候重置
-- 哪个第三方中转站点余额不足
-- 哪个账号登录态过期了
-- Codex 当前激活的是哪一个本地账号
+- 在菜单栏里快速知道哪些额度快用完了
+- 明确看到会话、5 小时、周、月等窗口何时重置
+- 统一管理官方来源和第三方中转来源
+- 提前发现登录态失效、鉴权过期、站点接口变更或连续失败
+- 在需要时直接切换本地 Codex 账号，而不是手动翻配置文件
 
 ## 适合谁
 
-- 同时使用多个官方 AI 服务的人
-- 依赖多个第三方中转站点的人
-- 需要频繁切换 Codex 本地账号的人
-- 希望把 AI 额度和余额监控常驻在菜单栏的人
+- 同时使用多个 AI 官方产品，希望把额度状态常驻在菜单栏的人
+- 依赖多个中转站点，希望统一查看余额和异常状态的人
+- 经常在多个 Codex 本地账号之间切换的人
+- 想要一套更接近真实使用场景，而不是只看单一网页余额的监控工具的人
 
-## 项目优势
+## 核心思路
 
-### 1. 官方服务和第三方中转统一监控
+这个项目把来源分成三类统一处理：
 
-不是只做单一官方产品，也不是只做 OpenAI 风格余额页，而是把两类来源放到一个应用里统一展示。
+### 1. 官方订阅与官方用量
 
-目前已覆盖的官方来源包括：
-- Codex
-- Claude
-- Gemini
-- GitHub Copilot
-- Cursor
-- Windsurf
-- Kimi
-- Amp
-- Z.ai
-- JetBrains AI
-- Kiro
-- OpenCode Go
+适合能从官方 API、官方网页、官方 CLI 或本地官方会话中拿到真实状态的服务。
 
-### 2. 第三方站点配置做了模板化
+### 2. 本地桌面端账号状态
 
-已验证的中转站点不需要用户自己理解接口路径、字段映射、JSONPath 这些底层配置，而是直接按模板填写必要内容。
+适合像 Codex 这类会把登录态、账号信息或本地使用记录落在本机的桌面端工具。
 
-目前内置了这些模板：
-- `open.ailinyu.de`
-- `platform.moonshot.cn`
-- `platform.xiaomimimo.com`
-- `platform.minimaxi.com`
-- `hongmacc.com`
-- `platform.deepseek.com`
-- `dragoncode.codes`
-- 通用 New API 兼容站点
+### 3. 第三方中转站点
 
-### 3. 更适合真实使用场景的凭证策略
+通过模板化配置、浏览器兜底和更清晰的错误分类，减少用户手工拼接口和猜字段的成本。
 
-除了手动保存 Token / Cookie，第三方站点还支持：
-- 手动优先
-- 浏览器优先
-- 仅浏览器
+## 核心能力
 
-这意味着对于容易过期的站点，用户不一定要一直手动重贴凭证，浏览器登录态可以作为兜底来源。
+### 菜单栏实时监控
 
-### 4. 错误提示更接近用户语言
+- 菜单栏直接显示额度、百分比、倒计时和刷新状态
+- 支持单模型固定显示，也支持多模型轮换或多用量展示
+- 状态栏外观支持跟随壁纸、强制深色、强制浅色
 
-项目不会把大多数问题都压成一个笼统的失败提示，而是尽量区分：
-- 鉴权过期
-- 被限流
-- 接口路径不匹配
-- 网络不可达
+### 官方来源与第三方来源统一管理
 
-对于第三方站点，这一点尤其重要，因为它能明显降低“看不懂报错”的成本。
+- 一个应用里同时管理官方服务和中转站
+- 每个 Provider 可单独启用、停用、设置阈值和显示策略
+- 尽量统一“低额度、鉴权失效、连续失败、已缓存回退”等状态表达
 
-### 5. Codex 本地多账号切换
+### 更实用的中转站配置方式
 
-这是项目里很有特色的一块能力。
+- 内置已验证模板，减少手工填写接口路径和解析字段
+- 支持 `Manual Preferred`、`Browser Preferred`、`Browser Only` 三种凭证策略
+- 对常见失败原因做更明确的用户可读提示，而不是只返回一个模糊错误
 
-支持：
-- 自动识别和记住本机当前 Codex `auth.json`
-- 导入多个本地 Codex 账号
-- 在菜单栏里直接切换本地 Codex 桌面端账号
-- 保留未激活账号的额度窗口和倒计时
+### Codex 多账号与本地切换
 
-如果你需要在多个 Codex 账号之间来回切换，这一块会非常实用。
+- 自动识别当前本机 Codex 桌面端登录态
+- 支持导入和保存多个 Codex 账号槽位
+- 可在应用内直接切换本地 Codex 账号
+- 非当前账号的额度窗口和倒计时也可以保留展示
 
-## 核心功能
+### OAuth 导入与账号资料管理
 
-- 每个 provider 可单独启用或关闭
-- 每个 provider 可设置低额度阈值
-- 可将某个 provider 固定到状态栏显示
-- 支持低额度提醒
-- 支持鉴权失效提醒
-- 支持连续失败提醒
+- 支持 Codex 和 Claude 的 OAuth 导入流程
+- 支持已导入账号的备注、显示名和槽位管理
+- 尽量保留已识别账号与槽位之间的稳定对应关系
+
+### 应用级能力
+
+- 支持低额度提醒、鉴权失效提醒和连续失败提醒
 - 支持开机自启动
-- 支持菜单栏实时查看剩余额度和重置时间
-- 支持第三方站点模板化配置
-- 支持 Codex 多账号导入与切换
+- 支持 GitHub Release 驱动的应用内更新检测与版本说明展示
 
-## 安装方式
+## 当前支持的服务
 
-1. 从 [Releases](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) 下载最新的 `AI Plan Monitor.dmg`
+详细说明见 [docs/PROVIDERS.md](docs/PROVIDERS.md)。这里列出当前首页层面的支持范围。
+
+### 官方来源
+
+| 类型 | 服务 |
+| --- | --- |
+| 官方 / 本地桌面端 | Codex、Claude、Gemini、GitHub Copilot、Cursor、Windsurf |
+| 官方 / API 或网页来源 | Kimi、Amp、Z.ai、OpenCode Go |
+| 官方 / 本地数据来源 | JetBrains AI、Kiro |
+
+### 第三方中转模板
+
+| 模板 | 凭证方式 |
+| --- | --- |
+| `open.ailinyu.de` | Cookie |
+| `platform.moonshot.cn` | Bearer 或 Cookie |
+| `platform.xiaomimimo.com` | Cookie |
+| `platform.minimaxi.com` | Cookie |
+| `hongmacc.com` | Bearer |
+| `platform.deepseek.com` | Bearer |
+| `dragoncode.codes` | Relay Token |
+| Generic New API | Bearer 或 Cookie |
+
+说明：
+
+- 第三方站点变化频率通常高于官方接口
+- 模板能降低接入成本，但当站点响应结构变化时，仍可能需要模板更新
+
+## 为什么这个项目和一般的“额度页封装”不一样
+
+- 它不是只做单一官方产品，也不是只做一个 OpenAI 风格余额接口
+- 它同时覆盖官方订阅、桌面端本地状态和第三方中转站
+- 它不是只给出一个数值，而是尽量把“额度、窗口、刷新、异常状态、账号上下文”一起展示出来
+- 它更偏向日常长期使用，而不是一次性查余额
+
+## 安装
+
+### 下载安装
+
+1. 从 [Latest Release](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) 下载最新的 `AI Plan Monitor.dmg`
 2. 打开 DMG
-3. 将 `AI Plan Monitor.app` 拖到 `Applications`
-4. 第一次打开时，右键应用并选择“打开”
-5. 如果被系统拦截，到“系统设置 -> 隐私与安全性”里选择“仍要打开”
+3. 将 `AI Plan Monitor.app` 拖入 `Applications`
+4. 第一次启动时，如果被系统拦截，右键应用并选择“打开”
+5. 如果仍被拦截，到“系统设置 -> 隐私与安全性”里选择“仍要打开”
 
-完整步骤见：[安装说明](docs/DOWNLOAD.md)
+更完整的步骤见 [安装说明](docs/DOWNLOAD.md)。
 
-## 安全说明
+### 系统要求
 
-- 用户在设置中手动保存的凭证默认存放在 macOS Keychain
-- 旧版 `AIPlanMonitor` 的钥匙串条目会迁移到新的 `AI Plan Monitor`
+- macOS 14 或更高版本
+- 非 App Store 分发，当前通过 GitHub Releases 提供安装包
+
+## 数据与安全
+
+- 应用中手动保存的凭证默认存放在 macOS Keychain
+- 历史 `AIPlanMonitor` 钥匙串条目会迁移到新的 `AI Plan Monitor`
 - 应用配置保存在 `~/Library/Application Support/AIPlanMonitor`
-- 对于支持的第三方站点，应用可以在浏览器优先模式下读取浏览器登录态作为兜底
+- 对于支持的中转站，应用可在浏览器优先模式下把浏览器登录态作为兜底来源
+
+说明：
+
+- 读取浏览器状态只用于支持的站点和对应配置模式
+- 第三方站点接入能力会受到目标站点认证方式和返回结构变化的影响
 
 ## 从源码运行
 
-要求：
+### 环境要求
+
 - macOS 14+
 - Xcode / Swift 6 工具链
 
-本地运行：
+### 常用命令
+
+运行应用：
 
 ```bash
 swift run
 ```
 
-本地打包通用 DMG：
+运行测试：
+
+```bash
+swift test
+```
+
+打包通用 DMG：
 
 ```bash
 ./scripts/package_dmg.sh
 ```
 
+打包产物默认输出到：
+
+- `dist/AI Plan Monitor.dmg`
+- `dist/AI-Plan-Monitor-macOS.zip`
+
+## 项目结构
+
+```text
+Sources/AIPlanMonitor
+├── App        # 应用生命周期、状态栏、窗口与更新流程
+├── Models     # Provider、配置与共享数据模型
+├── Providers  # 各服务的接入实现
+├── Services   # 鉴权、刷新、账号管理、通知、更新等服务
+├── UI         # SwiftUI 设置页与菜单内容
+└── Resources  # 图标、模板与内置资源
+
+Tests/AIPlanMonitorTests
+docs/
+scripts/
+```
+
+## 相关文档
+
+- [安装说明](docs/DOWNLOAD.md)
+- [支持的服务](docs/PROVIDERS.md)
+- [English README](docs/README.en.md)
+
 ## 分发说明
 
-- 当前公开版本通过 GitHub Releases 分发，不走 App Store
-- 对于未公证或 ad-hoc 签名的构建，第一次启动可能需要右键打开
-- 打包脚本已经支持 Developer ID 签名和 notarization，只要提供 Apple 分发凭证即可接入正式公证流程
+- 当前公开版本通过 GitHub Releases 分发
+- GitHub 分发的构建可能是 ad-hoc 签名，首次启动时可能需要右键打开
+- 打包脚本已经支持 Developer ID 签名和 notarization；在提供 Apple 分发凭证时可接入正式公证流程
 
-## 参考项目与致谢
+## 致谢
 
-感谢以下开源项目带来的启发：
+感谢以下项目带来的启发：
 
 - [openusage](https://github.com/robinebers/openusage)
 - [cc-switch](https://github.com/farion1231/cc-switch)
