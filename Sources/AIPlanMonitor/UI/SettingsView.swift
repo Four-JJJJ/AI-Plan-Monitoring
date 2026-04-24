@@ -195,12 +195,13 @@ struct SettingsView: View {
         var id: String { "\(slotID.rawValue)-\(isNewSlot ? "new" : "edit")" }
     }
 
-    private struct CodexQuotaMetricDisplay: Identifiable {
+    private struct OfficialQuotaMetricDisplay: Identifiable {
         var id: String
         var title: String
         var valueText: String
         var resetText: String
         var percent: Double?
+        var healthPercent: Double? = nil
         var barColor: Color
         var isAvailable: Bool = true
     }
@@ -2489,7 +2490,7 @@ struct SettingsView: View {
                     .font(settingsLabelFont)
                     .foregroundStyle(settingsBodyColor)
 
-                codexProfileManagementSection()
+                codexProfileManagementSection(provider: provider)
                     .padding(.top, 12)
             } else if provider.type == .claude {
                 dividerLine
@@ -2500,7 +2501,7 @@ struct SettingsView: View {
                     .font(settingsLabelFont)
                     .foregroundStyle(settingsBodyColor)
 
-                claudeProfileManagementSection()
+                claudeProfileManagementSection(provider: provider)
                     .padding(.top, 12)
             } else if snapshot != nil || error != nil {
                 dividerLine
@@ -2655,8 +2656,8 @@ struct SettingsView: View {
         snapshot: UsageSnapshot?,
         error: String?
     ) -> some View {
-        let status = codexSlotStatus(provider: provider, snapshot: snapshot)
-        let metrics = codexQuotaMetrics(provider: provider, snapshot: snapshot)
+        let status = officialQuotaStatus(provider: provider, snapshot: snapshot)
+        let metrics = officialQuotaMetrics(provider: provider, snapshot: snapshot)
         let subtitle = officialMonitorSubtitle(snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: provider.type, snapshot: snapshot)
         let hasError = (error?.isEmpty == false) || snapshot?.valueFreshness == .empty
@@ -5121,7 +5122,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func codexProfileManagementSection() -> some View {
+    private func codexProfileManagementSection(provider: ProviderDescriptor) -> some View {
         // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
         let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.codexProfilesForSettings()
@@ -5131,6 +5132,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(profiles, id: \.slotID.rawValue) { profile in
                 codexImportedProfileCard(
+                    provider: provider,
                     profile: profile,
                     slotViewModel: slotsByID[profile.slotID],
                     teamDisplay: teamDisplayBySlotID[profile.slotID]
@@ -5143,14 +5145,15 @@ struct SettingsView: View {
     }
 
     private func codexImportedProfileCard(
+        provider: ProviderDescriptor,
         profile: CodexAccountProfile,
         slotViewModel: CodexSlotViewModel?,
         teamDisplay: CodexTeamDisplayInfo?
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
-        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
-        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
+        let status = officialQuotaStatus(provider: provider, snapshot: snapshot)
+        let metrics = officialQuotaMetrics(provider: provider, snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .codex, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -5353,7 +5356,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func claudeProfileManagementSection() -> some View {
+    private func claudeProfileManagementSection(provider: ProviderDescriptor) -> some View {
         // 显式依赖全局刷新时间，确保设置页停留打开时手动刷新也会触发该区域重绘。
         let refreshAnchor = viewModel.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0
         let profiles = viewModel.claudeProfilesForSettings()
@@ -5362,6 +5365,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(profiles, id: \.slotID.rawValue) { profile in
                 claudeImportedProfileCard(
+                    provider: provider,
                     profile: profile,
                     slotViewModel: slotsByID[profile.slotID]
                 )
@@ -5373,13 +5377,14 @@ struct SettingsView: View {
     }
 
     private func claudeImportedProfileCard(
+        provider: ProviderDescriptor,
         profile: ClaudeAccountProfile,
         slotViewModel: ClaudeSlotViewModel?
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
-        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
-        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
+        let status = officialQuotaStatus(provider: provider, snapshot: snapshot)
+        let metrics = officialQuotaMetrics(provider: provider, snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .claude, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -5799,7 +5804,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func quotaMetricLayout(
-        metrics: [CodexQuotaMetricDisplay],
+        metrics: [OfficialQuotaMetricDisplay],
         twoByTwo: Bool
     ) -> some View {
         if twoByTwo {
@@ -5823,14 +5828,14 @@ struct SettingsView: View {
         }
     }
 
-    private func metricsForRow(metrics: [CodexQuotaMetricDisplay], row: Int) -> [CodexQuotaMetricDisplay] {
+    private func metricsForRow(metrics: [OfficialQuotaMetricDisplay], row: Int) -> [OfficialQuotaMetricDisplay] {
         let start = row * 2
         guard start < metrics.count else { return [] }
         let end = min(start + 2, metrics.count)
         return Array(metrics[start..<end])
     }
 
-    private func codexQuotaMetricView(_ metric: CodexQuotaMetricDisplay) -> some View {
+    private func codexQuotaMetricView(_ metric: OfficialQuotaMetricDisplay) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(metric.title)
@@ -6100,7 +6105,7 @@ struct SettingsView: View {
         return String(trimmed.prefix(8)).lowercased()
     }
 
-    private func codexSlotStatus(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> (text: String, color: Color) {
+    private func officialQuotaStatus(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> (text: String, color: Color) {
         guard let snapshot else {
             return (viewModel.language == .zhHans ? "未知" : "Unknown", settingsHintColor)
         }
@@ -6119,7 +6124,7 @@ struct SettingsView: View {
             }
         }
 
-        let availablePercents = codexQuotaMetrics(provider: provider, snapshot: snapshot).compactMap(\.percent)
+        let availablePercents = officialQuotaMetrics(provider: provider, snapshot: snapshot).compactMap(\.healthPercent)
         guard let minimum = availablePercents.min() else {
             return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
         }
@@ -6132,12 +6137,12 @@ struct SettingsView: View {
         return (viewModel.text(.statusExhausted), Color(hex: 0xD05757))
     }
 
-    private func codexQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [CodexQuotaMetricDisplay] {
+    private func officialQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [OfficialQuotaMetricDisplay] {
         if provider.type == .claude {
             if let snapshot, !snapshot.quotaWindows.isEmpty {
-                return claudeCodexQuotaMetrics(provider: provider, snapshot: snapshot)
+                return claudeOfficialQuotaMetrics(provider: provider, snapshot: snapshot)
             }
-            return claudeCodexQuotaPlaceholderMetrics(provider: provider)
+            return claudeOfficialQuotaPlaceholderMetrics(provider: provider)
         }
 
         let windows: [UsageQuotaWindow]
@@ -6152,7 +6157,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-dollar",
                         title: traeQuotaMetricTitle(baseTitle: "Dollar"),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     ),
@@ -6160,7 +6165,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-autocomplete",
                         title: traeQuotaMetricTitle(baseTitle: "Autocomplete"),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     )
@@ -6171,7 +6176,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-premium",
                         title: "Premium",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     ),
@@ -6179,7 +6184,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-chat",
                         title: "Chat",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     )
@@ -6190,7 +6195,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-d7",
                         title: "D7",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     ),
@@ -6198,7 +6203,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-d30",
                         title: "D30",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .custom
                     )
@@ -6209,7 +6214,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-credits",
                         title: "Credits",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .credits
                     )
@@ -6220,7 +6225,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-limit",
                         title: "Limit",
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .credits
                     )
@@ -6231,7 +6236,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-session",
                         title: viewModel.localizedText("会话", "Session"),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .session
                     ),
@@ -6239,7 +6244,7 @@ struct SettingsView: View {
                         id: "\(provider.id)-placeholder-weekly",
                         title: viewModel.text(.quotaWeekly),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .weekly
                     )
@@ -6250,7 +6255,7 @@ struct SettingsView: View {
                         id: "codex-placeholder-session",
                         title: viewModel.text(.quotaFiveHour),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .session
                     ),
@@ -6258,7 +6263,7 @@ struct SettingsView: View {
                         id: "codex-placeholder-weekly",
                         title: viewModel.text(.quotaWeekly),
                         remainingPercent: 0,
-                        usedPercent: 100,
+                        usedPercent: 0,
                         resetAt: nil,
                         kind: .weekly
                     )
@@ -6271,7 +6276,7 @@ struct SettingsView: View {
             let displayPercent = provider.displaysUsedQuota
                 ? max(0, min(100, window.usedPercent))
                 : remainingPercent
-            return CodexQuotaMetricDisplay(
+            return OfficialQuotaMetricDisplay(
                 id: window.id,
                 title: codexQuotaDisplayTitle(window, provider: provider),
                 valueText: codexQuotaValueText(
@@ -6282,14 +6287,15 @@ struct SettingsView: View {
                 ),
                 resetText: codexResetCountdownText(to: window.resetAt),
                 percent: displayPercent,
+                healthPercent: remainingPercent,
                 barColor: codexQuotaBarColor(remainingPercent: remainingPercent)
             )
         }
     }
 
-    private func claudeCodexQuotaPlaceholderMetrics(provider: ProviderDescriptor) -> [CodexQuotaMetricDisplay] {
+    private func claudeOfficialQuotaPlaceholderMetrics(provider: ProviderDescriptor) -> [OfficialQuotaMetricDisplay] {
         [
-            CodexQuotaMetricDisplay(
+            OfficialQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-session",
                 title: usagePreferredQuotaTitle(
                     viewModel.text(.quotaFiveHour),
@@ -6298,9 +6304,10 @@ struct SettingsView: View {
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
+                healthPercent: 0,
                 barColor: codexQuotaBarColor(remainingPercent: 0)
             ),
-            CodexQuotaMetricDisplay(
+            OfficialQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-all",
                 title: usagePreferredQuotaTitle(
                     viewModel.localizedText("全部模型", "All models"),
@@ -6309,9 +6316,10 @@ struct SettingsView: View {
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
+                healthPercent: 0,
                 barColor: codexQuotaBarColor(remainingPercent: 0)
             ),
-            CodexQuotaMetricDisplay(
+            OfficialQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-sonnet",
                 title: usagePreferredQuotaTitle(
                     viewModel.localizedText("Sonnet 专用", "Sonnet only"),
@@ -6323,7 +6331,7 @@ struct SettingsView: View {
                 barColor: .clear,
                 isAvailable: false
             ),
-            CodexQuotaMetricDisplay(
+            OfficialQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-design",
                 title: usagePreferredQuotaTitle(
                     viewModel.localizedText("Claude Design", "Claude Design"),
@@ -6338,34 +6346,34 @@ struct SettingsView: View {
         ]
     }
 
-    private func claudeCodexQuotaMetrics(
+    private func claudeOfficialQuotaMetrics(
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot
-    ) -> [CodexQuotaMetricDisplay] {
+    ) -> [OfficialQuotaMetricDisplay] {
         let windows = snapshot.quotaWindows
         return [
-            claudeCodexQuotaMetric(
+            claudeOfficialQuotaMetric(
                 provider: provider,
                 id: "\(provider.id)-session",
                 title: viewModel.text(.quotaFiveHour),
                 window: windows.first(where: { $0.kind == .session }),
                 snapshot: snapshot
             ),
-            claudeCodexQuotaMetric(
+            claudeOfficialQuotaMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-all",
                 title: viewModel.localizedText("全部模型", "All models"),
                 window: windows.first(where: { $0.kind == .weekly }),
                 snapshot: snapshot
             ),
-            claudeCodexQuotaMetric(
+            claudeOfficialQuotaMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-sonnet",
                 title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
                 window: windows.first(where: isClaudeSonnetWindow(_:)),
                 snapshot: snapshot
             ),
-            claudeCodexQuotaMetric(
+            claudeOfficialQuotaMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-design",
                 title: viewModel.localizedText("Claude Design", "Claude Design"),
@@ -6375,15 +6383,15 @@ struct SettingsView: View {
         ]
     }
 
-    private func claudeCodexQuotaMetric(
+    private func claudeOfficialQuotaMetric(
         provider: ProviderDescriptor,
         id: String,
         title: String,
         window: UsageQuotaWindow?,
         snapshot: UsageSnapshot
-    ) -> CodexQuotaMetricDisplay {
+    ) -> OfficialQuotaMetricDisplay {
         guard let window else {
-            return CodexQuotaMetricDisplay(
+            return OfficialQuotaMetricDisplay(
                 id: id,
                 title: usagePreferredQuotaTitle(title, provider: provider),
                 valueText: "N/A",
@@ -6398,7 +6406,7 @@ struct SettingsView: View {
         let displayPercent = provider.displaysUsedQuota
             ? max(0, min(100, window.usedPercent))
             : remainingPercent
-        return CodexQuotaMetricDisplay(
+        return OfficialQuotaMetricDisplay(
             id: id,
             title: usagePreferredQuotaTitle(title, provider: provider),
             valueText: codexQuotaValueText(
@@ -6409,6 +6417,7 @@ struct SettingsView: View {
             ),
             resetText: codexResetCountdownText(to: window.resetAt),
             percent: displayPercent,
+            healthPercent: remainingPercent,
             barColor: codexQuotaBarColor(remainingPercent: remainingPercent),
             isAvailable: true
         )

@@ -15,10 +15,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show(viewModel: AppViewModel) {
         let targetContentSize = NSSize(width: 960, height: 670)
         if window == nil {
-            // 窗口基础尺寸：对应设置页整体画布宽高（与 Figma 画板尺寸对齐）。
+            // 窗口基础尺寸：默认打开为设计尺寸，同时允许用户后续拉伸。
             let panel = NSWindow(
                 contentRect: NSRect(origin: .zero, size: targetContentSize),
-                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
@@ -48,12 +48,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            // 固定“内容区”为 960x670（min/max 需使用 frameRect 尺寸）。
-            let fixedFrameSize = panel.frameRect(
+            // 设置最小窗口尺寸，避免缩得过小导致双栏和表单布局被破坏。
+            let minFrameSize = panel.frameRect(
                 forContentRect: NSRect(origin: .zero, size: targetContentSize)
             ).size
-            panel.minSize = fixedFrameSize
-            panel.maxSize = fixedFrameSize
+            panel.minSize = minFrameSize
             panel.setContentSize(targetContentSize)
             panel.center()
             window = panel
@@ -63,8 +62,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             SettingsView(viewModel: viewModel, onDone: { [weak self] in
                 self?.window?.orderOut(nil)
             })
-            // SwiftUI 内容区尺寸：与目标 contentRect 保持一致。
-            .frame(width: targetContentSize.width, height: targetContentSize.height)
+            .frame(minWidth: targetContentSize.width, minHeight: targetContentSize.height)
         )
 
         if let hostingController {
@@ -74,7 +72,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             hostingController = controller
             window?.contentViewController = controller
         }
-        window?.setContentSize(targetContentSize)
         ensureSingleBorderContentAppearance()
 
         NSApp.activate(ignoringOtherApps: true)
