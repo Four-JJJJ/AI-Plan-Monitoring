@@ -73,7 +73,7 @@ struct SettingsView: View {
     @State private var newProviderBaseURL = "https://"
     @State private var newProviderTemplateID = "generic-newapi"
     @State private var selectedRelayPresetID: String?
-    @State private var selectedSettingsTab: SettingsTab = .general
+    @State private var selectedSettingsTab: SettingsTab = .overview
     @State private var selectedGroup: ProviderGroup = .official
     @State private var selectedProviderID: String?
     @State private var settingsNow = Date()
@@ -101,6 +101,16 @@ struct SettingsView: View {
     private let outlineColor = Color.white.opacity(0.30)
     // 内层卡片/黑色内容容器圆角。
     private let cardCornerRadius: CGFloat = 8
+    private let settingsShellCornerRadius: CGFloat = 20
+    private let settingsSidebarCornerRadius: CGFloat = 20
+    private let settingsSectionCornerRadius: CGFloat = 8
+    private let settingsShellStrokeColor = Color.white.opacity(0.08)
+    private let settingsSidebarFillColor = Color.white.opacity(0.03)
+    private let settingsSectionFillColor = Color.white.opacity(0.04)
+    private let settingsAccentBlue = Color(hex: 0x168DFF)
+    private let settingsAccentGreen = Color(hex: 0x31D158)
+    private let settingsAccentPurple = Color(hex: 0xC93BFF)
+    private let settingsAccentCyan = Color(hex: 0x12D6F3)
     // 分割线颜色（与 15% 白描边风格一致）。
     private let dividerColor = Color.white.opacity(0.15)
     // 模型设置详情项垂直间距（设计稿统一 24px）。
@@ -173,10 +183,19 @@ struct SettingsView: View {
     }
 
     private enum SettingsTab: String, CaseIterable, Identifiable {
+        case overview
         case general
-        case models
+        case menuBar
+        case permissions
+        case localData
+        case officialProviders
+        case customProviders
 
         var id: String { rawValue }
+
+        var isProviderSection: Bool {
+            self == .officialProviders || self == .customProviders
+        }
     }
 
     private struct CodexProfileEditorState: Identifiable {
@@ -225,6 +244,15 @@ struct SettingsView: View {
     private struct LocalUsageTrendChartStatus {
         var text: String
         var color: Color
+    }
+
+    private struct SettingsOverviewCardItem: Identifiable {
+        var id: String
+        var icon: String
+        var title: String
+        var value: String
+        var detail: String
+        var accent: Color
     }
 
     var body: some View {
@@ -297,7 +325,12 @@ struct SettingsView: View {
             syncSelection()
         }
         .onChange(of: selectedSettingsTab) { _, newValue in
-            if newValue == .models {
+            if newValue == .officialProviders {
+                selectedGroup = .official
+            } else if newValue == .customProviders {
+                selectedGroup = .thirdParty
+            }
+            if newValue.isProviderSection {
                 viewModel.refreshSettingsProfileState()
             }
         }
@@ -380,58 +413,864 @@ struct SettingsView: View {
     private var settingsMainContent: some View {
         ZStack {
             panelBackground
+                .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 16) {
-                settingsTabBar
+            HStack(alignment: .top, spacing: 18) {
+                settingsNavigationSidebar
+                    .frame(width: 220)
+                    .frame(maxHeight: .infinity, alignment: .top)
 
-                Group {
-                    if selectedSettingsTab == .general {
-                        // 通用设置：内容在黑色圆角区域内滚动。
-                        ScrollView {
-                            topGeneralSection
-                                .padding(.top, 16)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 24)
-                        }
-                        .scrollIndicators(.never)
-                        .background(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                                .fill(cardBackground)
-                        )
-                        .clipShape(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                        )
-                    } else {
-                        // 模型设置：外层一个黑色容器，内部左右分栏。
-                        HStack(spacing: 0) {
-                            sidebar
-                                .frame(width: 220)
-                                .frame(maxHeight: .infinity, alignment: .top)
-
-                            Rectangle()
-                                .fill(dividerColor)
-                                .frame(width: 1)
-
-                            detailPane
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 16)
-                        }
-                        .background(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                                .fill(cardBackground)
-                        )
-                        .clipShape(
-                            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                        )
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    settingsHeaderBar
+                    settingsContentPane
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
-            // 预留标题栏高度，避免 tabs 与红绿灯重叠。
             .padding(.top, 44)
         }
+    }
+
+    private var settingsNavigationSidebar: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                settingsSidebarIdentityIcon
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("AI Plan Monitor")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(settingsTitleColor)
+                    Text(viewModel.localizedText("监控与设置工作台", "Monitoring workspace"))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                }
+            }
+
+            Rectangle()
+                .fill(dividerColor)
+                .frame(height: 1)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    settingsSidebarSectionTitle(viewModel.localizedText("工作台", "Workspace"))
+                    settingsSidebarTabButton(
+                        .overview,
+                        icon: "square.grid.2x2"
+                    )
+
+                    settingsSidebarSectionTitle(viewModel.localizedText("偏好", "Preferences"))
+                    settingsSidebarTabButton(
+                        .general,
+                        icon: "gearshape"
+                    )
+                    settingsSidebarTabButton(
+                        .menuBar,
+                        icon: "menubar.rectangle"
+                    )
+
+                    settingsSidebarSectionTitle(viewModel.localizedText("安全", "Security"))
+                    settingsSidebarTabButton(
+                        .permissions,
+                        icon: "lock.shield"
+                    )
+                    settingsSidebarTabButton(
+                        .localData,
+                        icon: "externaldrive"
+                    )
+
+                    settingsSidebarSectionTitle(viewModel.localizedText("服务", "Services"))
+                    settingsSidebarTabButton(
+                        .officialProviders,
+                        icon: "shippingbox"
+                    )
+                    settingsSidebarTabButton(
+                        .customProviders,
+                        icon: "point.3.connected.trianglepath.dotted"
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.never)
+
+            Spacer(minLength: 0)
+
+            VStack(alignment: .leading, spacing: 10) {
+                settingsSidebarVersionRow
+                settingsSidebarInfoRow(
+                    title: viewModel.localizedText("最近刷新", "Last refresh"),
+                    value: lastRefreshSummaryText
+                )
+                settingsSidebarGitHubLink
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: settingsSidebarCornerRadius, style: .continuous)
+                .fill(settingsSidebarFillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsSidebarCornerRadius, style: .continuous)
+                .stroke(settingsShellStrokeColor, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var settingsSidebarIdentityIcon: some View {
+        if let image = bundledImage(named: "app_icon_source") {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(settingsAccentBlue.opacity(0.18))
+                .frame(width: 36, height: 36)
+                .overlay(
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(settingsAccentBlue)
+                )
+        }
+    }
+
+    private func settingsSidebarSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(settingsHintColor.opacity(0.86))
+            .textCase(.uppercase)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+    }
+
+    private func settingsSidebarTabButton(
+        _ tab: SettingsTab,
+        icon: String
+    ) -> some View {
+        let isSelected = selectedSettingsTab == tab
+
+        return Button {
+            selectedSettingsTab = tab
+            if tab == .officialProviders {
+                selectedGroup = .official
+            } else if tab == .customProviders {
+                selectedGroup = .thirdParty
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : settingsHintColor)
+                    .frame(width: 16, height: 16)
+
+                Text(settingsTabTitle(tab))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.white : settingsTitleColor)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? settingsAccentBlue : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? Color.white.opacity(0.08) : Color.clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var settingsSidebarVersionRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(viewModel.localizedText("当前版本", "Current version"))
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(settingsHintColor)
+
+            HStack(alignment: .center, spacing: 8) {
+                Text(viewModel.currentAppVersion)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(settingsTitleColor)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    viewModel.checkForAppUpdate(force: true)
+                } label: {
+                    Text(viewModel.localizedText("检查更新", "Check Updates"))
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(settingsUpdateActionDisabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var settingsSidebarGitHubLink: some View {
+        Button {
+            viewModel.openRepositoryPage()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16, height: 16)
+
+                Text("GitHub")
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(settingsHintColor)
+            }
+            .foregroundStyle(settingsTitleColor)
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+    }
+
+    private var settingsUpdateActionDisabled: Bool {
+        viewModel.updateCheckInFlight ||
+        viewModel.updateDownloadInFlight ||
+        viewModel.updateInstallBufferingInFlight ||
+        viewModel.updateInstallationInFlight
+    }
+
+    private func settingsSidebarInfoRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(settingsHintColor)
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(settingsTitleColor)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var settingsHeaderBar: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(settingsHeaderTitle)
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(settingsTitleColor)
+
+                Text(settingsHeaderSubtitle)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            settingsRefreshAllButton
+        }
+    }
+
+    private var settingsRefreshAllButton: some View {
+        Button {
+            viewModel.refreshNow()
+        } label: {
+            Label(viewModel.localizedText("刷新全部", "Refresh All"), systemImage: "arrow.clockwise")
+                .font(.system(size: 13, weight: .semibold))
+                .labelStyle(.titleAndIcon)
+                .frame(minWidth: 104)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .tint(settingsAccentBlue)
+        .help(viewModel.localizedText("立即刷新所有已启用服务", "Refresh all enabled services now"))
+    }
+
+    @ViewBuilder
+    private var settingsHeaderUpdatePill: some View {
+        if let statusText = viewModel.settingsUpdateDisplayState.statusText {
+            let state = viewModel.settingsUpdateDisplayState
+            let statusTone: AppViewModel.UpdateDisplayTone = {
+                if case .checkFailed = state.kind {
+                    return .neutral
+                }
+                return state.tone
+            }()
+
+            settingsHeaderPill(
+                title: state.retryTitle.map { "\(statusText) · \($0)" } ?? statusText,
+                icon: "sparkles",
+                tint: settingsTopUpdateStatusColor(for: statusTone),
+                fill: settingsTopUpdateStatusColor(for: statusTone).opacity(0.10)
+            ) {
+                if case .updateAvailable = state.kind {
+                    viewModel.openLatestReleaseDownload()
+                } else if state.retryTitle != nil {
+                    viewModel.openLatestReleaseDownload()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsHeaderPill(
+        title: String,
+        icon: String,
+        tint: Color,
+        fill: Color,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        let label = Label(title, systemImage: icon)
+            .font(.system(size: 12, weight: .semibold))
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+
+        if let action {
+            Button(action: action) {
+                label
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .tint(tint)
+        } else {
+            label
+                .foregroundStyle(tint)
+        }
+    }
+
+    @ViewBuilder
+    private var settingsContentPane: some View {
+        switch selectedSettingsTab {
+        case .overview:
+            overviewDashboardContent
+        case .general:
+            settingsSingleSectionContent(
+                title: viewModel.localizedText("常规", "General"),
+                subtitle: viewModel.localizedText("设置语言、开机启动和基础应用行为。", "Configure language, launch at login, and basic app behavior.")
+            ) {
+                appBehaviorSection
+            }
+        case .menuBar:
+            settingsSingleSectionContent(
+                title: viewModel.localizedText("菜单栏", "Menubar"),
+                subtitle: viewModel.localizedText("控制菜单栏显示模式、外观和信息密度。", "Control menubar display mode, appearance, and information density.")
+            ) {
+                menuBarPreferencesSection
+            }
+        case .permissions:
+            settingsSingleSectionContent(
+                title: viewModel.localizedText("权限", "Permissions"),
+                subtitle: viewModel.localizedText("管理通知、钥匙串和全盘访问授权。", "Manage notifications, keychain, and full disk access.")
+            ) {
+                permissionAccessSection
+            }
+        case .localData:
+            settingsSingleSectionContent(
+                title: viewModel.localizedText("本地数据", "Local Data"),
+                subtitle: viewModel.localizedText("扫描本机账号配置，或重置 AI Plan Monitor 的本地数据。", "Discover local account config or reset AI Plan Monitor's local data.")
+            ) {
+                localDataManagementSection
+            }
+        case .officialProviders:
+            providerDashboardContent(group: .official)
+        case .customProviders:
+            providerDashboardContent(group: .thirdParty)
+        }
+    }
+
+    private var overviewDashboardContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                settingsOverviewGrid(items: generalOverviewItems)
+                officialUsageTrendsOverviewSection
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .scrollIndicators(.never)
+        .background(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .stroke(settingsShellStrokeColor, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous))
+    }
+
+    private func settingsSingleSectionContent<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                settingsSectionCard(title: title, subtitle: subtitle) {
+                    content()
+                }
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .scrollIndicators(.never)
+        .background(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .stroke(settingsShellStrokeColor, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous))
+    }
+
+    private func providerDashboardContent(group: ProviderGroup) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            settingsSectionPanel {
+                providerSidebarContent(for: group)
+            }
+            .frame(width: 280)
+            .frame(maxHeight: .infinity, alignment: .top)
+
+            settingsSectionPanel {
+                detailPane
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
+                .stroke(settingsShellStrokeColor, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous))
+        .onAppear {
+            selectedGroup = group
+        }
+    }
+
+    @ViewBuilder
+    private func providerSidebarContent(for group: ProviderGroup) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(group == .official
+                ? viewModel.localizedText("官方服务", "Official Services")
+                : viewModel.localizedText("自定义接口", "Custom Endpoints"))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(settingsTitleColor)
+
+            Group {
+                if group == .official {
+                    officialSidebarContent
+                } else {
+                    thirdPartySidebarContent
+                }
+            }
+        }
+    }
+
+    private func settingsOverviewGrid(items: [SettingsOverviewCardItem]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 16, alignment: .top)],
+            alignment: .leading,
+            spacing: 16
+        ) {
+            ForEach(items) { item in
+                settingsOverviewCard(item)
+            }
+        }
+    }
+
+    private func settingsOverviewCard(_ item: SettingsOverviewCardItem) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .top) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(item.accent)
+
+                Spacer(minLength: 12)
+
+                Text(item.value)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(item.accent)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(item.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(settingsTitleColor)
+                Text(item.detail)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 148, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .fill(item.accent.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .stroke(item.accent.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var officialUsageTrendsOverviewSection: some View {
+        let providers = officialUsageTrendOverviewProviders
+
+        if !providers.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(viewModel.localizedText("官方服务使用趋势", "Official Usage Trends"))
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(settingsTitleColor)
+
+                    Text(viewModel.localizedText(
+                        "仅汇总已启用的官方服务，本地趋势不等同于官方剩余额度。",
+                        "Only enabled official services are shown. Local trends are not the same as official remaining quota."
+                    ))
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                ForEach(providers) { provider in
+                    settingsSectionPanel {
+                        officialLocalTrendSection(
+                            provider: provider,
+                            snapshot: viewModel.snapshots[provider.id],
+                            showsDivider: false,
+                            title: officialUsageTrendOverviewTitle(for: provider)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func settingsSectionCard<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        settingsSectionPanel {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(settingsTitleColor)
+                    Text(subtitle)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                content()
+            }
+        }
+    }
+
+    private func settingsSectionPanel<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .fill(settingsSectionFillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var settingsHeaderTitle: String {
+        switch selectedSettingsTab {
+        case .overview:
+            return viewModel.localizedText("设置概览", "Settings Overview")
+        case .general:
+            return viewModel.localizedText("常规", "General")
+        case .menuBar:
+            return viewModel.localizedText("菜单栏", "Menubar")
+        case .permissions:
+            return viewModel.localizedText("权限", "Permissions")
+        case .localData:
+            return viewModel.localizedText("本地数据", "Local Data")
+        case .officialProviders:
+            return viewModel.localizedText("官方服务", "Official Services")
+        case .customProviders:
+            return viewModel.localizedText("自定义接口", "Custom Endpoints")
+        }
+    }
+
+    private var settingsHeaderSubtitle: String {
+        switch selectedSettingsTab {
+        case .overview:
+            return viewModel.localizedText(
+                "把监控、权限和服务配置收拢成一个可快速扫描的工作台。",
+                "A scannable workspace for monitoring, permissions, and service configuration."
+            )
+        case .general:
+            return viewModel.localizedText(
+                "管理应用语言、启动行为和基础偏好。",
+                "Manage app language, launch behavior, and basic preferences."
+            )
+        case .menuBar:
+            return viewModel.localizedText(
+                "调整菜单栏里显示哪些模型、如何显示以及跟随哪种外观。",
+                "Adjust which models appear in the menubar, how they render, and which appearance mode they use."
+            )
+        case .permissions:
+            return viewModel.localizedText(
+                "检查授权状态，确保通知、钥匙串和本地读取能力可用。",
+                "Review authorization status for notifications, keychain, and local file access."
+            )
+        case .localData:
+            return viewModel.localizedText(
+                "发现本地 CLI 账号配置，或在需要时清理本地应用数据。",
+                "Discover local CLI account config or clear local app data when needed."
+            )
+        case .officialProviders:
+            return viewModel.localizedText(
+                "管理 Codex、Claude、Gemini、Cursor 等官方来源和账号。",
+                "Manage official sources and accounts such as Codex, Claude, Gemini, and Cursor."
+            )
+        case .customProviders:
+            return viewModel.localizedText(
+                "配置 Relay、New API 和第三方余额接口。",
+                "Configure Relay, New API, and third-party balance endpoints."
+            )
+        }
+    }
+
+    private var generalOverviewItems: [SettingsOverviewCardItem] {
+        let totalProviders = viewModel.config.providers.count
+        let enabledProviders = viewModel.config.providers.filter(\.enabled).count
+        let disabledProviders = totalProviders - enabledProviders
+        let requiredPermissions = settingsRequiredPermissionCount
+        let grantedPermissions = settingsGrantedPermissionCount
+        let isMulti = viewModel.statusBarMultiUsageEnabled
+
+        return [
+            SettingsOverviewCardItem(
+                id: "providers",
+                icon: "square.stack.3d.up",
+                title: viewModel.localizedText("已追踪服务", "Tracked Providers"),
+                value: "\(totalProviders)",
+                detail: viewModel.localizedText(
+                    "\(officialProviderCount) 个官方来源，\(thirdPartyProviderCount) 个自定义来源",
+                    "\(officialProviderCount) official sources, \(thirdPartyProviderCount) custom sources"
+                ),
+                accent: settingsAccentBlue
+            ),
+            SettingsOverviewCardItem(
+                id: "enabled",
+                icon: "bolt.heart",
+                title: viewModel.localizedText("活跃监控", "Active Monitors"),
+                value: "\(enabledProviders)",
+                detail: disabledProviders > 0
+                    ? viewModel.localizedText("还有 \(disabledProviders) 个已停用", "\(disabledProviders) currently disabled")
+                    : viewModel.localizedText("全部服务都已启用", "All services enabled"),
+                accent: settingsAccentGreen
+            ),
+            SettingsOverviewCardItem(
+                id: "permissions",
+                icon: "lock.shield",
+                title: viewModel.localizedText("权限状态", "Permissions"),
+                value: "\(grantedPermissions)/\(requiredPermissions)",
+                detail: viewModel.localizedText(
+                    "通知、钥匙串与全盘访问统一收纳",
+                    "Notifications, keychain, and full disk access in one place"
+                ),
+                accent: settingsAccentPurple
+            ),
+            SettingsOverviewCardItem(
+                id: "menubar",
+                icon: "menubar.rectangle",
+                title: viewModel.localizedText("菜单栏模式", "Menubar Mode"),
+                value: isMulti ? viewModel.localizedText("多模型", "Multi") : viewModel.localizedText("单模型", "Single"),
+                detail: "\(statusBarAppearanceModeSummary) · \(statusBarDisplayStyleSummary)",
+                accent: settingsAccentCyan
+            )
+        ]
+    }
+
+    private var modelOverviewItems: [SettingsOverviewCardItem] {
+        let totalProviders = viewModel.config.providers.count
+        let enabledProviders = viewModel.config.providers.filter(\.enabled).count
+
+        return [
+            SettingsOverviewCardItem(
+                id: "official-models",
+                icon: "shippingbox",
+                title: viewModel.localizedText("官方服务", "Official Services"),
+                value: "\(officialProviderCount)",
+                detail: viewModel.localizedText("内置来源与官方账号接入", "Built-in services and first-party accounts"),
+                accent: settingsAccentBlue
+            ),
+            SettingsOverviewCardItem(
+                id: "relay-models",
+                icon: "point.3.connected.trianglepath.dotted",
+                title: viewModel.localizedText("自定义来源", "Custom Sources"),
+                value: "\(thirdPartyProviderCount)",
+                detail: viewModel.localizedText("Relay / New API / 余额接口", "Relay, New API, and balance endpoints"),
+                accent: settingsAccentPurple
+            ),
+            SettingsOverviewCardItem(
+                id: "enabled-models",
+                icon: "checkmark.circle",
+                title: viewModel.localizedText("正在轮询", "Polling Now"),
+                value: "\(enabledProviders)",
+                detail: viewModel.localizedText(
+                    "共 \(totalProviders) 个来源，其中 \(totalProviders - enabledProviders) 个暂停",
+                    "\(totalProviders - enabledProviders) paused out of \(totalProviders) sources"
+                ),
+                accent: settingsAccentGreen
+            ),
+            SettingsOverviewCardItem(
+                id: "pinned-models",
+                icon: "pin.circle",
+                title: viewModel.localizedText("菜单栏来源", "Menubar Sources"),
+                value: "\(statusBarSourceCount)",
+                detail: "\(statusBarAppearanceModeSummary) · \(statusBarDisplayStyleSummary)",
+                accent: settingsAccentCyan
+            )
+        ]
+    }
+
+    private var officialProviderCount: Int {
+        viewModel.config.providers.filter { $0.family == .official }.count
+    }
+
+    private var officialUsageTrendOverviewProviders: [ProviderDescriptor] {
+        viewModel.config.providers.filter { provider in
+            provider.enabled && shouldShowOfficialLocalTrendCard(for: provider)
+        }
+    }
+
+    private func officialUsageTrendOverviewTitle(for provider: ProviderDescriptor) -> String {
+        let displayName = sidebarDisplayName(for: provider)
+        if viewModel.language == .zhHans {
+            return "\(displayName) 使用趋势"
+        }
+        return "\(displayName) Usage Trend"
+    }
+
+    private var thirdPartyProviderCount: Int {
+        viewModel.config.providers.filter { $0.family == .thirdParty }.count
+    }
+
+    private var settingsRequiredPermissionCount: Int {
+        var count = 2
+        if viewModel.fullDiskAccessRelevant || viewModel.fullDiskAccessRequested {
+            count += 1
+        }
+        return count
+    }
+
+    private var settingsGrantedPermissionCount: Int {
+        var count = 0
+        if viewModel.hasNotificationPermission {
+            count += 1
+        }
+        if viewModel.secureStorageReady {
+            count += 1
+        }
+        if (viewModel.fullDiskAccessRelevant || viewModel.fullDiskAccessRequested) && viewModel.fullDiskAccessGranted {
+            count += 1
+        }
+        return count
+    }
+
+    private var statusBarAppearanceModeSummary: String {
+        switch viewModel.statusBarAppearanceMode {
+        case .followWallpaper:
+            return viewModel.localizedText("跟随壁纸", "Adaptive")
+        case .dark:
+            return viewModel.localizedText("深色", "Dark")
+        case .light:
+            return viewModel.localizedText("浅色", "Light")
+        }
+    }
+
+    private var statusBarDisplayStyleSummary: String {
+        switch viewModel.statusBarDisplayStyle {
+        case .iconPercent:
+            return viewModel.localizedText("图标 + 百分比", "Icon + percent")
+        case .barNamePercent:
+            return viewModel.localizedText("柱状 + 名称", "Bar + name")
+        }
+    }
+
+    private var statusBarSourceCount: Int {
+        if viewModel.statusBarMultiUsageEnabled {
+            return max(1, viewModel.config.statusBarMultiProviderIDs.count)
+        }
+        return viewModel.config.statusBarProviderID == nil ? 0 : 1
+    }
+
+    private var lastRefreshSummaryText: String {
+        guard let lastUpdatedAt = viewModel.lastUpdatedAt else {
+            return viewModel.localizedText("尚未刷新", "Not refreshed yet")
+        }
+        return settingsElapsedText(from: lastUpdatedAt)
     }
 
     private var showsResetDataDialog: Bool {
@@ -558,23 +1397,23 @@ struct SettingsView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: weight))
-                .foregroundStyle(foreground)
-                .lineSpacing(0)
-                .frame(width: 110, height: 32)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(background)
-                )
-                .contentShape(Rectangle())
+                .frame(width: 110)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderedProminent)
+        .controlSize(.regular)
+        .tint(background)
     }
 
     private var settingsTabBar: some View {
         // 顶部 tab + 右侧版本信息区域。
         HStack(spacing: 8) {
+            settingsTabButton(.overview)
             settingsTabButton(.general)
-            settingsTabButton(.models)
+            settingsTabButton(.menuBar)
+            settingsTabButton(.permissions)
+            settingsTabButton(.localData)
+            settingsTabButton(.officialProviders)
+            settingsTabButton(.customProviders)
             Spacer()
             settingsTopMetaBar
         }
@@ -585,6 +1424,11 @@ struct SettingsView: View {
 
         return Button {
             selectedSettingsTab = tab
+            if tab == .officialProviders {
+                selectedGroup = .official
+            } else if tab == .customProviders {
+                selectedGroup = .thirdParty
+            }
         } label: {
             Text(settingsTabTitle(tab))
                 // tab 文字字号与选中态字重。
@@ -604,10 +1448,20 @@ struct SettingsView: View {
 
     private func settingsTabTitle(_ tab: SettingsTab) -> String {
         switch tab {
+        case .overview:
+            return viewModel.localizedText("概览", "Overview")
         case .general:
             return viewModel.text(.settingsGeneralTab)
-        case .models:
-            return viewModel.text(.settingsModelsTab)
+        case .menuBar:
+            return viewModel.localizedText("菜单栏", "Menubar")
+        case .permissions:
+            return viewModel.localizedText("权限", "Permissions")
+        case .localData:
+            return viewModel.localizedText("本地数据", "Local Data")
+        case .officialProviders:
+            return viewModel.localizedText("官方服务", "Official")
+        case .customProviders:
+            return viewModel.localizedText("自定义接口", "Custom")
         }
     }
 
@@ -873,30 +1727,21 @@ struct SettingsView: View {
     }
 
     private var modelGroupSegmentControl: some View {
-        HStack(spacing: 8) {
-            modelGroupButton(.official)
-            modelGroupButton(.thirdParty)
+        Picker("", selection: Binding(
+            get: { selectedGroup.id },
+            set: { newValue in
+                if let group = ProviderGroup(rawValue: newValue) {
+                    selectedGroup = group
+                    selectedSettingsTab = group == .official ? .officialProviders : .customProviders
+                }
+            }
+        )) {
+            Text(viewModel.text(.officialTab)).tag(ProviderGroup.official.id)
+            Text(viewModel.text(.thirdPartyTab)).tag(ProviderGroup.thirdParty.id)
         }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(width: 188, height: 20)
-    }
-
-    private func modelGroupButton(_ group: ProviderGroup) -> some View {
-        let isSelected = selectedGroup == group
-        let title = group == .official ? viewModel.text(.officialTab) : viewModel.text(.thirdPartyTab)
-        return Button {
-            selectedGroup = group
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.80) : Color.white.opacity(0.15))
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     private var thirdPartySidebarContent: some View {
@@ -986,16 +1831,11 @@ struct SettingsView: View {
         } label: {
             Text(viewModel.language == .zhHans ? "添加 NewAPI 站点" : "Add NewAPI Site")
                 .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.55))
-            .frame(maxWidth: .infinity, alignment: .center)
-            .frame(height: 22)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.white.opacity(0.30), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(settingsAccentBlue)
     }
 
     @ViewBuilder
@@ -1035,7 +1875,7 @@ struct SettingsView: View {
                     selectedProviderID = provider.id
                 }
             ))
-            .toggleStyle(SettingsModelCheckboxToggleStyle())
+            .toggleStyle(.checkbox)
             .labelsHidden()
 
             providerIcon(for: provider, size: 12)
@@ -1219,26 +2059,34 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailPane: some View {
         if let selectedProvider {
-            // 右侧详情面板：滚动内容区。
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     providerSettingsCard(selectedProvider)
                 }
+                .padding(.top, 4)
             }
             .scrollIndicators(.never)
         } else {
-            VStack {
+            VStack(spacing: 12) {
                 Spacer()
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(settingsHintColor)
                 Text(viewModel.text(.selectProviderHint))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(settingsTitleColor)
+                Text(viewModel.localizedText("从左侧选择一个来源后，这里会显示完整配置。", "Choose a source on the left to inspect and edit its full configuration."))
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
                 Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var topGeneralSection: some View {
-        // 通用设置主内容：语言、开机启动、权限卡片、扫描、本地重置。
+    private var appBehaviorSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Text(settingsLanguageTitle)
@@ -1265,7 +2113,7 @@ struct SettingsView: View {
                         "",
                         isOn: launchAtLoginBinding
                     )
-                    .toggleStyle(FigmaSwitchToggleStyle())
+                    .toggleStyle(.switch)
                     .labelsHidden()
                     .allowsHitTesting(false)
                     Spacer(minLength: 0)
@@ -1282,10 +2130,11 @@ struct SettingsView: View {
                     .padding(.leading, 60)
                     .lineLimit(1)
             }
+        }
+    }
 
-            Spacer()
-                .frame(height: 24)
-
+    private var menuBarPreferencesSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
             statusBarMultiUsageSection
 
             Spacer()
@@ -1297,10 +2146,20 @@ struct SettingsView: View {
                 .frame(height: 24)
 
             statusBarDisplayStyleSection
+        }
+    }
 
-            Spacer()
-                .frame(height: 24)
+    private var generalBasicsSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            appBehaviorSection
+            dividerLine
+            menuBarPreferencesSection
+        }
+    }
 
+    private var topGeneralSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            generalBasicsSection
             permissionsSection
         }
     }
@@ -1321,7 +2180,7 @@ struct SettingsView: View {
                     "",
                     isOn: multiUsageBinding
                 )
-                .toggleStyle(FigmaSwitchToggleStyle())
+                .toggleStyle(.switch)
                 .labelsHidden()
                 .allowsHitTesting(false)
 
@@ -1358,13 +2217,13 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(width: 410, height: 24, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
 
             statusBarDisplayStylePreview
                 .padding(.leading, 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 410, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusBarAppearanceModeSection: some View {
@@ -1379,74 +2238,44 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(width: 410, height: 24, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
         }
-        .frame(width: 410, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusBarAppearanceModeSegmentControl: some View {
-        HStack(spacing: 0) {
-            statusBarAppearanceModeSegmentButton(mode: .followWallpaper, title: settingsStatusBarAppearanceFollowWallpaper)
-            statusBarAppearanceModeSegmentButton(mode: .dark, title: settingsStatusBarAppearanceDark)
-            statusBarAppearanceModeSegmentButton(mode: .light, title: settingsStatusBarAppearanceLight)
+        Picker("", selection: Binding(
+            get: { viewModel.statusBarAppearanceMode.id },
+            set: { newValue in
+                if let mode = StatusBarAppearanceMode.allCases.first(where: { $0.id == newValue }) {
+                    viewModel.setStatusBarAppearanceMode(mode)
+                }
+            }
+        )) {
+            Text(settingsStatusBarAppearanceFollowWallpaper).tag(StatusBarAppearanceMode.followWallpaper.id)
+            Text(settingsStatusBarAppearanceDark).tag(StatusBarAppearanceMode.dark.id)
+            Text(settingsStatusBarAppearanceLight).tag(StatusBarAppearanceMode.light.id)
         }
-        .padding(1)
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(width: 240, height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func statusBarAppearanceModeSegmentButton(mode: StatusBarAppearanceMode, title: String) -> some View {
-        let isSelected = viewModel.statusBarAppearanceMode == mode
-        return Button {
-            viewModel.setStatusBarAppearanceMode(mode)
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     private var statusBarDisplayStyleSegmentControl: some View {
-        HStack(spacing: 0) {
-            statusBarDisplayStyleSegmentButton(style: .iconPercent, title: settingsStatusBarStyleIconPercent)
-            statusBarDisplayStyleSegmentButton(style: .barNamePercent, title: settingsStatusBarStyleBarNamePercent)
+        Picker("", selection: Binding(
+            get: { viewModel.statusBarDisplayStyle.id },
+            set: { newValue in
+                if let style = StatusBarDisplayStyle.allCases.first(where: { $0.id == newValue }) {
+                    viewModel.setStatusBarDisplayStyle(style)
+                }
+            }
+        )) {
+            Text(settingsStatusBarStyleIconPercent).tag(StatusBarDisplayStyle.iconPercent.id)
+            Text(settingsStatusBarStyleBarNamePercent).tag(StatusBarDisplayStyle.barNamePercent.id)
         }
-        .padding(1)
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(width: 180, height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func statusBarDisplayStyleSegmentButton(style: StatusBarDisplayStyle, title: String) -> some View {
-        let isSelected = viewModel.statusBarDisplayStyle == style
-        return Button {
-            viewModel.setStatusBarDisplayStyle(style)
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1553,81 +2382,81 @@ struct SettingsView: View {
     private var permissionsSection: some View {
         // 权限相关三大块：授权卡片 / 本地扫描 / 重置数据。
         VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: 24) {
-                dividerLine
+            permissionAccessSection
+            dividerLine
+            localDataManagementSection
+        }
+    }
 
-                HStack(spacing: 16) {
-                    permissionStatusTile(
-                        title: viewModel.text(.permissionNotificationsTitle),
-                        hint: viewModel.text(.permissionNotificationsHint),
-                        statusText: notificationPermissionStatusText,
-                        statusColor: notificationPermissionStatusColor,
-                        buttonTitle: notificationActionTitle,
-                        buttonMutedStyle: viewModel.hasNotificationPermission
-                    ) {
-                        handlePermissionAction(.notifications)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
-
-                    permissionStatusTile(
-                        title: viewModel.text(.permissionKeychainTitle),
-                        hint: viewModel.text(.permissionKeychainHint),
-                        statusText: keychainPermissionStatusText,
-                        statusColor: keychainPermissionStatusColor,
-                        buttonTitle: keychainActionTitle,
-                        buttonMutedStyle: viewModel.secureStorageReady
-                    ) {
-                        handlePermissionAction(.keychain)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
-
-                    permissionStatusTile(
-                        title: viewModel.text(.permissionFullDiskTitle),
-                        hint: viewModel.text(.permissionFullDiskHint),
-                        statusText: fullDiskPermissionStatusText,
-                        statusColor: fullDiskPermissionStatusColor,
-                        buttonTitle: fullDiskActionTitle,
-                        buttonMutedStyle: viewModel.fullDiskAccessGranted
-                    ) {
-                        handlePermissionAction(.fullDisk)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
+    private var permissionAccessSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(spacing: 16) {
+                permissionStatusTile(
+                    title: viewModel.text(.permissionNotificationsTitle),
+                    hint: viewModel.text(.permissionNotificationsHint),
+                    statusText: notificationPermissionStatusText,
+                    statusColor: notificationPermissionStatusColor,
+                    buttonTitle: notificationActionTitle,
+                    buttonMutedStyle: viewModel.hasNotificationPermission
+                ) {
+                    handlePermissionAction(.notifications)
                 }
-                .frame(maxWidth: .infinity)
-                .onPreferenceChange(PermissionTileHeightPreferenceKey.self) { newHeight in
-                    // 同步三张权限卡片到统一最大高度。
-                    if abs(permissionTileHeight - newHeight) > 0.5 {
-                        permissionTileHeight = newHeight
-                    }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
+
+                permissionStatusTile(
+                    title: viewModel.text(.permissionKeychainTitle),
+                    hint: viewModel.text(.permissionKeychainHint),
+                    statusText: keychainPermissionStatusText,
+                    statusColor: keychainPermissionStatusColor,
+                    buttonTitle: keychainActionTitle,
+                    buttonMutedStyle: viewModel.secureStorageReady
+                ) {
+                    handlePermissionAction(.keychain)
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
+
+                permissionStatusTile(
+                    title: viewModel.text(.permissionFullDiskTitle),
+                    hint: viewModel.text(.permissionFullDiskHint),
+                    statusText: fullDiskPermissionStatusText,
+                    statusColor: fullDiskPermissionStatusColor,
+                    buttonTitle: fullDiskActionTitle,
+                    buttonMutedStyle: viewModel.fullDiskAccessGranted
+                ) {
+                    handlePermissionAction(.fullDisk)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: permissionTileHeight > 0 ? permissionTileHeight : nil, alignment: .topLeading)
             }
-
-            localDiscoverySection
-
-            VStack(alignment: .leading, spacing: 24) {
-                dividerLine
-
-                resetDataActionRow
+            .frame(maxWidth: .infinity)
+            .onPreferenceChange(PermissionTileHeightPreferenceKey.self) { newHeight in
+                // 同步三张权限卡片到统一最大高度。
+                if abs(permissionTileHeight - newHeight) > 0.5 {
+                    permissionTileHeight = newHeight
+                }
             }
         }
     }
 
-    private var localDiscoverySection: some View {
+    private var localDataManagementSection: some View {
         VStack(alignment: .leading, spacing: 24) {
+            localDiscoverySection
             dividerLine
+            resetDataActionRow
+        }
+    }
 
-            VStack(alignment: .leading, spacing: localDiscoveryItemSpacing) {
-                localDiscoveryHeaderRow
+    private var localDiscoverySection: some View {
+        VStack(alignment: .leading, spacing: localDiscoveryItemSpacing) {
+            localDiscoveryHeaderRow
 
-                if let autoDiscoveryResultText {
-                    localDiscoveryResultRow(autoDiscoveryResultText)
-                }
-
-                localDiscoveryPrivacyBanner
+            if let autoDiscoveryResultText {
+                localDiscoveryResultRow(autoDiscoveryResultText)
             }
+
+            localDiscoveryPrivacyBanner
         }
     }
 
@@ -1752,7 +2581,7 @@ struct SettingsView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .fill(Color.clear)
+                .fill(settingsSectionFillColor)
         )
         .overlay(
             // 权限卡边框颜色：white_30。
@@ -1809,40 +2638,20 @@ struct SettingsView: View {
     }
 
     private var languageSegmentControl: some View {
-        // 中英文切换分段控件整体外观（背景、尺寸、圆角）。
-        HStack(spacing: 0) {
-            languageSegmentButton(label: viewModel.text(.chinese), value: .zhHans)
-            Rectangle()
-                // 中间竖分隔线。
-                .fill(Color.white.opacity(0.55))
-                .frame(width: 1, height: 14)
-            languageSegmentButton(label: viewModel.text(.english), value: .en)
+        Picker("", selection: Binding(
+            get: { viewModel.language.id },
+            set: { newValue in
+                if let language = AppLanguage.allCases.first(where: { $0.id == newValue }) {
+                    viewModel.setLanguage(language)
+                }
+            }
+        )) {
+            Text(viewModel.text(.chinese)).tag(AppLanguage.zhHans.id)
+            Text(viewModel.text(.english)).tag(AppLanguage.en.id)
         }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(width: 140, height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func languageSegmentButton(label: String, value: AppLanguage) -> some View {
-        let isSelected = viewModel.language == value
-        return Button {
-            viewModel.setLanguage(value)
-        } label: {
-            Text(label)
-                // 分段项字重、颜色与选中态背景。
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.8) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     private func settingsCapsuleButton(
@@ -1854,7 +2663,6 @@ struct SettingsView: View {
         borderOpacity: Double = 0.55,
         action: @escaping () -> Void
     ) -> some View {
-        // 设置页统一胶囊按钮（开始扫描/取消授权/重置所有数据等）。
         Button {
             if dismissInputFocus {
                 dismissEditingFocus()
@@ -1863,20 +2671,10 @@ struct SettingsView: View {
         } label: {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(textOpacity, 0.45) : textOpacity)))
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke((destructive ? Color(hex: 0xD05757) : Color.white).opacity(destructive ? 1 : (disabled ? min(borderOpacity, 0.35) : borderOpacity)), lineWidth: 1)
-                )
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(destructive ? Color(hex: 0xD05757) : settingsAccentBlue)
         .disabled(disabled)
     }
 
@@ -2188,7 +2986,7 @@ struct SettingsView: View {
                 get: { isEnabled },
                 set: { setRelayPresetEnabled($0, preset: preset) }
             ))
-            .toggleStyle(SettingsModelCheckboxToggleStyle())
+            .toggleStyle(.checkbox)
             .labelsHidden()
 
             if let provider {
@@ -2307,7 +3105,7 @@ struct SettingsView: View {
                     .foregroundStyle(settingsTitleColor)
 
                 Toggle("", isOn: enabledBinding)
-                .toggleStyle(FigmaSwitchToggleStyle())
+                .toggleStyle(.switch)
                 .labelsHidden()
                 .allowsHitTesting(false)
 
@@ -2435,7 +3233,7 @@ struct SettingsView: View {
                 .frame(width: labelWidth, alignment: .leading)
 
             Toggle("", isOn: isOn)
-                .toggleStyle(FigmaSwitchToggleStyle())
+                .toggleStyle(.switch)
                 .labelsHidden()
                 .allowsHitTesting(false)
 
@@ -2519,10 +3317,6 @@ struct SettingsView: View {
                     .padding(.top, 12)
             }
 
-            if shouldShowOfficialLocalTrendCard(for: provider) {
-                officialLocalTrendSection(provider: provider, snapshot: snapshot)
-                    .padding(.top, 24)
-            }
         }
     }
 
@@ -2561,74 +3355,22 @@ struct SettingsView: View {
     }
 
     private func officialThresholdStepper(_ provider: ProviderDescriptor) -> some View {
-        HStack(spacing: 0) {
-            TextField(
-                "",
-                text: Binding(
-                    get: {
-                        officialThresholdInputs[provider.id]
-                            ?? formattedOfficialThresholdValue(provider.threshold.lowRemaining)
-                    },
-                    set: { officialThresholdInputs[provider.id] = $0 }
-                ),
-                prompt: settingsInputPrompt("0.00")
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: .regular))
-            .monospacedDigit()
-            .foregroundStyle(settingsBodyColor)
-            .multilineTextAlignment(.leading)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .focused($focusedThresholdProviderID, equals: provider.id)
-            .onSubmit {
-                applyOfficialThresholdInput(provider)
-            }
-
-            Rectangle()
-                .fill(Color.white.opacity(0.16))
-                .frame(width: 1)
-
-            VStack(spacing: 0) {
-                Button {
-                    let next = min(100, provider.threshold.lowRemaining + 1)
-                    setOfficialThresholdValue(next, providerID: provider.id)
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.80))
-                        .frame(width: 32, height: 12)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.16))
-                    .frame(height: 1)
-
-                Button {
-                    let next = max(0, provider.threshold.lowRemaining - 1)
-                    setOfficialThresholdValue(next, providerID: provider.id)
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.80))
-                        .frame(width: 32, height: 11)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .frame(width: 32)
+        Stepper(
+            value: Binding(
+                get: { provider.threshold.lowRemaining },
+                set: { setOfficialThresholdValue($0, providerID: provider.id) }
+            ),
+            in: 0...100,
+            step: 1
+        ) {
+            Text(formattedOfficialThresholdValue(provider.threshold.lowRemaining))
+                .font(.system(size: 12, weight: .regular))
+                .monospacedDigit()
+                .foregroundStyle(settingsBodyColor)
+                .frame(width: 48, alignment: .trailing)
         }
-        .frame(width: 90, height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(settingsInputFillColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
-        )
+        .controlSize(.small)
+        .frame(width: 118, height: 24)
     }
 
     private func localOfficialAccountSectionTitle(for provider: ProviderDescriptor) -> String {
@@ -3150,7 +3892,12 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func officialLocalTrendSection(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> some View {
+    private func officialLocalTrendSection(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?,
+        showsDivider: Bool = true,
+        title: String? = nil
+    ) -> some View {
         let scope = localUsageTrendScope(for: provider)
         let accountOptions = localUsageTrendAccountOptions(for: provider, snapshot: snapshot)
         let selectedAccountKey = localUsageTrendSelectedAccountKey(
@@ -3193,10 +3940,12 @@ struct SettingsView: View {
         let displaySummary = hasTrendData ? summary : nil
 
         VStack(alignment: .leading, spacing: 0) {
-            dividerLine
+            if showsDivider {
+                dividerLine
+            }
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(viewModel.localizedText("使用趋势", "Usage Trend"))
+                Text(title ?? viewModel.localizedText("使用趋势", "Usage Trend"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(settingsBodyColor)
 
@@ -3227,7 +3976,7 @@ struct SettingsView: View {
                 }
                 .padding(.top, 16)
             }
-            .padding(.top, 24)
+            .padding(.top, showsDivider ? 24 : 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
@@ -3309,50 +4058,20 @@ struct SettingsView: View {
     }
 
     private func localUsageTrendScopeSegmentControl(provider: ProviderDescriptor) -> some View {
-        let current = localUsageTrendScope(for: provider)
-        return HStack(spacing: 0) {
-            localUsageTrendScopeButton(
-                title: viewModel.localizedText("全量", "All"),
-                isSelected: current == .allAccounts
-            ) {
-                localUsageTrendScopeBinding(for: provider).wrappedValue = .allAccounts
+        Picker("", selection: Binding(
+            get: { localUsageTrendScope(for: provider).id },
+            set: { newValue in
+                if let scope = LocalUsageTrendScope.allCases.first(where: { $0.id == newValue }) {
+                    localUsageTrendScopeBinding(for: provider).wrappedValue = scope
+                }
             }
-
-            Rectangle()
-                .fill(Color.white.opacity(0.55))
-                .frame(width: 1, height: 14)
-
-            localUsageTrendScopeButton(
-                title: viewModel.localizedText("按账号", "By Account"),
-                isSelected: current == .currentAccount
-            ) {
-                localUsageTrendScopeBinding(for: provider).wrappedValue = .currentAccount
-            }
+        )) {
+            Text(viewModel.localizedText("全量", "All")).tag(LocalUsageTrendScope.allAccounts.id)
+            Text(viewModel.localizedText("按账号", "By Account")).tag(LocalUsageTrendScope.currentAccount.id)
         }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func localUsageTrendScopeButton(
-        title: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
-                )
-        }
-        .buttonStyle(.plain)
     }
 
     private func localUsageTrendEmptyHintText(for provider: ProviderDescriptor) -> String {
@@ -5010,45 +5729,21 @@ struct SettingsView: View {
         options: [Option],
         label: @escaping (Option) -> String
     ) -> some View where Option.ID == String {
-        HStack(spacing: 0) {
-            ForEach(options, id: \.id) { option in
-                officialSegmentButton(
-                    title: label(option),
-                    isSelected: selection.wrappedValue == option
-                ) {
+        Picker("", selection: Binding(
+            get: { selection.wrappedValue.id },
+            set: { newValue in
+                if let option = options.first(where: { $0.id == newValue }) {
                     selection.wrappedValue = option
                 }
             }
+        )) {
+            ForEach(options, id: \.id) { option in
+                Text(label(option)).tag(option.id)
+            }
         }
-        .padding(1)
+        .pickerStyle(.segmented)
+        .controlSize(.small)
         .frame(width: 214, height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func officialSegmentButton(
-        title: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.80))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.80) : Color.clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(isSelected ? Color.white.opacity(0.16) : Color.clear, lineWidth: 1)
-                        )
-                )
-        }
-        .buttonStyle(.plain)
     }
 
     private var officialShowEmailTitle: String {
@@ -5902,22 +6597,10 @@ struct SettingsView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle((destructive ? Color(hex: 0xD05757) : Color.white.opacity(disabled ? 0.45 : 0.80)))
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(
-                            destructive ? Color(hex: 0xD05757) : Color.white.opacity(disabled ? 0.35 : 0.55),
-                            lineWidth: 1
-                        )
-                )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
+        .tint(destructive ? Color(hex: 0xD05757) : settingsAccentBlue)
         .disabled(disabled)
     }
 
@@ -6698,7 +7381,7 @@ struct SettingsView: View {
             viewModel.resetLocalAppData()
             seedInputsFromConfig()
             syncSelection()
-            selectedSettingsTab = .general
+            selectedSettingsTab = .overview
             permissionResultMessage[PermissionPrompt.resetLocalData.id] = viewModel.text(.resetLocalDataDone)
             permissionResultIsError[PermissionPrompt.resetLocalData.id] = false
         case .none:
@@ -7128,7 +7811,7 @@ struct SettingsView: View {
                             .foregroundStyle(settingsBodyColor)
                             .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
                         Toggle("", isOn: tokenChannelBinding)
-                            .toggleStyle(FigmaSwitchToggleStyle())
+                            .toggleStyle(.switch)
                             .labelsHidden()
                             .allowsHitTesting(false)
                         Spacer(minLength: 0)
@@ -7149,7 +7832,7 @@ struct SettingsView: View {
                             .foregroundStyle(settingsBodyColor)
                             .frame(width: thirdPartyConfigLabelWidth, alignment: .leading)
                         Toggle("", isOn: accountChannelBinding)
-                            .toggleStyle(FigmaSwitchToggleStyle())
+                            .toggleStyle(.switch)
                             .labelsHidden()
                             .allowsHitTesting(false)
                         Spacer(minLength: 0)
@@ -8436,62 +9119,8 @@ struct SettingsView: View {
         vm.setLanguage(.zhHans)
         return vm
     }())
-    .frame(width: 960, height: 670)
+    .frame(width: 1416, height: 912)
     .preferredColorScheme(.dark)
-}
-
-private struct FigmaSwitchToggleStyle: ToggleStyle {
-    var onTrackOpacity: Double = 0.80
-    var offTrackOpacity: Double = 0.15
-
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.12)) {
-                configuration.isOn.toggle()
-            }
-        } label: {
-            ZStack(alignment: configuration.isOn ? .trailing : .leading) {
-                RoundedRectangle(cornerRadius: 100, style: .continuous)
-                    // 开关轨道：选中/未选中透明度在这里改。
-                    .fill(Color.white.opacity(configuration.isOn ? onTrackOpacity : offTrackOpacity))
-                    .frame(width: 54, height: 24)
-
-                RoundedRectangle(cornerRadius: 100, style: .continuous)
-                    // 开关滑块：尺寸、颜色、阴影在这里改。
-                    .fill(Color.white)
-                    .frame(width: 32, height: 20)
-                    .shadow(color: Color.black.opacity(0.10), radius: 4, x: 0, y: 0)
-                    .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 0)
-                    .padding(.horizontal, 2)
-            }
-            .frame(width: 64, height: 28, alignment: .center)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct SettingsModelCheckboxToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            configuration.isOn.toggle()
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(configuration.isOn ? Color.white.opacity(0.80) : Color.white.opacity(0.25))
-                    .frame(width: 12, height: 12)
-
-                if configuration.isOn {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(Color.black)
-                }
-            }
-            .frame(width: 20, height: 20, alignment: .center)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 private struct DialogSmoothRoundedRectangle: InsettableShape {

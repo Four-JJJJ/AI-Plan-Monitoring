@@ -7,18 +7,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private var hostingController: NSHostingController<AnyView>?
+    private var activationPolicyBeforeShowingSettings: NSApplication.ActivationPolicy?
 
     private override init() {
         super.init()
     }
 
     func show(viewModel: AppViewModel) {
-        let targetContentSize = NSSize(width: 960, height: 670)
+        showAppInDockForSettingsWindow()
+
+        let initialContentSize = NSSize(width: 1416, height: 912)
+        let minimumContentSize = NSSize(width: 1248, height: 816)
         if window == nil {
-            // 窗口基础尺寸：对应设置页整体画布宽高（与 Figma 画板尺寸对齐）。
+            // 窗口基础尺寸：首次打开使用推荐尺寸，之后允许用户自由拖拽调整。
             let panel = NSWindow(
-                contentRect: NSRect(origin: .zero, size: targetContentSize),
-                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                contentRect: NSRect(origin: .zero, size: initialContentSize),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
@@ -48,23 +52,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            // 固定“内容区”为 960x670（min/max 需使用 frameRect 尺寸）。
-            let fixedFrameSize = panel.frameRect(
-                forContentRect: NSRect(origin: .zero, size: targetContentSize)
+            let minimumFrameSize = panel.frameRect(
+                forContentRect: NSRect(origin: .zero, size: minimumContentSize)
             ).size
-            panel.minSize = fixedFrameSize
-            panel.maxSize = fixedFrameSize
-            panel.setContentSize(targetContentSize)
+            panel.minSize = minimumFrameSize
+            panel.setContentSize(initialContentSize)
             panel.center()
             window = panel
         }
 
         let rootView = AnyView(
             SettingsView(viewModel: viewModel, onDone: { [weak self] in
-                self?.window?.orderOut(nil)
+                self?.hideSettingsWindow()
             })
-            // SwiftUI 内容区尺寸：与目标 contentRect 保持一致。
-            .frame(width: targetContentSize.width, height: targetContentSize.height)
+            .frame(
+                minWidth: minimumContentSize.width,
+                maxWidth: .infinity,
+                minHeight: minimumContentSize.height,
+                maxHeight: .infinity
+            )
         )
 
         if let hostingController {
@@ -74,7 +80,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             hostingController = controller
             window?.contentViewController = controller
         }
-        window?.setContentSize(targetContentSize)
         ensureSingleBorderContentAppearance()
 
         NSApp.activate(ignoringOtherApps: true)
@@ -91,6 +96,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let panel = notification.object as? NSWindow else { return }
         layoutTrafficLights(in: panel)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        restoreActivationPolicyAfterSettingsWindow()
+    }
+
+    private func showAppInDockForSettingsWindow() {
+        guard NSApp.activationPolicy() != .regular else { return }
+        if activationPolicyBeforeShowingSettings == nil {
+            activationPolicyBeforeShowingSettings = NSApp.activationPolicy()
+        }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    private func hideSettingsWindow() {
+        window?.orderOut(nil)
+        restoreActivationPolicyAfterSettingsWindow()
+    }
+
+    private func restoreActivationPolicyAfterSettingsWindow() {
+        guard let activationPolicyBeforeShowingSettings else { return }
+        NSApp.setActivationPolicy(activationPolicyBeforeShowingSettings)
+        self.activationPolicyBeforeShowingSettings = nil
     }
 
     private func ensureSingleBorderContentAppearance() {
