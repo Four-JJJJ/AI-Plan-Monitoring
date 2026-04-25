@@ -618,7 +618,7 @@ struct MenuContentView: View {
             } else if !metric.isAvailable {
                 resetLabel = "-"
             } else {
-                resetLabel = Self.countdownText(to: metric.resetAt, now: now)
+                resetLabel = Self.countdownText(to: metric.resetAt, now: now, language: viewModel.language)
             }
             return PercentageMetricDisplay(
                 id: metric.id,
@@ -1435,9 +1435,9 @@ struct MenuContentView: View {
         }
     }
 
-    static func countdownText(to target: Date?, now: Date) -> String {
+    static func countdownText(to target: Date?, now: Date, language: AppLanguage) -> String {
         // menubar 倒计时文案统一走 CountdownFormatter，避免与设置页实现漂移。
-        CountdownFormatter.text(to: target, now: now, placeholder: "-")
+        CountdownFormatter.text(to: target, now: now, placeholder: "-", language: language)
     }
 
     private func clamp(_ value: Double) -> Double {

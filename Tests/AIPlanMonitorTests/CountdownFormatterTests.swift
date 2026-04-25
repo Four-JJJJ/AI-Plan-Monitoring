@@ -8,7 +8,8 @@ final class CountdownFormatterTests: XCTestCase {
         let text = CountdownFormatter.text(
             to: nil,
             now: Date(timeIntervalSince1970: 1_000),
-            placeholder: "--:--:--"
+            placeholder: "--:--:--",
+            language: .zhHans
         )
         XCTAssertEqual(text, "--:--:--")
     }
@@ -17,7 +18,7 @@ final class CountdownFormatterTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_000)
         let target = now.addingTimeInterval(-30)
         XCTAssertEqual(
-            CountdownFormatter.text(to: target, now: now, placeholder: "-"),
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .zhHans),
             "0时0分"
         )
     }
@@ -38,7 +39,7 @@ final class CountdownFormatterTests: XCTestCase {
         for (offset, expected) in cases {
             let target = now.addingTimeInterval(offset)
             XCTAssertEqual(
-                CountdownFormatter.text(to: target, now: now, placeholder: "-"),
+                CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .zhHans),
                 expected
             )
         }
@@ -48,7 +49,7 @@ final class CountdownFormatterTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 20_000)
         let target = now.addingTimeInterval(TimeInterval(145 * 3_600 + 32 * 60 + 40))
         XCTAssertEqual(
-            CountdownFormatter.text(to: target, now: now, placeholder: "-"),
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .zhHans),
             "6天1时"
         )
     }
@@ -57,28 +58,75 @@ final class CountdownFormatterTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 25_000)
         let target = now.addingTimeInterval(TimeInterval(23 * 3_600 + 54 * 60 + 20))
         XCTAssertEqual(
-            CountdownFormatter.text(to: target, now: now, placeholder: "-"),
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .zhHans),
             "23时54分"
         )
     }
 
-    func testMenuCountdownTextUsesSharedFormatter() {
+    func testEnglishDayAndHourFormattingForLongCountdown() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let target = now.addingTimeInterval(TimeInterval(95 * 3_600 + 32 * 60 + 40))
+        XCTAssertEqual(
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .en),
+            "3 d 23 h"
+        )
+    }
+
+    func testEnglishHourAndMinuteFormattingWhenUnderOneDay() {
+        let now = Date(timeIntervalSince1970: 25_000)
+        let target = now.addingTimeInterval(TimeInterval(23 * 3_600 + 54 * 60 + 20))
+        XCTAssertEqual(
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .en),
+            "23 h 54 m"
+        )
+    }
+
+    func testEnglishPastTargetClampsToZero() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let target = now.addingTimeInterval(-30)
+        XCTAssertEqual(
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .en),
+            "0 h 0 m"
+        )
+    }
+
+    func testMenuCountdownTextUsesSharedFormatterForChinese() {
         let now = Date(timeIntervalSince1970: 30_000)
         let target = now.addingTimeInterval(4 * 3_600 + 53 * 60 + 23)
         XCTAssertEqual(
-            MenuContentView.countdownText(to: target, now: now),
-            CountdownFormatter.text(to: target, now: now, placeholder: "-")
+            MenuContentView.countdownText(to: target, now: now, language: .zhHans),
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .zhHans)
         )
-        XCTAssertEqual(MenuContentView.countdownText(to: nil, now: now), "-")
+        XCTAssertEqual(MenuContentView.countdownText(to: nil, now: now, language: .zhHans), "-")
     }
 
-    func testSettingsCountdownTextUsesSharedFormatter() {
+    func testMenuCountdownTextUsesSharedFormatterForEnglish() {
+        let now = Date(timeIntervalSince1970: 30_000)
+        let target = now.addingTimeInterval(4 * 86_400 + 23 * 3_600 + 53 * 60 + 23)
+        XCTAssertEqual(
+            MenuContentView.countdownText(to: target, now: now, language: .en),
+            CountdownFormatter.text(to: target, now: now, placeholder: "-", language: .en)
+        )
+        XCTAssertEqual(MenuContentView.countdownText(to: nil, now: now, language: .en), "-")
+    }
+
+    func testSettingsCountdownTextUsesSharedFormatterForChinese() {
         let now = Date(timeIntervalSince1970: 40_000)
         let target = now.addingTimeInterval(84 * 3_600)
         XCTAssertEqual(
-            SettingsView.codexCountdownText(to: target, now: now),
-            CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--")
+            SettingsView.codexCountdownText(to: target, now: now, language: .zhHans),
+            CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: .zhHans)
         )
-        XCTAssertEqual(SettingsView.codexCountdownText(to: nil, now: now), "--:--:--")
+        XCTAssertEqual(SettingsView.codexCountdownText(to: nil, now: now, language: .zhHans), "--:--:--")
+    }
+
+    func testSettingsCountdownTextUsesSharedFormatterForEnglish() {
+        let now = Date(timeIntervalSince1970: 40_000)
+        let target = now.addingTimeInterval(84 * 3_600)
+        XCTAssertEqual(
+            SettingsView.codexCountdownText(to: target, now: now, language: .en),
+            CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: .en)
+        )
+        XCTAssertEqual(SettingsView.codexCountdownText(to: nil, now: now, language: .en), "--:--:--")
     }
 }

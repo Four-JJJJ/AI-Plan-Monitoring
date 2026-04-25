@@ -7366,11 +7366,11 @@ struct SettingsView: View {
     }
 
     private func codexResetCountdownText(to target: Date?) -> String {
-        Self.codexCountdownText(to: target, now: settingsNow)
+        Self.codexCountdownText(to: target, now: settingsNow, language: viewModel.language)
     }
 
-    static func codexCountdownText(to target: Date?, now: Date) -> String {
-        CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--")
+    static func codexCountdownText(to target: Date?, now: Date, language: AppLanguage) -> String {
+        CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: language)
     }
 
     private var codexEditButtonTitle: String {
