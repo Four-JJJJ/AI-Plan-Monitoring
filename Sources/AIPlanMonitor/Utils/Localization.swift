@@ -141,6 +141,7 @@ enum L10nKey {
     case codexSwitchNeedsVerification
     case codexSwitchFailed
     case codexSwitchAppliedNeedsRestart
+    case codexSwitchDesktopRestartIncomplete
     case codexImportedAt
     case codexProfileHint
     case codexProfileDetails
@@ -344,10 +345,11 @@ enum Localizer {
             case .codexProfileMissing: return "该槽位还没有导入可切换的 Codex 账号"
             case .codexCurrentAccount: return "当前账号"
             case .codexSwitchAction: return "切换"
-            case .codexSwitchSuccess: return "已切换，可直接使用；如桌面端未刷新，请重开 Codex"
+            case .codexSwitchSuccess: return "已切换，可直接使用"
             case .codexSwitchNeedsVerification: return "已切换到该账号，但需要重新验证"
             case .codexSwitchFailed: return "切换失败"
             case .codexSwitchAppliedNeedsRestart: return "已写入本机登录，请重开 Codex 桌面端"
+            case .codexSwitchDesktopRestartIncomplete: return "已切换，但 Codex 桌面端重启未完成，请手动重开"
             case .codexImportedAt: return "最近导入"
             case .codexProfileHint: return "粘贴该账号完整 auth.json 内容。切换时会写回本机 Codex 当前登录，并立即做一次轻量校验。"
             case .codexProfileDetails: return "详情"
@@ -547,10 +549,11 @@ enum Localizer {
             case .codexProfileMissing: return "No imported Codex profile is available for this slot"
             case .codexCurrentAccount: return "Current"
             case .codexSwitchAction: return "Switch"
-            case .codexSwitchSuccess: return "Switched successfully. Reopen Codex if the desktop app does not refresh."
+            case .codexSwitchSuccess: return "Switched successfully. Codex is ready to use."
             case .codexSwitchNeedsVerification: return "Switched to this account, but re-verification is required"
             case .codexSwitchFailed: return "Switch failed"
             case .codexSwitchAppliedNeedsRestart: return "Local Codex auth was updated. Reopen Codex desktop to apply it."
+            case .codexSwitchDesktopRestartIncomplete: return "Switched successfully, but Codex Desktop did not finish restarting. Please reopen it manually."
             case .codexImportedAt: return "Imported"
             case .codexProfileHint: return "Paste the full auth.json content for this account. Switching writes it back to local Codex auth and runs a lightweight validation."
             case .codexProfileDetails: return "Details"

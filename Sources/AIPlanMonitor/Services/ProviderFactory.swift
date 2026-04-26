@@ -1,6 +1,10 @@
 import Foundation
 
-final class ProviderFactory {
+protocol ProviderFactorying {
+    func makeProvider(for descriptor: ProviderDescriptor) -> UsageProvider
+}
+
+final class ProviderFactory: ProviderFactorying {
     private let keychain: KeychainService
     private let kimiCookieService: KimiBrowserCookieService
     private let browserCookieService: BrowserCookieService

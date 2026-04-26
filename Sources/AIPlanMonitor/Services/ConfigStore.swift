@@ -1,6 +1,20 @@
 import Foundation
 
 final class ConfigStore {
+    private enum PersistedOfficialState: CaseIterable {
+        case codex
+        case claude
+
+        var providerID: String {
+            switch self {
+            case .codex:
+                return "codex-official"
+            case .claude:
+                return "claude-official"
+            }
+        }
+    }
+
     private let fileURL: URL
     private let backupFileURL: URL
     private let fileManager: FileManager
@@ -22,7 +36,10 @@ final class ConfigStore {
         try ensureDirectoryExists()
 
         if !fileManager.fileExists(atPath: fileURL.path) {
-            if let recovered = try loadFromBackupAndRestoreIfNeeded() {
+            if let recovered = try recoverFromBackupIfPossible() {
+                return recovered
+            }
+            if let recovered = try recoverFromPersistedOfficialStateAndRestoreIfNeeded() {
                 return recovered
             }
             try save(AppConfig.default)
@@ -44,7 +61,10 @@ final class ConfigStore {
             }
             return migrated
         } catch {
-            if let recovered = try loadFromBackupAndRestoreIfNeeded() {
+            if let recovered = try recoverFromBackupIfPossible() {
+                return recovered
+            }
+            if let recovered = try recoverFromPersistedOfficialStateAndRestoreIfNeeded() {
                 return recovered
             }
             throw error
@@ -98,5 +118,74 @@ final class ConfigStore {
         // Restore primary from backup so later launches don't keep failing on a corrupted primary file.
         try writeData(backupData, to: fileURL)
         return migrated
+    }
+
+    private func recoverFromBackupIfPossible() throws -> AppConfig? {
+        do {
+            return try loadFromBackupAndRestoreIfNeeded()
+        } catch {
+            return nil
+        }
+    }
+
+    private func recoverFromPersistedOfficialStateAndRestoreIfNeeded() throws -> AppConfig? {
+        guard let recovered = recoveredConfigFromPersistedOfficialState() else {
+            return nil
+        }
+        try save(recovered)
+        return recovered
+    }
+
+    private func recoveredConfigFromPersistedOfficialState() -> AppConfig? {
+        let directory = fileURL.deletingLastPathComponent()
+        var recovered = AppConfig.default
+        var restoredProviderIDs: [String] = []
+
+        for state in PersistedOfficialState.allCases where hasPersistedState(for: state, in: directory) {
+            guard let index = recovered.providers.firstIndex(where: { $0.id == state.providerID }) else {
+                continue
+            }
+            recovered.providers[index].enabled = true
+            restoredProviderIDs.append(state.providerID)
+        }
+
+        guard !restoredProviderIDs.isEmpty else {
+            return nil
+        }
+
+        return recovered.migratedWithSiteDefaults()
+    }
+
+    private func hasPersistedState(for state: PersistedOfficialState, in directory: URL) -> Bool {
+        switch state {
+        case .codex:
+            let profileStore = CodexAccountProfileStore(
+                fileManager: fileManager,
+                fileURL: directory.appendingPathComponent("codex_profiles.json")
+            )
+            if !profileStore.profiles().isEmpty {
+                return true
+            }
+            let slotStore = CodexAccountSlotStore(
+                fileManager: fileManager,
+                staleInterval: .greatestFiniteMagnitude,
+                fileURL: directory.appendingPathComponent("codex_slots.json")
+            )
+            return !slotStore.visibleSlots().isEmpty
+        case .claude:
+            let profileStore = ClaudeAccountProfileStore(
+                fileManager: fileManager,
+                fileURL: directory.appendingPathComponent("claude_profiles.json")
+            )
+            if !profileStore.profiles().isEmpty {
+                return true
+            }
+            let slotStore = ClaudeAccountSlotStore(
+                fileManager: fileManager,
+                staleInterval: .greatestFiniteMagnitude,
+                fileURL: directory.appendingPathComponent("claude_slots.json")
+            )
+            return !slotStore.visibleSlots().isEmpty
+        }
     }
 }

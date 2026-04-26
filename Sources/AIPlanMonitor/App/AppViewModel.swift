@@ -12,21 +12,21 @@ final class AppViewModel {
     private let keychain = KeychainService()
     private let thirdPartyBalanceBaselineStore = ThirdPartyBalanceBaselineStore()
     private let appUpdateService: any AppUpdateServicing
-    private let codexSlotStore = CodexAccountSlotStore()
-    private let codexProfileStore = CodexAccountProfileStore()
+    private let codexSlotStore: CodexAccountSlotStore
+    private let codexProfileStore: CodexAccountProfileStore
     private let codexProfileSnapshotService = CodexProfileSnapshotService()
-    private let codexDesktopAuthService = CodexDesktopAuthService()
-    private let codexDesktopAppService = CodexDesktopAppService()
+    private let codexDesktopAuthService: CodexDesktopAuthService
+    private let codexDesktopAppService: CodexDesktopAppService
     private let oauthImportOrchestrator = OAuthImportOrchestrator()
     private let claudeSlotStore = ClaudeAccountSlotStore()
     private let claudeProfileStore = ClaudeAccountProfileStore()
     private let claudeProfileSnapshotService = ClaudeProfileSnapshotService()
     private let claudeDesktopAuthService = ClaudeDesktopAuthService()
     private let launchAtLoginService = LaunchAtLoginService()
-    private let notifications = NotificationService()
+    private let notifications: NotificationService
     private let postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring
     @ObservationIgnored private let localSessionSignalMonitor = LocalSessionCompletionSignalMonitor()
-    private let providerFactory: ProviderFactory
+    private let providerFactory: any ProviderFactorying
     @ObservationIgnored private let localSessionRefreshCoordinator: LocalSessionRefreshCoordinator
 
     private(set) var config: AppConfig
@@ -97,11 +97,22 @@ final class AppViewModel {
     init(
         appUpdateService: any AppUpdateServicing = AppUpdateService(),
         postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
+        codexSlotStore: CodexAccountSlotStore = CodexAccountSlotStore(),
+        codexProfileStore: CodexAccountProfileStore = CodexAccountProfileStore(),
+        codexDesktopAuthService: CodexDesktopAuthService = CodexDesktopAuthService(),
+        codexDesktopAppService: CodexDesktopAppService = CodexDesktopAppService(),
+        notificationService: NotificationService = NotificationService(),
+        providerFactory: (any ProviderFactorying)? = nil,
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
         self.appUpdateService = appUpdateService
         self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
+        self.codexSlotStore = codexSlotStore
+        self.codexProfileStore = codexProfileStore
+        self.codexDesktopAuthService = codexDesktopAuthService
+        self.codexDesktopAppService = codexDesktopAppService
+        self.notifications = notificationService
         self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
         self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
         let shouldPersistConfigDuringBootstrap: Bool
@@ -121,7 +132,7 @@ final class AppViewModel {
         }
         self.config = loadedConfig
         self.currentAppVersion = Self.detectCurrentAppVersion()
-        self.providerFactory = ProviderFactory(keychain: keychain)
+        self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
             signalSource: localSessionSignalMonitor
         )
@@ -145,6 +156,7 @@ final class AppViewModel {
         }
         syncCodexProfilesCurrentState()
         bootstrapClaudeProfileState()
+        restorePersistedOfficialProvidersIfNeeded()
         refreshPermissionStatuses(force: true)
     }
 
@@ -154,25 +166,39 @@ final class AppViewModel {
         testingCurrentAppVersion: String = "0.0.0",
         appUpdateService: any AppUpdateServicing,
         postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
+        codexSlotStore: CodexAccountSlotStore = CodexAccountSlotStore(),
+        codexProfileStore: CodexAccountProfileStore = CodexAccountProfileStore(),
+        codexDesktopAuthService: CodexDesktopAuthService = CodexDesktopAuthService(),
+        codexDesktopAppService: CodexDesktopAppService = CodexDesktopAppService(),
+        notificationService: NotificationService = NotificationService(),
+        providerFactory: (any ProviderFactorying)? = nil,
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
         self.appUpdateService = appUpdateService
         self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
+        self.codexSlotStore = codexSlotStore
+        self.codexProfileStore = codexProfileStore
+        self.codexDesktopAuthService = codexDesktopAuthService
+        self.codexDesktopAppService = codexDesktopAppService
+        self.notifications = notificationService
         self.updateInstallBufferDelaySeconds = updateInstallBufferDelaySeconds
         self.updateCheckStatusClearDelaySeconds = updateCheckStatusClearDelaySeconds
         self.config = testingConfig.migratedWithSiteDefaults()
         self.currentAppVersion = testingCurrentAppVersion
-        self.providerFactory = ProviderFactory(keychain: keychain)
+        self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
             signalSource: localSessionSignalMonitor
         )
-        self.codexSlots = []
-        self.claudeSlots = []
+        self.codexSlots = codexSlotStore.visibleSlots()
+        self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
         self.claudeProfiles = []
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
+        syncCodexProfilesCurrentState()
+        bootstrapClaudeProfileState()
+        restorePersistedOfficialProvidersIfNeeded()
     }
 #endif
 
@@ -326,6 +352,7 @@ final class AppViewModel {
     var shouldShowPermissionGuide: Bool {
         let hasEnabledProviders = config.providers.contains(where: \.enabled)
         guard !hasEnabledProviders else { return false }
+        guard !hasPersistedOfficialMonitoringState else { return false }
         if !hasNotificationPermission { return true }
         if !secureStorageReady { return true }
         if (fullDiskAccessRelevant || fullDiskAccessRequested) && !fullDiskAccessGranted { return true }
@@ -1484,12 +1511,15 @@ final class AppViewModel {
 
         do {
             try codexDesktopAuthService.applyProfile(profile)
-            _ = await codexDesktopAppService.restartIfRunning()
+            let restartResult = await codexDesktopAppService.restartIfRunning()
             syncCodexProfilesCurrentState()
 
             guard let descriptor = config.providers.first(where: { $0.type == .codex && $0.family == .official }) else {
                 setCodexSwitchFeedback(
-                    CodexSwitchFeedback(message: text(.codexSwitchAppliedNeedsRestart), isError: false),
+                    CodexSwitchFeedback(
+                        message: codexSwitchMessage(for: restartResult, successKey: .codexSwitchSuccess),
+                        isError: false
+                    ),
                     for: slotID
                 )
                 return
@@ -1504,13 +1534,17 @@ final class AppViewModel {
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
+                let successMessage = codexSwitchMessage(
+                    for: restartResult,
+                    successKey: .codexSwitchSuccess
+                )
                 setCodexSwitchFeedback(
-                    CodexSwitchFeedback(message: text(.codexSwitchSuccess), isError: false),
+                    CodexSwitchFeedback(message: successMessage, isError: false),
                     for: slotID
                 )
                 notifications.notify(
                     title: "Codex",
-                    body: text(.codexSwitchSuccess),
+                    body: successMessage,
                     identifier: "codex-switch-\(slotID.rawValue.lowercased())"
                 )
             } catch {
@@ -3312,6 +3346,49 @@ final class AppViewModel {
             }
             self.codexFeedbackTasks.removeValue(forKey: slotID)
         }
+    }
+
+    private var hasPersistedOfficialMonitoringState: Bool {
+        !codexProfiles.isEmpty
+            || !claudeProfiles.isEmpty
+            || !codexSlots.isEmpty
+            || !claudeSlots.isEmpty
+    }
+
+    private func restorePersistedOfficialProvidersIfNeeded() {
+        guard !config.providers.contains(where: \.enabled) else { return }
+
+        let hasCodexState = !codexProfiles.isEmpty || !codexSlots.isEmpty
+        let hasClaudeState = !claudeProfiles.isEmpty || !claudeSlots.isEmpty
+        var changed = false
+
+        if hasCodexState,
+           let index = config.providers.firstIndex(where: { $0.type == .codex && $0.family == .official }),
+           !config.providers[index].enabled {
+            config.providers[index].enabled = true
+            changed = true
+        }
+
+        if hasClaudeState,
+           let index = config.providers.firstIndex(where: { $0.type == .claude && $0.family == .official }),
+           !config.providers[index].enabled {
+            config.providers[index].enabled = true
+            changed = true
+        }
+
+        if changed {
+            normalizeStatusBarSelections()
+        }
+    }
+
+    private func codexSwitchMessage(
+        for restartResult: CodexDesktopAppRestartResult,
+        successKey: L10nKey
+    ) -> String {
+        if restartResult.requiresManualRelaunch {
+            return text(.codexSwitchDesktopRestartIncomplete)
+        }
+        return text(successKey)
     }
 
     private func matchedCodexProfile(for slot: CodexAccountSlot) -> CodexAccountProfile? {
