@@ -67,6 +67,23 @@ final class CodexAuthPathResolverTests: XCTestCase {
         XCTAssertEqual(servicePaths, providerPaths)
     }
 
+    func testResolveAuthPathsFallsBackToInjectedHomeWhenEnvironmentIsEmpty() {
+        let home = "/tmp/injected-home"
+
+        let paths = CodexProvider.resolvedAuthPaths(
+            homeDirectory: home,
+            environment: [:]
+        )
+
+        XCTAssertEqual(
+            paths,
+            [
+                homeConfigAuthPath(in: home),
+                homeCodexAuthPath(in: home)
+            ]
+        )
+    }
+
     private func authPath(in directory: String) -> String {
         URL(fileURLWithPath: directory, isDirectory: true)
             .appendingPathComponent("auth.json")

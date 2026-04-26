@@ -7,15 +7,18 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
     private let cacheTTL: TimeInterval = 15
     private let refreshBuffer: TimeInterval = 5 * 60
     private let session: URLSession
+    private let homeDirectory: () -> String
 
     let descriptor: ProviderDescriptor
 
     init(
         descriptor: ProviderDescriptor,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        homeDirectory: @escaping () -> String = { NSHomeDirectory() }
     ) {
         self.descriptor = descriptor
         self.session = session
+        self.homeDirectory = homeDirectory
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -34,12 +37,9 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
-                if let stale = await Self.cache.snapshotAny(for: descriptor.id) {
-                    var fallback = stale
-                    fallback.status = .warning
-                    fallback.updatedAt = Date()
-                    fallback.note = stale.note.isEmpty ? "cached fallback" : "\(stale.note) | cached"
-                    return fallback
+                if !forceRefresh,
+                   let stale = await Self.cache.snapshotAny(for: descriptor.id) {
+                    return OfficialSnapshotFallback.make(from: stale)
                 }
                 throw error
             }
@@ -125,12 +125,12 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
             )
         }
 
-        let primary = candidates.first ?? "\(NSHomeDirectory())/.kimi/credentials/kimi-code.json"
+        let primary = candidates.first ?? "\(homeDirectory())/.kimi/credentials/kimi-code.json"
         throw ProviderError.missingCredential(primary)
     }
 
     private func resolveCredentialPaths() -> [String] {
-        let home = NSHomeDirectory()
+        let home = homeDirectory()
         let explicit = [
             "\(home)/.kimi/credentials/kimi-code.json",
             "\(home)/.config/kimi/credentials/kimi-code.json",

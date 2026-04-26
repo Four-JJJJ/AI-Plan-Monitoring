@@ -202,8 +202,7 @@ final class OfficialProviderTests: XCTestCase {
     }
 
     func testCodexForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
-        let homeDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("codex-provider-tests-\(UUID().uuidString)", isDirectory: true)
+        let homeDirectory = try makeTemporaryHomeDirectory(prefix: "codex-provider-tests")
         let authDirectory = homeDirectory.appendingPathComponent(".config/codex", isDirectory: true)
         try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
 
@@ -224,16 +223,6 @@ final class OfficialProviderTests: XCTestCase {
         }
         """#
         try authJSON.write(to: authDirectory.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
-
-        let originalHome = ProcessInfo.processInfo.environment["HOME"]
-        setenv("HOME", homeDirectory.path, 1)
-        defer {
-            if let originalHome {
-                setenv("HOME", originalHome, 1)
-            } else {
-                unsetenv("HOME")
-            }
-        }
 
         var requestCount = 0
         OfficialMockURLProtocol.requestHandler = { request in
@@ -263,6 +252,7 @@ final class OfficialProviderTests: XCTestCase {
         let session = URLSession(configuration: configuration)
 
         var descriptor = ProviderDescriptor.defaultOfficialCodex()
+        descriptor.id = "codex-force-refresh-\(UUID().uuidString)"
         descriptor.officialConfig?.sourceMode = .api
         descriptor.officialConfig?.webMode = .disabled
 
@@ -270,11 +260,238 @@ final class OfficialProviderTests: XCTestCase {
             descriptor: descriptor,
             session: session,
             keychain: KeychainService(),
-            browserCookieService: BrowserCookieService()
+            browserCookieService: BrowserCookieService(),
+            homeDirectory: { homeDirectory.path },
+            environment: { [:] }
         )
 
         let initial = try await provider.fetch(forceRefresh: false)
         XCTAssertEqual(initial.remaining ?? -1, 40, accuracy: 0.001)
+
+        do {
+            _ = try await provider.fetch(forceRefresh: true)
+            XCTFail("forceRefresh should not fall back to a stale cached snapshot")
+        } catch let error as ProviderError {
+            if case .unauthorized = error {
+                XCTAssertEqual(requestCount, 2)
+            } else {
+                XCTFail("unexpected provider error: \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testClaudeForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
+        let homeDirectory = try makeTemporaryHomeDirectory(prefix: "claude-provider-tests")
+        let credentialsPath = homeDirectory.appendingPathComponent(".claude/.credentials.json")
+        let credentialsJSON = #"""
+        {
+          "claudeAiOauth": {
+            "accessToken": "claude-access-token",
+            "expiresAt": 4102444800000,
+            "subscriptionType": "pro",
+            "scopes": ["user:profile"]
+          }
+        }
+        """#
+        try writeText(credentialsJSON, to: credentialsPath)
+
+        var requestCount = 0
+        OfficialMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.absoluteString, "https://api.anthropic.com/api/oauth/usage")
+            if requestCount == 1 {
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let body = """
+                {
+                  "five_hour": { "utilization": 30, "resets_at": "2026-04-11T10:00:00Z" },
+                  "seven_day": { "utilization": 55, "resets_at": "2026-04-17T00:00:00Z" }
+                }
+                """
+                return (response, Data(body.utf8))
+            }
+            let response = HTTPURLResponse(url: url, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        var descriptor = ProviderDescriptor.defaultOfficialClaude()
+        descriptor.id = "claude-force-refresh-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .api
+        descriptor.officialConfig?.webMode = .disabled
+
+        let provider = ClaudeProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: KeychainService(),
+            browserCookieService: BrowserCookieService(),
+            homeDirectory: { homeDirectory.path }
+        )
+
+        let initial = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(initial.remaining ?? -1, 45, accuracy: 0.001)
+
+        do {
+            _ = try await provider.fetch(forceRefresh: true)
+            XCTFail("forceRefresh should not fall back to a stale cached snapshot")
+        } catch let error as ProviderError {
+            if case .unauthorized = error {
+                XCTAssertEqual(requestCount, 2)
+            } else {
+                XCTFail("unexpected provider error: \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testGeminiForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
+        let homeDirectory = try makeTemporaryHomeDirectory(prefix: "gemini-provider-tests")
+        let geminiDirectory = homeDirectory.appendingPathComponent(".gemini", isDirectory: true)
+        try FileManager.default.createDirectory(at: geminiDirectory, withIntermediateDirectories: true)
+        try writeText(#"{"selectedAuthType":"oauth-personal"}"#, to: geminiDirectory.appendingPathComponent("settings.json"))
+        let idToken = makeJWT(email: "gemini@example.com")
+        let oauthJSON = #"""
+        {
+          "access_token": "gemini-access-token",
+          "id_token": "\#(idToken)",
+          "expiry_date": 4102444800000
+        }
+        """#
+        try writeText(oauthJSON, to: geminiDirectory.appendingPathComponent("oauth_creds.json"))
+
+        var requestCount = 0
+        OfficialMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let url = try XCTUnwrap(request.url)
+            switch requestCount {
+            case 1:
+                XCTAssertEqual(url.absoluteString, "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{}"#.utf8))
+            case 2:
+                XCTAssertEqual(url.absoluteString, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let body = """
+                {
+                  "quotas": [
+                    {
+                      "quotaId": "gemini-2.5-pro",
+                      "usage": { "utilization": 0.40, "resetAt": "2026-04-11T08:00:00Z" }
+                    },
+                    {
+                      "quotaId": "gemini-2.5-flash",
+                      "usage": { "utilization": 20, "resetAt": "2026-04-11T02:00:00Z" }
+                    }
+                  ]
+                }
+                """
+                return (response, Data(body.utf8))
+            default:
+                XCTAssertEqual(url.absoluteString, "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+                let response = HTTPURLResponse(url: url, statusCode: 401, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        var descriptor = ProviderDescriptor.defaultOfficialGemini()
+        descriptor.id = "gemini-force-refresh-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .api
+
+        let provider = GeminiProvider(
+            descriptor: descriptor,
+            session: session,
+            homeDirectory: { homeDirectory.path }
+        )
+
+        let initial = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(initial.remaining ?? -1, 60, accuracy: 0.001)
+
+        do {
+            _ = try await provider.fetch(forceRefresh: true)
+            XCTFail("forceRefresh should not fall back to a stale cached snapshot")
+        } catch let error as ProviderError {
+            if case .unauthorized = error {
+                XCTAssertEqual(requestCount, 3)
+            } else {
+                XCTFail("unexpected provider error: \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testKimiForceRefreshDoesNotReturnStaleCachedSnapshot() async throws {
+        let homeDirectory = try makeTemporaryHomeDirectory(prefix: "kimi-provider-tests")
+        let credentialsPath = homeDirectory.appendingPathComponent(".kimi/credentials/kimi-code.json")
+        let credentialsJSON = #"""
+        {
+          "access_token": "kimi-access-token",
+          "expires_at": 4102444800
+        }
+        """#
+        try writeText(credentialsJSON, to: credentialsPath)
+
+        var requestCount = 0
+        OfficialMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.absoluteString, "https://api.kimi.com/coding/v1/usages")
+            if requestCount == 1 {
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let body = """
+                {
+                  "user": {
+                    "email": "kimi@example.com",
+                    "membership": { "level": "premium" }
+                  },
+                  "usage": {
+                    "remaining_amount": 700,
+                    "quota_amount": 1000
+                  },
+                  "limits": [
+                    {
+                      "name": "5-hour",
+                      "window": { "duration": 300, "time_unit": "TIME_UNIT_MINUTE", "resets_at": "2026-04-10T12:00:00Z" },
+                      "usage": { "remaining_amount": 30, "quota_amount": 50 }
+                    }
+                  ]
+                }
+                """
+                return (response, Data(body.utf8))
+            }
+            let response = HTTPURLResponse(url: url, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        var descriptor = ProviderDescriptor.defaultOfficialKimi()
+        descriptor.id = "kimi-force-refresh-\(UUID().uuidString)"
+        descriptor.officialConfig?.sourceMode = .api
+
+        let provider = KimiOfficialProvider(
+            descriptor: descriptor,
+            session: session,
+            homeDirectory: { homeDirectory.path }
+        )
+
+        let initial = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(initial.remaining ?? -1, 60, accuracy: 0.001)
 
         do {
             _ = try await provider.fetch(forceRefresh: true)
@@ -1229,4 +1446,25 @@ private final class SpyBrowserCookieDetector: BrowserCookieDetecting {
         detectNamedCookieCallCount += 1
         return namedCookieResult
     }
+}
+
+private func makeTemporaryHomeDirectory(prefix: String) throws -> URL {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+}
+
+private func writeText(_ text: String, to url: URL) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try text.write(to: url, atomically: true, encoding: .utf8)
+}
+
+private func makeJWT(email: String) -> String {
+    let payload = Data(#"{"email":"\#(email)"}"#.utf8)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    return "header.\(payload).signature"
 }

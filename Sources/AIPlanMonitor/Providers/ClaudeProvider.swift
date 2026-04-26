@@ -11,6 +11,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private let keychain: KeychainService
     private let browserCookieService: BrowserCookieDetecting
     private let webReadBackoff: WebOverlayRetryBackoff
+    private let homeDirectory: () -> String
 
     let descriptor: ProviderDescriptor
 
@@ -19,13 +20,15 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         session: URLSession = .shared,
         keychain: KeychainService,
         browserCookieService: BrowserCookieDetecting,
-        webReadBackoff: WebOverlayRetryBackoff = ClaudeProvider.webReadBackoff
+        webReadBackoff: WebOverlayRetryBackoff = ClaudeProvider.webReadBackoff,
+        homeDirectory: @escaping () -> String = { NSHomeDirectory() }
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
         self.browserCookieService = browserCookieService
         self.webReadBackoff = webReadBackoff
+        self.homeDirectory = homeDirectory
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -44,12 +47,9 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
-                if let stale = await Self.cache.snapshotAny(for: descriptor.id) {
-                    var fallback = stale
-                    fallback.status = .warning
-                    fallback.updatedAt = Date()
-                    fallback.note = stale.note.isEmpty ? "cached fallback" : "\(stale.note) | cached"
-                    return fallback
+                if !forceRefresh,
+                   let stale = await Self.cache.snapshotAny(for: descriptor.id) {
+                    return OfficialSnapshotFallback.make(from: stale)
                 }
                 throw error
             }
@@ -118,7 +118,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadCredentials() throws -> ClaudeCredentials {
-        let home = NSHomeDirectory()
+        let home = homeDirectory()
         let path = "\(home)/.claude/.credentials.json"
         if FileManager.default.fileExists(atPath: path),
            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),

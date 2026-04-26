@@ -15,19 +15,25 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     private let keychain: KeychainService
     private let browserCookieService: BrowserCookieDetecting
     private let webReadBackoff: WebOverlayRetryBackoff
+    private let homeDirectory: () -> String
+    private let environment: () -> [String: String]
 
     init(
         descriptor: ProviderDescriptor,
         session: URLSession = .shared,
         keychain: KeychainService,
         browserCookieService: BrowserCookieDetecting,
-        webReadBackoff: WebOverlayRetryBackoff = CodexProvider.webReadBackoff
+        webReadBackoff: WebOverlayRetryBackoff = CodexProvider.webReadBackoff,
+        homeDirectory: @escaping () -> String = { NSHomeDirectory() },
+        environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment }
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
         self.browserCookieService = browserCookieService
         self.webReadBackoff = webReadBackoff
+        self.homeDirectory = homeDirectory
+        self.environment = environment
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -36,24 +42,21 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
 
     func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
         try await Self.gate.withPermit { [self] in
+            let lookupCacheKey = cacheKeyForCurrentContext()
             if !forceRefresh,
-               let cached = await Self.cache.snapshotIfFresh(for: descriptor.id, ttl: cacheTTL) {
+               let cached = await Self.cache.snapshotIfFresh(for: lookupCacheKey, ttl: cacheTTL) {
                 return cached
             }
 
             do {
                 let snapshot = try await loadSnapshot(forceRefresh: forceRefresh)
-                await Self.cache.store(snapshot, for: descriptor.id)
+                let storeCacheKey = cacheKeyForCurrentContext()
+                await Self.cache.store(snapshot, for: storeCacheKey)
                 return snapshot
             } catch {
                 if !forceRefresh,
-                   let stale = await Self.cache.snapshotAny(for: descriptor.id) {
-                    var fallback = stale
-                    fallback.status = .warning
-                    fallback.valueFreshness = .cachedFallback
-                    fallback.note = stale.note.isEmpty ? "cached fallback" : "\(stale.note) | cached"
-                    fallback.updatedAt = Date()
-                    return fallback
+                   let stale = await Self.cache.snapshotAny(for: lookupCacheKey) {
+                    return OfficialSnapshotFallback.make(from: stale)
                 }
                 throw error
             }
@@ -207,8 +210,8 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
 
     private func resolveAuthPaths() -> [String] {
         Self.resolvedAuthPaths(
-            homeDirectory: NSHomeDirectory(),
-            environment: ProcessInfo.processInfo.environment
+            homeDirectory: homeDirectory(),
+            environment: environment()
         )
     }
 
@@ -222,6 +225,53 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     private func needsRefresh(lastRefresh: Date?) -> Bool {
         guard let lastRefresh else { return true }
         return Date().timeIntervalSince(lastRefresh) > refreshAge
+    }
+
+    private func cacheKeyForCurrentContext() -> String {
+        let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
+        var components = [
+            descriptor.id,
+            "source=\(official.sourceMode.rawValue)",
+            "web=\(official.webMode.rawValue)"
+        ]
+
+        if let credentialIdentity = currentCredentialCacheIdentity() {
+            components.append("credential=\(credentialIdentity)")
+        }
+        if let cookieIdentity = currentManualCookieCacheIdentity(for: official) {
+            components.append("cookie=\(cookieIdentity)")
+        } else if let manualCookieAccount = official.manualCookieAccount,
+                  !manualCookieAccount.isEmpty {
+            components.append("cookieAccount=\(manualCookieAccount)")
+        }
+
+        return components.joined(separator: "|")
+    }
+
+    private func currentCredentialCacheIdentity() -> String? {
+        guard let credentials = try? loadCredentials() else { return nil }
+        var components: [String] = []
+        if let accountID = CodexIdentity.trimmed(credentials.accountId) {
+            components.append("account=\(accountID)")
+        }
+        if let subject = CodexIdentity.trimmed(credentials.accountSubject) {
+            components.append("subject=\(subject)")
+        }
+        if let fingerprint = Self.credentialFingerprint(credentials.accessToken) {
+            components.append("fingerprint=\(fingerprint)")
+        }
+        return components.isEmpty ? nil : components.joined(separator: ",")
+    }
+
+    private func currentManualCookieCacheIdentity(for official: OfficialProviderConfig) -> String? {
+        guard let account = official.manualCookieAccount,
+              !account.isEmpty,
+              let header = keychain.readToken(service: KeychainService.defaultServiceName, account: account),
+              !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        return Self.credentialFingerprint(header)
     }
 
     private func refresh(credentials: CodexCredentials) async throws -> CodexCredentials {

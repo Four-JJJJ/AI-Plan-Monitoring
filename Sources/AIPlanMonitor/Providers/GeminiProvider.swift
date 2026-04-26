@@ -7,15 +7,18 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     private let cacheTTL: TimeInterval = 15
     private let refreshBuffer: TimeInterval = 5 * 60
     private let session: URLSession
+    private let homeDirectory: () -> String
 
     let descriptor: ProviderDescriptor
 
     init(
         descriptor: ProviderDescriptor,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        homeDirectory: @escaping () -> String = { NSHomeDirectory() }
     ) {
         self.descriptor = descriptor
         self.session = session
+        self.homeDirectory = homeDirectory
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -34,12 +37,9 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
                 await Self.cache.store(snapshot, for: descriptor.id)
                 return snapshot
             } catch {
-                if let stale = await Self.cache.snapshotAny(for: descriptor.id) {
-                    var fallback = stale
-                    fallback.status = .warning
-                    fallback.updatedAt = Date()
-                    fallback.note = stale.note.isEmpty ? "cached fallback" : "\(stale.note) | cached"
-                    return fallback
+                if !forceRefresh,
+                   let stale = await Self.cache.snapshotAny(for: descriptor.id) {
+                    return OfficialSnapshotFallback.make(from: stale)
                 }
                 throw error
             }
@@ -118,7 +118,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadSettings() throws -> GeminiSettings {
-        let path = "\(NSHomeDirectory())/.gemini/settings.json"
+        let path = "\(homeDirectory())/.gemini/settings.json"
         guard FileManager.default.fileExists(atPath: path) else {
             throw ProviderError.missingCredential(path)
         }
@@ -198,7 +198,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadCredentials() throws -> GeminiCredentials {
-        let path = "\(NSHomeDirectory())/.gemini/oauth_creds.json"
+        let path = "\(homeDirectory())/.gemini/oauth_creds.json"
         guard FileManager.default.fileExists(atPath: path) else {
             throw ProviderError.missingCredential(path)
         }
@@ -306,7 +306,7 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadClientSecretsFromOAuthCredentials() -> (id: String, secret: String)? {
-        let path = "\(NSHomeDirectory())/.gemini/oauth_creds.json"
+        let path = "\(homeDirectory())/.gemini/oauth_creds.json"
         guard FileManager.default.fileExists(atPath: path),
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
