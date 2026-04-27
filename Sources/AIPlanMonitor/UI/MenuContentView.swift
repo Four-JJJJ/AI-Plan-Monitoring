@@ -19,31 +19,27 @@ struct MenuContentView: View {
 
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    // MARK: - Menubar 视觉 Token（改这里可全局影响首页样式）
-    // menubar 面板外层背景。
-    private let panelBackground = Color(hex: 0x232323)
-    // menubar 内部卡片背景。
-    private let cardBackground = Color.black
-    // 卡片垂直间距。
-    private let cardSpacing: CGFloat = 6
-    // 状态颜色：健康/警告/错误。
-    private let sufficientColor = Color(hex: 0x69BD64)
-    private let warningColor = Color(hex: 0xD87E3E)
-    private let errorColor = Color(hex: 0xD05757)
-    // 顶部操作按钮尺寸与间距（Figma: 16x16，间距 12）。
+    // MARK: - Menubar 视觉 Token（现代化设计系统）
+    // 卡片垂直间距
+    private let cardSpacing: CGFloat = ModernDesignTokens.cardSpacing
+    // 状态颜色：健康/警告/错误
+    private let sufficientColor = ModernDesignTokens.sufficientColor
+    private let warningColor = ModernDesignTokens.warningColor
+    private let errorColor = ModernDesignTokens.errorColor
+    // 顶部操作按钮尺寸与间距
     private let headerActionIconSize: CGFloat = 16
     private let headerActionSpacing: CGFloat = 12
     private let headerHeight: CGFloat = 16
-    private let headerActionIconOpacity: Double = 0.4
-    private let updateHintColor = Color(hex: 0x69BD65)
-    private let updateErrorColor = Color(hex: 0xD05757)
-    // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动。
+    private let headerActionIconOpacity: Double = 0.6  // 提升到 60%
+    private let updateHintColor = ModernDesignTokens.color(hex: 0x69BD65)
+    private let updateErrorColor = ModernDesignTokens.errorColor
+    // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动
     private let modelCardHeightEstimate: CGFloat = 86
     private let maxVisibleModelCards: CGFloat = 5.5
-    private let cardsViewportCornerRadius: CGFloat = 12
+    private let cardsViewportCornerRadius: CGFloat = ModernDesignTokens.cardCornerRadius
 
     var body: some View {
-        // menubar 主面板布局：顶部 header + 下方卡片列表。
+        // menubar 主面板布局：顶部 header + 下方卡片列表
         VStack(alignment: .leading, spacing: 10) {
             header
             cards
@@ -53,12 +49,15 @@ struct MenuContentView: View {
         .padding(.bottom, 8)
         .padding(.horizontal, 8)
         .background(
-            SmoothRoundedRectangle(cornerRadius: 20, smoothing: 0.6)
-                // menubar 外层圆角背景。
-                .fill(panelBackground)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.panelCornerRadius, smoothing: 0.6)
+                .fill(Color.clear)
+                .background(
+                    GlassmorphicBackground()
+                        .clipShape(SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.panelCornerRadius, smoothing: 0.6))
+                )
         )
         .clipShape(
-            SmoothRoundedRectangle(cornerRadius: 20, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.panelCornerRadius, smoothing: 0.6)
         )
         .environment(\.colorScheme, .dark)
         .onReceive(clock) { value in
@@ -102,15 +101,17 @@ struct MenuContentView: View {
     }
 
     private var cards: some View {
-        // 卡片流容器：内容不足按实际高度；超过上限时在区内滚动。
+        // 卡片流容器：内容不足按实际高度；超过上限时在区内滚动
         ScrollView {
             VStack(spacing: cardSpacing) {
                 if viewModel.shouldShowPermissionGuide {
                     permissionGuideCard
+                        .cardEntrance(delay: 0)
                 }
 
-                ForEach(displayProviders) { provider in
+                ForEach(Array(displayProviders.enumerated()), id: \.element.id) { index, provider in
                     providerCards(for: provider)
+                        .cardEntrance(delay: Double(index) * 0.05)
                 }
             }
             .padding(2)
@@ -146,17 +147,7 @@ struct MenuContentView: View {
     }
 
     private func headerIconButton(iconName: String, fallback: String, action: @escaping () -> Void) -> some View {
-        // 顶部图标按钮样式入口（尺寸、图标颜色、点击样式）。
-        Button(action: action) {
-            BundledIconView(
-                name: iconName,
-                fallback: fallback,
-                size: headerActionIconSize,
-                iconOpacity: headerActionIconOpacity
-            )
-        }
-        .buttonStyle(.plain)
-        .frame(width: headerActionIconSize, height: headerActionIconSize)
+        ModernIconButton(iconName: iconName, fallback: fallback, action: action)
     }
 
     private var shouldShowUpdateButton: Bool {
@@ -308,7 +299,7 @@ struct MenuContentView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(cardBackground)
+                .fill(Color.black)
         )
     }
 
@@ -411,7 +402,6 @@ struct MenuContentView: View {
                     disconnected: disconnected
                 ),
                 errorText: error,
-                backgroundColor: cardBackground,
                 isDisconnected: disconnected,
                 highlightColor: hasErrorState ? errorColor : nil
             )
@@ -429,7 +419,6 @@ struct MenuContentView: View {
                 amountText: (disconnected || stale) ? "-" : formattedBalanceNumber(amountValue),
                 secondaryText: (disconnected || stale) ? nil : relaySecondaryText(provider: provider, snapshot: snapshot),
                 errorText: error,
-                backgroundColor: cardBackground,
                 isDisconnected: disconnected || stale,
                 highlightColor: hasErrorState ? errorColor : nil,
                 balanceLabel: provider.displaysUsedQuota ? viewModel.text(.used) : viewModel.text(.balanceLabel)
@@ -466,7 +455,6 @@ struct MenuContentView: View {
                 disconnected: false
             ),
             errorText: nil,
-            backgroundColor: cardBackground,
             isDisconnected: false,
             leadingAccentColor: slot.isActive ? Color.white.opacity(0.80) : nil,
             actionLabel: showsSwitchAction ? viewModel.text(.codexSwitchAction) : nil,
@@ -504,7 +492,6 @@ struct MenuContentView: View {
                 disconnected: false
             ),
             errorText: nil,
-            backgroundColor: cardBackground,
             isDisconnected: false,
             leadingAccentColor: slot.isActive ? Color.white.opacity(0.80) : nil,
             actionLabel: showsSwitchAction ? viewModel.localizedText("切换", "Switch") : nil,
@@ -1454,7 +1441,7 @@ private struct PercentageModelCard: View {
     let status: CardStatus
     let metrics: [PercentageMetricDisplay]
     let errorText: String?
-    let backgroundColor: Color
+    // let backgroundColor: Color
     let isDisconnected: Bool
     var highlightColor: Color? = nil
     var leadingAccentColor: Color? = nil
@@ -1463,6 +1450,8 @@ private struct PercentageModelCard: View {
     var action: (() -> Void)? = nil
     var infoText: String? = nil
     var infoTextColor: Color = Color.white.opacity(0.5)
+
+    @State private var isHovered = false
 
     var body: some View {
         // 百分比型模型卡（Codex/Claude/Gemini 等）的整体样式。
@@ -1539,12 +1528,12 @@ private struct PercentageModelCard: View {
         }
         .padding(12)
         .background(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 // 卡片背景色由外部传入，统一在这里渲染。
-                .fill(backgroundColor)
+                .fill(Color.black.opacity(0.84))
         )
         .overlay(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 // 卡片描边：断连或高亮时显示。
                 .stroke(borderColor, lineWidth: hasBorder ? 1 : 0)
         )
@@ -1564,6 +1553,29 @@ private struct PercentageModelCard: View {
                 .allowsHitTesting(false)
             }
         }
+        .hoverGlow(
+            tint: highlightColor ?? status.color,
+            intensity: highlightColor == nil ? 0.12 : 0.18,
+            radius: 135,
+            cornerRadius: ModernDesignTokens.cardCornerRadius
+        )
+        .shadow(
+            color: Color.black.opacity(isHovered ? 0.26 : 0.12),
+            radius: isHovered ? ModernDesignTokens.cardHoverShadowRadius : ModernDesignTokens.cardShadowRadius,
+            x: 0,
+            y: isHovered ? ModernDesignTokens.cardHoverShadowY : ModernDesignTokens.cardShadowY
+        )
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isHovered
+        )
     }
 
     private var borderColor: Color {
@@ -1642,7 +1654,7 @@ private struct HoverActionButton: View {
                 .frame(width: 28, height: 14)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(backgroundColor)
+                        .fill(Color.black)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1742,10 +1754,12 @@ private struct AmountModelCard: View {
     let amountText: String
     let secondaryText: String?
     let errorText: String?
-    let backgroundColor: Color
+    // let backgroundColor: Color (removed for glassmorphic design)
     let isDisconnected: Bool
     var highlightColor: Color? = nil
     let balanceLabel: String
+
+    @State private var isHovered = false
 
     var body: some View {
         // 余额型模型卡（第三方 relay 等）的整体样式。
@@ -1805,12 +1819,35 @@ private struct AmountModelCard: View {
         }
         .padding(12)
         .background(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
-                .fill(backgroundColor)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
+                .fill(Color.black.opacity(0.84))
         )
         .overlay(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 .stroke(borderColor, lineWidth: hasBorder ? 1 : 0)
+        )
+        .hoverGlow(
+            tint: highlightColor ?? status.color,
+            intensity: highlightColor == nil ? 0.12 : 0.18,
+            radius: 135,
+            cornerRadius: ModernDesignTokens.cardCornerRadius
+        )
+        .shadow(
+            color: Color.black.opacity(isHovered ? 0.26 : 0.12),
+            radius: isHovered ? ModernDesignTokens.cardHoverShadowRadius : ModernDesignTokens.cardShadowRadius,
+            x: 0,
+            y: isHovered ? ModernDesignTokens.cardHoverShadowY : ModernDesignTokens.cardShadowY
+        )
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isHovered
         )
     }
 
@@ -1985,6 +2022,56 @@ private struct QuotaMetric: Identifiable {
         self.resetAt = resetAt
         self.isAvailable = isAvailable
         self.valueTextOverride = valueTextOverride
+    }
+}
+
+// MARK: - Modern Icon Button
+
+private struct ModernIconButton: View {
+    let iconName: String
+    let fallback: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
+                isPressed = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
+                    isPressed = false
+                }
+            }
+            action()
+        }) {
+            ZStack {
+                // 背景光晕
+                Circle()
+                    .fill(Color.white.opacity(isHovered ? 0.15 : 0))
+                    .blur(radius: 8)
+
+                // 图标容器
+                Circle()
+                    .fill(Color.white.opacity(isHovered ? 0.1 : 0))
+                    .frame(width: 28, height: 28)
+
+                // 图标
+                BundledIconView(
+                    name: iconName,
+                    fallback: fallback,
+                    size: 16,
+                    iconOpacity: isHovered ? 1.0 : 0.6
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isPressed ? ModernDesignTokens.pressScale : 1.0)
+        .animation(.spring(response: ModernDesignTokens.springResponse, dampingFraction: ModernDesignTokens.springDamping), value: isHovered)
+        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
+        .onHover { isHovered = $0 }
     }
 }
 
