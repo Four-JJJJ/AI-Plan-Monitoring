@@ -7401,6 +7401,12 @@ struct SettingsView: View {
                 "Local Kiro CLI sessions are auto-discovered by default. When CLI is unavailable, the app falls back to Kiro IDE cache."
             )
         }
+        if provider.type == .copilot {
+            return viewModel.localizedText(
+                "默认按顺序自动读取 COPILOT_GITHUB_TOKEN、GH_TOKEN、GITHUB_TOKEN、Copilot CLI 钥匙串与 GitHub CLI 登录态；当前仅支持 API 检测。",
+                "Automatically checks COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, Copilot CLI keychain, and GitHub CLI login in order. API detection only."
+            )
+        }
         if provider.type == .openrouterCredits {
             return viewModel.localizedText(
                 "OpenRouter Credits 需要管理密钥（Management Key），用于读取 /credits 的总额度数据。",

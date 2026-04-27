@@ -1,12 +1,36 @@
 import Foundation
 
 final class CopilotProvider: UsageProvider, @unchecked Sendable {
+    private struct ResolvedCredential {
+        let token: String
+        let sourceLabel: String
+    }
+
     private let session: URLSession
+    private let environment: () -> [String: String]
+    private let keychainReader: (String, String?) -> String?
+    private let shellRunner: (String, [String], TimeInterval) -> (status: Int32, stdout: String, stderr: String)?
     let descriptor: ProviderDescriptor
 
-    init(descriptor: ProviderDescriptor, session: URLSession = .shared) {
+    init(
+        descriptor: ProviderDescriptor,
+        session: URLSession = .shared,
+        environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
+        keychainReader: @escaping (String, String?) -> String? = { service, account in
+            SecurityCredentialReader.readGenericPassword(service: service, account: account)
+        },
+        shellRunner: @escaping (String, [String], TimeInterval) -> (status: Int32, stdout: String, stderr: String)? = {
+            executable,
+            arguments,
+            timeout in
+            ShellCommand.run(executable: executable, arguments: arguments, timeout: timeout)
+        }
+    ) {
         self.descriptor = descriptor
         self.session = session
+        self.environment = environment
+        self.keychainReader = keychainReader
+        self.shellRunner = shellRunner
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -15,11 +39,11 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.unavailable("GitHub Copilot 官方来源当前仅支持 API 检测")
         }
 
-        let token = try resolveToken()
+        let resolved = try resolveCredential()
         var request = URLRequest(url: URL(string: "https://api.github.com/copilot_internal/user")!)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
-        request.setValue("token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("token \(resolved.token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("vscode/1.96.2", forHTTPHeaderField: "Editor-Version")
         request.setValue("copilot-chat/0.26.7", forHTTPHeaderField: "Editor-Plugin-Version")
@@ -31,7 +55,11 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.invalidResponse("Copilot non-http response")
         }
         if http.statusCode == 401 || http.statusCode == 403 {
-            throw ProviderError.unauthorized
+            throw Self.mapAuthorizationError(
+                statusCode: http.statusCode,
+                data: data,
+                sourceLabel: resolved.sourceLabel
+            )
         }
         if http.statusCode == 429 {
             throw ProviderError.rateLimited
@@ -39,31 +67,46 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
         guard (200...299).contains(http.statusCode) else {
             throw ProviderError.invalidResponse("Copilot http \(http.statusCode)")
         }
-        return try Self.parseSnapshot(data: data, descriptor: descriptor)
+        return try Self.parseSnapshot(
+            data: data,
+            descriptor: descriptor,
+            authSourceLabel: resolved.sourceLabel
+        )
     }
 
-    private func resolveToken() throws -> String {
-        let env = ProcessInfo.processInfo.environment
-        for key in ["GITHUB_TOKEN", "GH_TOKEN", "COPILOT_AUTH_TOKEN"] {
-            if let value = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                return value
+    private func resolveCredential() throws -> ResolvedCredential {
+        let env = environment()
+        for key in ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
+            if let value = Self.normalizedCredential(env[key]) {
+                return ResolvedCredential(token: value, sourceLabel: key)
             }
         }
-        if let value = SecurityCredentialReader.readGenericPassword(service: "gh:github.com"),
-           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let value = Self.normalizedCredential(keychainReader("copilot-cli", nil)) {
+            return ResolvedCredential(token: value, sourceLabel: "Copilot CLI")
         }
-        if let result = ShellCommand.run(executable: "/usr/bin/env", arguments: ["gh", "auth", "token"], timeout: 8),
-           result.status == 0 {
-            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                return value
-            }
+
+        if let value = Self.normalizedCredential(keychainReader("gh:github.com", nil)) {
+            return ResolvedCredential(token: value, sourceLabel: "GitHub CLI")
         }
-        throw ProviderError.missingCredential("gh auth token")
+
+        if let result = shellRunner("/usr/bin/env", ["gh", "auth", "token"], 8),
+           result.status == 0,
+           let value = Self.normalizedCredential(result.stdout) {
+            return ResolvedCredential(token: value, sourceLabel: "GitHub CLI")
+        }
+
+        throw ProviderError.missingCredential(
+            "GitHub Copilot credential (COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, Copilot CLI, or GitHub CLI)"
+        )
     }
 
-    internal static func parseSnapshot(data: Data, descriptor: ProviderDescriptor) throws -> UsageSnapshot {
+    internal static func parseSnapshot(
+        data: Data,
+        descriptor: ProviderDescriptor,
+        authSourceLabel: String? = nil,
+        now: Date = Date()
+    ) throws -> UsageSnapshot {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.invalidResponse("Copilot usage decode failed")
         }
@@ -170,14 +213,74 @@ final class CopilotProvider: UsageProvider, @unchecked Sendable {
             used: 100 - remaining,
             limit: 100,
             unit: "%",
-            updatedAt: Date(),
+            updatedAt: now,
             note: "\(notePrefix) | \(summary)",
             quotaWindows: windows,
             sourceLabel: "GitHub API",
             accountLabel: accountLabel,
+            authSourceLabel: authSourceLabel,
             extras: extras,
             rawMeta: [:]
         )
+    }
+
+    private static func normalizedCredential(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
+
+    private static func mapAuthorizationError(
+        statusCode: Int,
+        data: Data,
+        sourceLabel: String
+    ) -> ProviderError {
+        let detail = extractErrorMessage(from: data)
+        switch statusCode {
+        case 401:
+            var message = "GitHub Copilot rejected the \(sourceLabel) credential. Refresh that login or token and try again."
+            if let detail, !detail.isEmpty {
+                message += " Server: \(detail)"
+            }
+            return .unauthorizedDetail(message)
+        case 403:
+            var message = "GitHub Copilot accepted the \(sourceLabel) login, but this account cannot access Copilot usage. Check Copilot entitlement, org policy, and token scope."
+            if let detail, !detail.isEmpty {
+                message += " Server: \(detail)"
+            }
+            return .unauthorizedDetail(message)
+        default:
+            return .unauthorized
+        }
+    }
+
+    private static func extractErrorMessage(from data: Data) -> String? {
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["message", "error_description", "error", "detail"] {
+                if let value = OfficialValueParser.nonPlaceholderString(root[key]) {
+                    return value
+                }
+            }
+            if let errors = root["errors"] as? [Any] {
+                for item in errors {
+                    guard let entry = item as? [String: Any] else { continue }
+                    for key in ["message", "error", "detail"] {
+                        if let value = OfficialValueParser.nonPlaceholderString(entry[key]) {
+                            return value
+                        }
+                    }
+                }
+            }
+        }
+
+        guard let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty,
+            raw.count <= 240 else {
+            return nil
+        }
+        return raw
     }
 
     private static func resolveAccountLabel(_ root: [String: Any]) -> String? {
