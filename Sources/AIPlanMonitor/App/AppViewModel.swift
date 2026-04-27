@@ -567,6 +567,7 @@ final class AppViewModel {
     struct SettingsUpdateDisplayState: Equatable {
         enum Kind: Equatable {
             case idle
+            case checking
             case checkFailed
             case upToDate
             case updateAvailable(version: String)
@@ -617,6 +618,15 @@ final class AppViewModel {
                 kind: .checkFailed,
                 statusText: localizedText("检查失败", "Check Failed"),
                 tone: .negative,
+                retryTitle: nil,
+                isRetryEnabled: false
+            )
+        }
+        if updateCheckInFlight && availableUpdate == nil {
+            return SettingsUpdateDisplayState(
+                kind: .checking,
+                statusText: localizedText("正在检查更新", "Checking Updates"),
+                tone: .neutral,
                 retryTitle: nil,
                 isRetryEnabled: false
             )

@@ -88,6 +88,8 @@ struct SettingsView: View {
     @State private var localUsageTrendSelectedAccountKeys: [String: String] = [:]
     @State private var localUsageTrendQueryLastRefreshedAt: [String: Date] = [:]
     @State private var localUsageTrendExpandedAccountSelectorProviderID: String?
+    @State private var localUsageTrendHoveredHourlyPointID: String?
+    @State private var localUsageTrendHoveredWeeklyPointID: String?
     @State private var settingsWallpaperLuminance: Double?
 
     private let settingsClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -738,6 +740,8 @@ struct SettingsView: View {
                 .controlSize(.small)
                 .disabled(settingsUpdateActionDisabled)
             }
+
+            settingsSidebarUpdateStatus
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
@@ -750,6 +754,175 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private var settingsSidebarUpdateStatus: some View {
+        let state = viewModel.settingsUpdateDisplayState
+
+        if let statusText = state.statusText {
+            let tone = settingsSidebarUpdateStatusTone(for: state)
+            let tint = settingsTopUpdateStatusColor(for: tone)
+            let detailText = settingsSidebarUpdateDetailText(for: state)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: settingsSidebarUpdateIcon(for: state.kind))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                        .frame(width: 15, height: 15)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(settingsSidebarUpdateTitle(for: state, fallback: statusText))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(tint)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let detailText {
+                            Text(detailText)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                if let actionTitle = settingsSidebarUpdateActionTitle(for: state) {
+                    settingsSidebarUpdateActionButton(
+                        title: actionTitle,
+                        tint: tint,
+                        isEnabled: settingsSidebarUpdateActionEnabled(for: state)
+                    ) {
+                        viewModel.openLatestReleaseDownload()
+                    }
+                }
+            }
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(tint.opacity(settingsUsesLightAppearance ? 0.28 : 0.34))
+                    .frame(height: 1)
+            }
+        }
+    }
+
+    private func settingsSidebarUpdateActionButton(
+        title: String,
+        tint: Color,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            guard isEnabled else { return }
+            action()
+        } label: {
+            Label(title, systemImage: "arrow.down.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(Color.white.opacity(isEnabled ? 0.96 : 0.56))
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .center)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(tint.opacity(isEnabled ? 1 : 0.28))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.white.opacity(isEnabled ? 0.18 : 0.08), lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(isEnabled)
+    }
+
+    private func settingsSidebarUpdateStatusTone(
+        for state: AppViewModel.SettingsUpdateDisplayState
+    ) -> AppViewModel.UpdateDisplayTone {
+        if case .checkFailed = state.kind {
+            return .neutral
+        }
+        return state.tone
+    }
+
+    private func settingsSidebarUpdateIcon(
+        for kind: AppViewModel.SettingsUpdateDisplayState.Kind
+    ) -> String {
+        switch kind {
+        case .idle:
+            return "arrow.down.circle"
+        case .checking:
+            return "arrow.triangle.2.circlepath"
+        case .checkFailed:
+            return "exclamationmark.triangle"
+        case .upToDate:
+            return "checkmark.circle"
+        case .updateAvailable:
+            return "arrow.down.circle.fill"
+        case .downloading:
+            return "arrow.down.circle"
+        case .installBuffering:
+            return "clock"
+        case .failed:
+            return "exclamationmark.triangle"
+        }
+    }
+
+    private func settingsSidebarUpdateTitle(
+        for state: AppViewModel.SettingsUpdateDisplayState,
+        fallback: String
+    ) -> String {
+        switch state.kind {
+        case .updateAvailable:
+            return viewModel.text(.updateAvailableTitle)
+        default:
+            return fallback
+        }
+    }
+
+    private func settingsSidebarUpdateDetailText(
+        for state: AppViewModel.SettingsUpdateDisplayState
+    ) -> String? {
+        switch state.kind {
+        case let .updateAvailable(version):
+            return String(
+                format: viewModel.text(.updateAvailableBody),
+                version,
+                viewModel.currentAppVersion
+            )
+        case .checking:
+            return viewModel.text(.aboutUpdateChecking)
+        default:
+            return viewModel.updateStatusSummary
+        }
+    }
+
+    private func settingsSidebarUpdateActionTitle(
+        for state: AppViewModel.SettingsUpdateDisplayState
+    ) -> String? {
+        switch state.kind {
+        case .updateAvailable:
+            return viewModel.localizedText("立即升级", "Upgrade Now")
+        case .failed:
+            return state.retryTitle
+        default:
+            return nil
+        }
+    }
+
+    private func settingsSidebarUpdateActionEnabled(
+        for state: AppViewModel.SettingsUpdateDisplayState
+    ) -> Bool {
+        switch state.kind {
+        case .updateAvailable:
+            return viewModel.isUpdateActionEnabled
+        case .failed:
+            return state.isRetryEnabled
+        default:
+            return false
+        }
     }
 
     private var settingsSidebarGitHubLink: some View {
@@ -4256,25 +4429,172 @@ struct SettingsView: View {
             let barWidth: CGFloat = 12
             let maxBarHeight: CGFloat = 50
             let minBarHeight: CGFloat = 6
-            let totalBarsWidth = CGFloat(count) * barWidth
-            let spacing = count > 1 ? max(0, (proxy.size.width - totalBarsWidth) / CGFloat(count - 1)) : 0
 
-            HStack(alignment: .bottom, spacing: spacing) {
-                ForEach(points) { point in
+            ZStack(alignment: .bottomLeading) {
+                ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
                     let value = localUsageTrendValue(point, metric: metric)
                     let ratio = maxValue > 0 ? CGFloat(value / maxValue) : 0
                     let barHeight = value > 0
                         ? max(minBarHeight, maxBarHeight * ratio)
                         : minBarHeight
+                    let isHovered = localUsageTrendHoveredHourlyPointID == point.id
+                    let centerX = localUsageHourlyTrendBarCenterX(
+                        index: index,
+                        count: count,
+                        width: proxy.size.width,
+                        barWidth: barWidth
+                    )
 
-                    Capsule()
-                        .fill(value > 0 ? settingsTrendPrimaryColor : settingsTrendMutedColor)
-                        .frame(width: barWidth, height: barHeight)
+                    ZStack(alignment: .bottom) {
+                        Color.clear
+                        Capsule()
+                            .fill(localUsageTrendBarColor(value: value, isHovered: isHovered))
+                            .frame(width: barWidth, height: barHeight)
+                            .overlay(
+                                Capsule()
+                                    .stroke(
+                                        isHovered ? settingsBodyColor.opacity(0.35) : Color.clear,
+                                        lineWidth: 1
+                                    )
+                            )
+                    }
+                    .frame(width: barWidth, height: maxBarHeight, alignment: .bottom)
+                    .contentShape(Rectangle())
+                    .position(
+                        x: centerX,
+                        y: proxy.size.height - maxBarHeight / 2
+                    )
+                    .help(localUsageTrendTooltipHelpText(point, timeStyle: .hourly))
+                    .onHover { hovering in
+                        if hovering {
+                            localUsageTrendHoveredHourlyPointID = point.id
+                        } else if localUsageTrendHoveredHourlyPointID == point.id {
+                            localUsageTrendHoveredHourlyPointID = nil
+                        }
+                    }
+                }
+
+                if let hoveredPoint = points.first(where: { $0.id == localUsageTrendHoveredHourlyPointID }),
+                   let hoveredIndex = points.firstIndex(where: { $0.id == hoveredPoint.id }) {
+                    let tooltipWidth = localUsageTrendTooltipWidth
+                    let centerX = localUsageHourlyTrendBarCenterX(
+                        index: hoveredIndex,
+                        count: count,
+                        width: proxy.size.width,
+                        barWidth: barWidth
+                    )
+                    let tooltipX = min(
+                        max(tooltipWidth / 2, centerX),
+                        max(tooltipWidth / 2, proxy.size.width - tooltipWidth / 2)
+                    )
+
+                    localUsageTrendTooltip(point: hoveredPoint, timeStyle: .hourly)
+                        .frame(width: tooltipWidth, alignment: .leading)
+                        .position(x: tooltipX, y: 17)
+                        .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .zIndex(1)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .animation(.easeInOut(duration: 0.12), value: localUsageTrendHoveredHourlyPointID)
         }
         .frame(height: 50)
+    }
+
+    private var localUsageTrendTooltipWidth: CGFloat {
+        viewModel.language == .zhHans ? 138 : 154
+    }
+
+    private func localUsageHourlyTrendBarCenterX(
+        index: Int,
+        count: Int,
+        width: CGFloat,
+        barWidth: CGFloat
+    ) -> CGFloat {
+        let safeWidth = max(width, barWidth)
+        guard count > 1 else { return safeWidth / 2 }
+        let step = max(0, (safeWidth - barWidth) / CGFloat(count - 1))
+        return CGFloat(index) * step + barWidth / 2
+    }
+
+    private func localUsageTrendBarColor(value: Double, isHovered: Bool) -> Color {
+        if isHovered {
+            return settingsUsesLightAppearance ? settingsAccentBlue : Color.white.opacity(0.90)
+        }
+        return value > 0 ? settingsTrendPrimaryColor : settingsTrendMutedColor
+    }
+
+    private enum LocalUsageTrendTooltipTimeStyle {
+        case hourly
+        case daily
+    }
+
+    private func localUsageTrendTooltip(
+        point: LocalUsageTrendPoint,
+        timeStyle: LocalUsageTrendTooltipTimeStyle
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(localUsageTrendTooltipTimeText(point.startAt, style: timeStyle))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(settingsBodyColor)
+                .lineLimit(1)
+
+            Text(localUsageTrendTooltipText(point))
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(settingsHintColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.86)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(settingsPopoverFillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(settingsUsesLightAppearance ? 0.12 : 0.28), radius: 8, y: 4)
+    }
+
+    private func localUsageTrendTooltipHelpText(
+        _ point: LocalUsageTrendPoint,
+        timeStyle: LocalUsageTrendTooltipTimeStyle
+    ) -> String {
+        "\(localUsageTrendTooltipTimeText(point.startAt, style: timeStyle)) \(localUsageTrendTooltipText(point))"
+    }
+
+    private func localUsageTrendTooltipText(_ point: LocalUsageTrendPoint) -> String {
+        let tokens = LocalTrendValueFormatter.metricValueText(
+            value: point.totalTokens,
+            metric: .tokens,
+            language: viewModel.language
+        )
+        let responses = localUsageTrendResponseText(point.responses)
+        return "\(tokens) · \(responses)"
+    }
+
+    private func localUsageTrendTooltipTimeText(
+        _ date: Date,
+        style: LocalUsageTrendTooltipTimeStyle
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = viewModel.language == .zhHans
+            ? Locale(identifier: "zh_Hans_CN")
+            : Locale(identifier: "en_US_POSIX")
+        switch (style, viewModel.language) {
+        case (.hourly, .zhHans):
+            formatter.dateFormat = "M月d日 HH:00"
+        case (.hourly, .en):
+            formatter.dateFormat = "MMM d, HH:00"
+        case (.daily, .zhHans):
+            formatter.dateFormat = "M月d日"
+        case (.daily, .en):
+            formatter.dateFormat = "MMM d"
+        }
+        return formatter.string(from: date)
     }
 
     @ViewBuilder
@@ -4366,12 +4686,15 @@ struct SettingsView: View {
             let values = points.map { localUsageTrendValue($0, metric: metric) }
             let maxValue = max(values.max() ?? 0, 1)
             let count = max(points.count, 1)
-            let stepX = proxy.size.width / CGFloat(count)
 
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 Path { path in
                     for (index, point) in points.enumerated() {
-                        let x = stepX * (CGFloat(index) + 0.5)
+                        let x = localUsageWeeklyTrendPointX(
+                            index: index,
+                            count: count,
+                            width: proxy.size.width
+                        )
                         let y = localUsageTrendY(
                             value: localUsageTrendValue(point, metric: metric),
                             maxValue: maxValue,
@@ -4388,9 +4711,101 @@ struct SettingsView: View {
                     settingsTrendPrimaryColor,
                     style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
                 )
+
+                if let hoveredPoint = points.first(where: { $0.id == localUsageTrendHoveredWeeklyPointID }),
+                   let hoveredIndex = points.firstIndex(where: { $0.id == hoveredPoint.id }) {
+                    let value = localUsageTrendValue(hoveredPoint, metric: metric)
+                    let x = localUsageWeeklyTrendPointX(
+                        index: hoveredIndex,
+                        count: count,
+                        width: proxy.size.width
+                    )
+                    let y = localUsageTrendY(value: value, maxValue: maxValue, height: proxy.size.height)
+
+                    Rectangle()
+                        .fill(settingsTrendPrimaryColor.opacity(0.18))
+                        .frame(width: 1, height: proxy.size.height)
+                        .position(x: x, y: proxy.size.height / 2)
+
+                    Circle()
+                        .fill(localUsageTrendBarColor(value: value, isHovered: true))
+                        .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(settingsPopoverFillColor, lineWidth: 2)
+                        )
+                        .position(x: x, y: y)
+                }
+
+                Rectangle()
+                    .fill(Color.black.opacity(0.001))
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .contentShape(Rectangle())
+                    .onContinuousHover(coordinateSpace: .local) { phase in
+                        switch phase {
+                        case .active(let location):
+                            if let point = localUsageWeeklyTrendPoint(
+                                atX: location.x,
+                                points: points,
+                                width: proxy.size.width
+                            ) {
+                                localUsageTrendHoveredWeeklyPointID = point.id
+                            }
+                        case .ended:
+                            localUsageTrendHoveredWeeklyPointID = nil
+                        }
+                    }
+
+                if let hoveredPoint = points.first(where: { $0.id == localUsageTrendHoveredWeeklyPointID }),
+                   let hoveredIndex = points.firstIndex(where: { $0.id == hoveredPoint.id }) {
+                    let tooltipWidth = localUsageTrendTooltipWidth
+                    let centerX = localUsageWeeklyTrendPointX(
+                        index: hoveredIndex,
+                        count: count,
+                        width: proxy.size.width
+                    )
+                    let tooltipX = min(
+                        max(tooltipWidth / 2, centerX),
+                        max(tooltipWidth / 2, proxy.size.width - tooltipWidth / 2)
+                    )
+
+                    localUsageTrendTooltip(point: hoveredPoint, timeStyle: .daily)
+                        .frame(width: tooltipWidth, alignment: .leading)
+                        .position(x: tooltipX, y: 17)
+                        .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .zIndex(1)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .animation(.easeInOut(duration: 0.12), value: localUsageTrendHoveredWeeklyPointID)
         }
         .frame(height: 50)
+    }
+
+    private func localUsageWeeklyTrendPoint(
+        atX x: CGFloat,
+        points: [LocalUsageTrendPoint],
+        width: CGFloat
+    ) -> LocalUsageTrendPoint? {
+        guard !points.isEmpty else { return nil }
+        let safeWidth = max(width, 1)
+        let clampedX = min(max(0, x), safeWidth.nextDown)
+        let index = min(
+            points.count - 1,
+            max(0, Int(clampedX / safeWidth * CGFloat(points.count)))
+        )
+        return points[index]
+    }
+
+    private func localUsageWeeklyTrendPointX(
+        index: Int,
+        count: Int,
+        width: CGFloat
+    ) -> CGFloat {
+        let safeCount = max(count, 1)
+        let stepX = max(width, 1) / CGFloat(safeCount)
+        return stepX * (CGFloat(index) + 0.5)
     }
 
     private func localUsageTrendDisplayMetric(points: [LocalUsageTrendPoint]) -> LocalTrendDisplayMetric {
