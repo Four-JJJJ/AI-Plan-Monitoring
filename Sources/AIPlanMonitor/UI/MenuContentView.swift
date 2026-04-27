@@ -1528,12 +1528,12 @@ private struct PercentageModelCard: View {
         }
         .padding(12)
         .background(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 // 卡片背景色由外部传入，统一在这里渲染。
-                .fill(Color.black)
+                .fill(Color.black.opacity(0.84))
         )
         .overlay(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 // 卡片描边：断连或高亮时显示。
                 .stroke(borderColor, lineWidth: hasBorder ? 1 : 0)
         )
@@ -1553,6 +1553,29 @@ private struct PercentageModelCard: View {
                 .allowsHitTesting(false)
             }
         }
+        .hoverGlow(
+            tint: highlightColor ?? status.color,
+            intensity: highlightColor == nil ? 0.12 : 0.18,
+            radius: 135,
+            cornerRadius: ModernDesignTokens.cardCornerRadius
+        )
+        .shadow(
+            color: Color.black.opacity(isHovered ? 0.26 : 0.12),
+            radius: isHovered ? ModernDesignTokens.cardHoverShadowRadius : ModernDesignTokens.cardShadowRadius,
+            x: 0,
+            y: isHovered ? ModernDesignTokens.cardHoverShadowY : ModernDesignTokens.cardShadowY
+        )
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isHovered
+        )
     }
 
     private var borderColor: Color {
@@ -1796,12 +1819,35 @@ private struct AmountModelCard: View {
         }
         .padding(12)
         .background(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
-                .fill(Color.black)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
+                .fill(Color.black.opacity(0.84))
         )
         .overlay(
-            SmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
+            SmoothRoundedRectangle(cornerRadius: ModernDesignTokens.cardCornerRadius, smoothing: 0.6)
                 .stroke(borderColor, lineWidth: hasBorder ? 1 : 0)
+        )
+        .hoverGlow(
+            tint: highlightColor ?? status.color,
+            intensity: highlightColor == nil ? 0.12 : 0.18,
+            radius: 135,
+            cornerRadius: ModernDesignTokens.cardCornerRadius
+        )
+        .shadow(
+            color: Color.black.opacity(isHovered ? 0.26 : 0.12),
+            radius: isHovered ? ModernDesignTokens.cardHoverShadowRadius : ModernDesignTokens.cardShadowRadius,
+            x: 0,
+            y: isHovered ? ModernDesignTokens.cardHoverShadowY : ModernDesignTokens.cardShadowY
+        )
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isHovered
         )
     }
 

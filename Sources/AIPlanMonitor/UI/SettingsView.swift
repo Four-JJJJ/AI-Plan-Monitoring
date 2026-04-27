@@ -98,12 +98,12 @@ struct SettingsView: View {
     // MARK: - 设置页视觉 Token（改这里可全局影响样式）
     // 整个设置页外层背景。
     private var panelBackground: Color {
-        settingsUsesLightAppearance ? Color(hex: 0xF3F4F6) : Color(hex: 0x232323)
+        settingsUsesLightAppearance ? Color(hex: 0xF3F4F6).opacity(0.92) : Color(hex: 0x232323).opacity(0.92)
     }
 
     // “通用设置”主内容滚动区域底色。
     private var cardBackground: Color {
-        settingsUsesLightAppearance ? Color(hex: 0xFFFFFF) : Color.black
+        settingsUsesLightAppearance ? Color.white.opacity(0.72) : Color.black.opacity(0.42)
     }
 
     // 通用描边色：用于模型面板、卡片边框等。
@@ -120,11 +120,11 @@ struct SettingsView: View {
     }
 
     private var settingsSidebarFillColor: Color {
-        settingsUsesLightAppearance ? Color.white.opacity(0.78) : Color.white.opacity(0.03)
+        settingsUsesLightAppearance ? Color.white.opacity(0.58) : Color.white.opacity(0.055)
     }
 
     private var settingsSectionFillColor: Color {
-        settingsUsesLightAppearance ? Color.black.opacity(0.035) : Color.white.opacity(0.04)
+        settingsUsesLightAppearance ? Color.white.opacity(0.48) : Color.white.opacity(0.055)
     }
     private let settingsAccentBlue = Color(hex: 0x168DFF)
     private let settingsAccentGreen = Color(hex: 0x31D158)
@@ -175,7 +175,7 @@ struct SettingsView: View {
     private let settingsUpdateNegativeColor = Color(hex: 0xD05757)
     // 输入框填充色。
     private var settingsInputFillColor: Color {
-        settingsUsesLightAppearance ? Color.black.opacity(0.06) : Color.white.opacity(0.15)
+        settingsUsesLightAppearance ? Color.white.opacity(0.62) : Color.white.opacity(0.14)
     }
 
     // 输入框占位色。
@@ -183,7 +183,7 @@ struct SettingsView: View {
         settingsUsesLightAppearance ? Color.black.opacity(0.35) : Color.white.opacity(0.30)
     }
     private var settingsSubtlePanelFillColor: Color {
-        settingsUsesLightAppearance ? Color.black.opacity(0.035) : Color.white.opacity(0.03)
+        settingsUsesLightAppearance ? Color.white.opacity(0.46) : Color.white.opacity(0.045)
     }
 
     private var settingsSubtlePanelStrokeColor: Color {
@@ -355,37 +355,31 @@ struct SettingsView: View {
                 .animation(.easeInOut(duration: 0.16), value: showsModalOverlay)
 
             if showsResetDataDialog {
-                // 重置弹窗遮罩：Figma 参数为白色 15% + Background blur 4。
-                Color.white.opacity(0.15)
-                    .ignoresSafeArea()
+                settingsModalBackdrop
 
                 resetDataConfirmDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
             } else if showsCodexProfileEditorDialog {
-                Color.white.opacity(0.15)
-                    .ignoresSafeArea()
+                settingsModalBackdrop
 
                 codexProfileEditorDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
             } else if showsClaudeProfileEditorDialog {
-                Color.white.opacity(0.15)
-                    .ignoresSafeArea()
+                settingsModalBackdrop
 
                 claudeProfileEditorDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
             } else if showsOAuthImportDialog {
-                Color.white.opacity(0.15)
-                    .ignoresSafeArea()
+                settingsModalBackdrop
 
                 oauthImportProgressDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1)
             } else if showsNewAPISiteDialog {
-                Color.white.opacity(0.15)
-                    .ignoresSafeArea()
+                settingsModalBackdrop
 
                 newAPISiteDialog
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -515,8 +509,7 @@ struct SettingsView: View {
 
     private var settingsMainContent: some View {
         ZStack {
-            panelBackground
-                .ignoresSafeArea()
+            settingsBackgroundLayer
 
             HStack(alignment: .top, spacing: 18) {
                 settingsNavigationSidebar
@@ -544,6 +537,59 @@ struct SettingsView: View {
             mode: viewModel.statusBarAppearanceMode,
             wallpaperLuminance: settingsWallpaperLuminance
         )
+    }
+
+    private var settingsBackgroundLayer: some View {
+        ZStack {
+            VisualEffectBlur(
+                material: settingsUsesLightAppearance ? .sidebar : .hudWindow,
+                blendingMode: .behindWindow
+            )
+
+            LinearGradient(
+                colors: settingsUsesLightAppearance
+                    ? [
+                        Color(hex: 0xF8FAFC).opacity(0.82),
+                        Color(hex: 0xE9EEF6).opacity(0.70)
+                    ]
+                    : [
+                        Color(hex: 0x26272C).opacity(0.78),
+                        Color(hex: 0x101114).opacity(0.82)
+                    ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            NoiseTexture(opacity: settingsUsesLightAppearance ? 0.012 : 0.024)
+        }
+        .ignoresSafeArea()
+    }
+
+    private func settingsGlassSurface(cornerRadius: CGFloat, fill: Color) -> some View {
+        ZStack {
+            VisualEffectBlur(
+                material: settingsUsesLightAppearance ? .sidebar : .hudWindow,
+                blendingMode: .withinWindow
+            )
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(fill)
+
+            NoiseTexture(opacity: settingsUsesLightAppearance ? 0.008 : 0.016)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private var settingsModalBackdrop: some View {
+        ZStack {
+            VisualEffectBlur(
+                material: settingsUsesLightAppearance ? .popover : .hudWindow,
+                blendingMode: .withinWindow
+            )
+            Color.black.opacity(settingsUsesLightAppearance ? 0.12 : 0.22)
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
     }
 
     private func refreshSettingsAppearanceSample() {
@@ -634,8 +680,10 @@ struct SettingsView: View {
         }
         .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: settingsSidebarCornerRadius, style: .continuous)
-                .fill(settingsSidebarFillColor)
+            settingsGlassSurface(
+                cornerRadius: settingsSidebarCornerRadius,
+                fill: settingsSidebarFillColor
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsSidebarCornerRadius, style: .continuous)
@@ -677,42 +725,30 @@ struct SettingsView: View {
         icon: String
     ) -> some View {
         let isSelected = selectedSettingsTab == tab
+        let selectedFill = settingsUsesLightAppearance ? settingsAccentBlue : Color.white.opacity(0.15)
+        let selectedForeground = settingsUsesLightAppearance ? Color.white : settingsTitleColor
+        let idleForeground = settingsUsesLightAppearance ? settingsTitleColor : settingsBodyColor
+        let hoverFill = settingsUsesLightAppearance ? Color.black.opacity(0.06) : Color.white.opacity(0.08)
+        let selectedStroke = settingsUsesLightAppearance ? Color.white.opacity(0.08) : Color.white.opacity(0.22)
 
-        return Button {
+        return ModernSettingsSidebarTabButton(
+            icon: icon,
+            title: settingsTabTitle(tab),
+            isSelected: isSelected,
+            selectedFill: selectedFill,
+            hoverFill: hoverFill,
+            selectedForeground: selectedForeground,
+            idleForeground: idleForeground,
+            mutedForeground: settingsHintColor,
+            selectedStroke: selectedStroke
+        ) {
             selectedSettingsTab = tab
             if tab == .officialProviders {
                 selectedGroup = .official
             } else if tab == .customProviders {
                 selectedGroup = .thirdParty
             }
-        } label: {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : settingsHintColor)
-                    .frame(width: 16, height: 16)
-
-                Text(settingsTabTitle(tab))
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.white : settingsTitleColor)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? settingsAccentBlue : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? Color.white.opacity(0.08) : Color.clear, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 
     private var settingsSidebarVersionRow: some View {
@@ -1128,8 +1164,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .scrollIndicators(.never)
         .background(
-            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
-                .fill(cardBackground)
+            settingsGlassSurface(
+                cornerRadius: settingsShellCornerRadius,
+                fill: cardBackground
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
@@ -1154,8 +1192,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .scrollIndicators(.never)
         .background(
-            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
-                .fill(cardBackground)
+            settingsGlassSurface(
+                cornerRadius: settingsShellCornerRadius,
+                fill: cardBackground
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
@@ -1180,8 +1220,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
-                .fill(cardBackground)
+            settingsGlassSurface(
+                cornerRadius: settingsShellCornerRadius,
+                fill: cardBackground
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsShellCornerRadius, style: .continuous)
@@ -1262,6 +1304,12 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
                 .stroke(item.accent.opacity(0.35), lineWidth: 1)
         )
+        .hoverGlow(
+            tint: item.accent,
+            intensity: settingsUsesLightAppearance ? 0.08 : 0.12,
+            radius: 120,
+            cornerRadius: settingsSectionCornerRadius
+        )
     }
 
     @ViewBuilder
@@ -1285,6 +1333,8 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
 
+                officialUsageTrendSparklineGrid(providers: providers)
+
                 ForEach(providers) { provider in
                     settingsSectionPanel {
                         officialLocalTrendSection(
@@ -1296,6 +1346,73 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func officialUsageTrendSparklineGrid(providers: [ProviderDescriptor]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 12, alignment: .top)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            ForEach(providers) { provider in
+                officialUsageTrendSparklineCard(
+                    provider: provider,
+                    snapshot: viewModel.snapshots[provider.id]
+                )
+            }
+        }
+    }
+
+    private func officialUsageTrendSparklineCard(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?
+    ) -> some View {
+        let summary = localUsageTrendResolvedSummary(provider: provider, snapshot: snapshot)
+        let values = localUsageTrendSparklineValues(summary)
+        let hasValues = values.contains { $0 > 0 }
+        let tint = hasValues ? settingsTrendPrimaryColor : settingsTrendMutedColor
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 8) {
+                providerIcon(for: provider, size: 16)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sidebarDisplayName(for: provider))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(settingsTitleColor)
+                        .lineLimit(1)
+                    Text(localUsageTrendSparklineCaption(summary))
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            MiniSparkline(dataPoints: values, color: tint, lineWidth: 2, showsFill: true)
+                .frame(height: 28)
+                .opacity(hasValues ? 1 : 0.55)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .fill(settingsSubtlePanelFillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
+                .stroke(settingsSubtlePanelStrokeColor, lineWidth: 1)
+        )
+        .hoverGlow(
+            tint: tint,
+            intensity: settingsUsesLightAppearance ? 0.08 : 0.12,
+            radius: 110,
+            cornerRadius: settingsSectionCornerRadius
+        )
+        .onAppear {
+            refreshLocalUsageTrendIfNeeded(provider: provider, snapshot: snapshot)
         }
     }
 
@@ -1331,8 +1448,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
-                .fill(settingsSectionFillColor)
+            settingsGlassSurface(
+                cornerRadius: settingsSectionCornerRadius,
+                fill: settingsSectionFillColor
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: settingsSectionCornerRadius, style: .continuous)
@@ -2174,6 +2293,11 @@ struct SettingsView: View {
 
     private func sidebarProviderRowContent(_ provider: ProviderDescriptor) -> some View {
         let isSelected = selectedProviderID == provider.id
+        let isDragging = draggingProviderID == provider.id
+        let isDropTarget = provider.enabled
+            && draggingProviderID != nil
+            && draggingProviderID != provider.id
+            && dropTargetProviderID == provider.id
 
         // 左侧“模型列表单行”样式（选中态描边/背景在这里改）。
         return HStack(spacing: 8) {
@@ -2203,11 +2327,16 @@ struct SettingsView: View {
         .frame(height: 38)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? settingsSelectedRowFillColor : Color.clear)
+                .fill(sidebarProviderRowFill(isSelected: isSelected, isDropTarget: isDropTarget))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor, lineWidth: 1)
+                .stroke(
+                    isDropTarget
+                        ? settingsDropIndicatorColor.opacity(0.72)
+                        : (isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor),
+                    lineWidth: isDropTarget ? 1.5 : 1
+                )
         )
         .overlay(alignment: dropTargetInsertAfter ? .bottom : .top) {
             if provider.enabled,
@@ -2220,13 +2349,31 @@ struct SettingsView: View {
                     .padding(.horizontal, 8)
             }
         }
-        .opacity(draggingProviderID == provider.id ? 0.55 : 1)
+        .shadow(
+            color: Color.black.opacity(isDragging || isDropTarget ? 0.18 : 0),
+            radius: isDragging || isDropTarget ? 10 : 0,
+            x: 0,
+            y: isDragging || isDropTarget ? 4 : 0
+        )
+        .scaleEffect(isDragging ? 0.98 : (isDropTarget ? 1.015 : 1))
+        .opacity(isDragging ? 0.62 : 1)
         .contentShape(Rectangle())
         .onTapGesture {
             selectedProviderID = provider.id
         }
-        .animation(.easeInOut(duration: 0.12), value: orderedEnabledSidebarProviders.map(\.id))
-        .animation(.easeInOut(duration: 0.12), value: dropTargetProviderID)
+        .animation(.spring(response: 0.22, dampingFraction: 0.78), value: orderedEnabledSidebarProviders.map(\.id))
+        .animation(.spring(response: 0.18, dampingFraction: 0.72), value: dropTargetProviderID)
+        .animation(.spring(response: 0.18, dampingFraction: 0.72), value: draggingProviderID)
+    }
+
+    private func sidebarProviderRowFill(isSelected: Bool, isDropTarget: Bool) -> Color {
+        if isDropTarget {
+            return settingsDropIndicatorColor.opacity(settingsUsesLightAppearance ? 0.12 : 0.18)
+        }
+        if isSelected {
+            return settingsSelectedRowFillColor
+        }
+        return Color.clear
     }
 
     private func reorderHandle() -> some View {
@@ -2889,8 +3036,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .fill(settingsSectionFillColor)
+            settingsGlassSurface(
+                cornerRadius: cardCornerRadius,
+                fill: settingsSectionFillColor
+            )
         )
         .overlay(
             // 权限卡边框颜色：white_30。
@@ -3274,8 +3423,7 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 560, alignment: .leading)
         .background(
-            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
-                .fill(panelBackground)
+            settingsGlassSurface(cornerRadius: 16, fill: panelBackground)
         )
         .overlay(
             DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
@@ -4254,9 +4402,25 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(title ?? viewModel.localizedText("使用趋势", "Usage Trend"))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(settingsBodyColor)
+                HStack(alignment: .center, spacing: 12) {
+                    Text(title ?? viewModel.localizedText("使用趋势", "Usage Trend"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(settingsBodyColor)
+
+                    Spacer(minLength: 12)
+
+                    if let summary {
+                        MiniSparkline(
+                            dataPoints: localUsageTrendSparklineValues(summary),
+                            color: settingsTrendPrimaryColor,
+                            lineWidth: 1.8,
+                            showsFill: false
+                        )
+                        .frame(width: 92, height: 24)
+                        .opacity(localUsageTrendHasData(summary) ? 1 : 0.45)
+                        .help(localUsageTrendSummaryText(summary))
+                    }
+                }
 
                 if localUsageTrendSupportsCurrentAccountScope(provider.type) {
                     localUsageTrendControls(
@@ -4312,6 +4476,54 @@ struct SettingsView: View {
                 force: true
             )
         }
+    }
+
+    private func localUsageTrendResolvedSummary(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?
+    ) -> LocalUsageSummary? {
+        let scope = localUsageTrendScope(for: provider)
+        let accountOptions = localUsageTrendAccountOptions(for: provider, snapshot: snapshot)
+        let selectedAccountKey = localUsageTrendSelectedAccountKey(
+            providerID: provider.id,
+            options: accountOptions
+        )
+        let identityContext = localUsageTrendIdentityContext(
+            for: provider,
+            snapshot: snapshot,
+            selectedAccountKey: selectedAccountKey,
+            accountOptions: accountOptions
+        )
+        let identityCacheKey = localUsageTrendEffectiveIdentityCacheKey(
+            scope: scope,
+            identityCacheKey: identityContext.cacheIdentity
+        )
+        let queryKey = localUsageTrendQueryKey(
+            providerID: provider.id,
+            scope: scope,
+            identityCacheKey: identityCacheKey
+        )
+        let strictSummary = localUsageTrendSummaries[queryKey]
+        return localUsageTrendDisplaySummary(
+            provider: provider,
+            scope: scope,
+            identityCacheKey: identityCacheKey,
+            strictSummary: strictSummary
+        ) ?? strictSummary
+    }
+
+    private func localUsageTrendSparklineValues(_ summary: LocalUsageSummary?) -> [Double] {
+        guard let summary else { return [] }
+        let points = localUsageWeeklyDisplayPoints(summary.daily7)
+        let metric = localUsageTrendDisplayMetric(points: points)
+        return points.map { localUsageTrendValue($0, metric: metric) }
+    }
+
+    private func localUsageTrendSparklineCaption(_ summary: LocalUsageSummary?) -> String {
+        guard let summary else {
+            return viewModel.localizedText("等待本地趋势", "Waiting for local trend")
+        }
+        return "\(viewModel.localizedText("今日", "Today")) \(localUsageTrendSummaryValueText(summary.today))"
     }
 
     @ViewBuilder
@@ -6357,8 +6569,7 @@ struct SettingsView: View {
         content()
             .padding(12)
             .background(
-                DialogSmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
-                    .fill(cardBackground)
+                settingsGlassSurface(cornerRadius: 12, fill: cardBackground)
             )
             .overlay(
                 DialogSmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
@@ -6930,8 +7141,7 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 560, alignment: .leading)
         .background(
-            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
-                .fill(panelBackground)
+            settingsGlassSurface(cornerRadius: 16, fill: panelBackground)
         )
         .overlay(
             DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
@@ -6983,8 +7193,7 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 560, alignment: .leading)
         .background(
-            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
-                .fill(panelBackground)
+            settingsGlassSurface(cornerRadius: 16, fill: panelBackground)
         )
         .overlay(
             DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
@@ -7285,8 +7494,7 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 560, alignment: .leading)
         .background(
-            DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
-                .fill(panelBackground)
+            settingsGlassSurface(cornerRadius: 16, fill: panelBackground)
         )
         .overlay(
             DialogSmoothRoundedRectangle(cornerRadius: 16, smoothing: 0.6)
@@ -9491,8 +9699,7 @@ struct SettingsView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(cardBackground)
+            settingsGlassSurface(cornerRadius: 12, fill: cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -9673,6 +9880,77 @@ struct SettingsView: View {
         }
     }
 
+}
+
+private struct ModernSettingsSidebarTabButton: View {
+    let icon: String
+    let title: String
+    let isSelected: Bool
+    let selectedFill: Color
+    let hoverFill: Color
+    let selectedForeground: Color
+    let idleForeground: Color
+    let mutedForeground: Color
+    let selectedStroke: Color
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isSelected ? selectedForeground : mutedForeground)
+                    .frame(width: 16, height: 16)
+
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? selectedForeground : idleForeground)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(rowFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? selectedStroke : Color.clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .scaleEffect(isHovered && !isSelected ? 1.01 : 1)
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isHovered
+        )
+        .animation(
+            .spring(
+                response: ModernDesignTokens.springResponse,
+                dampingFraction: ModernDesignTokens.springDamping
+            ),
+            value: isSelected
+        )
+    }
+
+    private var rowFill: Color {
+        if isSelected {
+            return selectedFill
+        }
+        return isHovered ? hoverFill : Color.clear
+    }
 }
 
 #Preview("Settings / General") {
