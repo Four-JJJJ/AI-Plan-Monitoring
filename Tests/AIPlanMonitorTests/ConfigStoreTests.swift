@@ -2,7 +2,7 @@ import XCTest
 @testable import AIPlanMonitor
 
 final class ConfigStoreTests: XCTestCase {
-    func testSaveWritesPrimaryAndBackupAndLoadReturnsPersistedConfig() throws {
+    func testSaveWritesPrimaryBackupAndRecoveryAndLoadReturnsPersistedConfig() throws {
         let root = try makeTempDirectory()
         let store = ConfigStore(baseDirectoryURL: root)
 
@@ -16,6 +16,7 @@ final class ConfigStoreTests: XCTestCase {
         let directory = root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.backup.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.recovery.json").path))
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.language, .en)
@@ -76,6 +77,43 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredData))
     }
 
+    func testLoadRecoversFromRecoverySnapshotWhenPrimaryAndBackupCorrupted() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+
+        var config = AppConfig.default
+        config.statusBarMultiUsageEnabled = true
+        config.statusBarProviderID = "codex-official"
+        config.statusBarMultiProviderIDs = ["codex-official", "claude-official"]
+        config.statusBarAppearanceMode = .dark
+        config.statusBarDisplayStyle = .barNamePercent
+        if let codexIndex = config.providers.firstIndex(where: { $0.id == "codex-official" }) {
+            config.providers[codexIndex].enabled = true
+        }
+        if let claudeIndex = config.providers.firstIndex(where: { $0.id == "claude-official" }) {
+            config.providers[claudeIndex].enabled = true
+        }
+        try store.save(config)
+
+        let directory = root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
+        let primaryURL = directory.appendingPathComponent("config.json")
+        let backupURL = directory.appendingPathComponent("config.backup.json")
+        try Data("not-json".utf8).write(to: primaryURL, options: .atomic)
+        try Data("still-not-json".utf8).write(to: backupURL, options: .atomic)
+
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.statusBarProviderID, "codex-official")
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "claude-official"])
+        XCTAssertEqual(loaded.statusBarAppearanceMode, .dark)
+        XCTAssertEqual(loaded.statusBarDisplayStyle, .barNamePercent)
+
+        let restoredPrimary = try Data(contentsOf: primaryURL)
+        let restoredBackup = try Data(contentsOf: backupURL)
+        XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredPrimary))
+        XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredBackup))
+    }
+
     func testLoadRecoversEnabledOfficialProvidersFromPersistedSlotsWhenPrimaryAndBackupCorrupted() throws {
         let root = try makeTempDirectory()
         let store = ConfigStore(baseDirectoryURL: root)
@@ -134,13 +172,16 @@ final class ConfigStoreTests: XCTestCase {
         let directory = root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
         let primaryURL = directory.appendingPathComponent("config.json")
         let backupURL = directory.appendingPathComponent("config.backup.json")
+        let recoveryURL = directory.appendingPathComponent("config.recovery.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: primaryURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
 
         try store.reset()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: primaryURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
     }
 
     private func makeTempDirectory() throws -> URL {

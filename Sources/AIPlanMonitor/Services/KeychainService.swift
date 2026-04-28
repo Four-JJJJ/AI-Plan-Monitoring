@@ -3,6 +3,32 @@ import LocalAuthentication
 import Security
 
 final class KeychainService: @unchecked Sendable {
+    struct SecureStoreAdapter {
+        var readData: @Sendable (_ service: String, _ account: String, _ interactive: Bool) -> Data?
+        var readAll: @Sendable (_ service: String, _ interactive: Bool) -> [String: String]?
+        var saveData: @Sendable (_ data: Data, _ service: String, _ account: String, _ interactive: Bool) -> Bool
+        var deleteItem: @Sendable (_ service: String, _ account: String) -> Void
+        var deleteAll: @Sendable (_ service: String) -> Void
+
+        static let live = SecureStoreAdapter(
+            readData: { service, account, interactive in
+                KeychainService.liveReadData(service: service, account: account, interactive: interactive)
+            },
+            readAll: { service, interactive in
+                KeychainService.liveReadAll(service: service, interactive: interactive)
+            },
+            saveData: { data, service, account, interactive in
+                KeychainService.liveSaveData(data, service: service, account: account, interactive: interactive)
+            },
+            deleteItem: { service, account in
+                KeychainService.liveDeleteItem(service: service, account: account)
+            },
+            deleteAll: { service in
+                KeychainService.liveDeleteAll(service: service)
+            }
+        )
+    }
+
     static let defaultServiceName = "AI Plan Monitor"
     static let legacyServiceName = "AIPlanMonitor"
     private static let vaultAccount = "__credential_vault__"
@@ -14,6 +40,7 @@ final class KeychainService: @unchecked Sendable {
     private let storageURL: URL?
     private let useFileStorage: Bool
     private let defaults: UserDefaults
+    private let secureStore: SecureStoreAdapter
     private var tokenCache: [String: String] = [:]
     private var missingCache: Set<String> = []
     private var secureVaultLoaded = false
@@ -21,12 +48,16 @@ final class KeychainService: @unchecked Sendable {
     init(
         fileManager: FileManager = .default,
         storageURL: URL? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        forceSecureStore: Bool = false,
+        secureStore: SecureStoreAdapter = .live
     ) {
         self.fileManager = fileManager
         self.storageURL = storageURL
         self.defaults = defaults
-        self.useFileStorage = storageURL != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        self.secureStore = secureStore
+        self.useFileStorage = !forceSecureStore
+            && (storageURL != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil)
         if useFileStorage {
             loadFromDisk()
         }
@@ -63,11 +94,11 @@ final class KeychainService: @unchecked Sendable {
         if useFileStorage {
             token = readFromDisk(service: normalizedService, account: account)
         } else {
-            guard hasPreparedSecureStoreAccess else {
-                return nil
-            }
             token = readFromVault(service: normalizedService, account: account)
                 ?? readCurrentServiceAndMigrateIfPossible(service: normalizedService, account: account)
+            if token != nil {
+                markSecureStorePrepared()
+            }
         }
 
         lock.lock()
@@ -98,13 +129,17 @@ final class KeychainService: @unchecked Sendable {
 
         let ok = persistSecureSnapshot(snapshot, interactive: false)
         if ok {
-            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+            markSecureStorePrepared()
         }
         return ok
     }
 
     private var hasPreparedSecureStoreAccess: Bool {
         useFileStorage || defaults.bool(forKey: Self.secureAccessPreparedDefaultsKey)
+    }
+
+    private func markSecureStorePrepared() {
+        defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
     }
 
     private func normalizedServiceName(_ service: String) -> String {
@@ -137,43 +172,58 @@ final class KeychainService: @unchecked Sendable {
 
     private func loadSecureVaultIfNeeded(interactive: Bool) {
         lock.lock()
-        if secureVaultLoaded {
+        let shouldRetryInteractive = interactive && secureVaultLoaded && tokenCache.isEmpty
+        if secureVaultLoaded && !shouldRetryInteractive {
             lock.unlock()
             return
         }
-        secureVaultLoaded = true
         lock.unlock()
 
-        if let snapshot = readVaultSnapshotFromSecureStore(interactive: interactive), !snapshot.isEmpty {
+        let snapshot = readVaultSnapshotFromSecureStore(interactive: interactive)
+        if let snapshot, !snapshot.isEmpty {
             mergeIntoCache(snapshot)
         }
 
-        if let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: interactive)?
-            .filter({ $0.key != Self.vaultAccount && !$0.key.isEmpty && !$0.value.isEmpty }),
-           !currentItems.isEmpty {
+        let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: interactive)?
+            .filter({ $0.key != Self.vaultAccount && !$0.key.isEmpty && !$0.value.isEmpty })
+            ?? [:]
+        if !currentItems.isEmpty {
             let normalized = currentItems.reduce(into: [String: String]()) { partialResult, entry in
                 partialResult[cacheKey(service: Self.defaultServiceName, account: entry.key)] = entry.value
             }
-            _ = mergeIntoVault(normalized)
+            if !mergeIntoVault(normalized) {
+                mergeIntoCache(normalized)
+            }
+        }
+
+        let didLoadAccessibleState = snapshot != nil || !currentItems.isEmpty || interactive
+        lock.lock()
+        secureVaultLoaded = didLoadAccessibleState
+        lock.unlock()
+        if didLoadAccessibleState {
+            markSecureStorePrepared()
         }
     }
 
     func prepareSecureStoreAccess() -> Bool {
         loadSecureVaultIfNeeded(interactive: true)
         migrateLegacyServiceOnceIfNeeded(interactive: true)
-        if readVaultSnapshotFromSecureStore(interactive: true) != nil {
+        if let snapshot = readVaultSnapshotFromSecureStore(interactive: true) {
+            mergeIntoCache(snapshot)
             lock.lock()
             missingCache.removeAll()
+            secureVaultLoaded = true
             lock.unlock()
-            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+            markSecureStorePrepared()
             return true
         }
         let ok = persistSecureSnapshot(tokenCache, interactive: true)
         if ok {
             lock.lock()
             missingCache.removeAll()
+            secureVaultLoaded = true
             lock.unlock()
-            defaults.set(true, forKey: Self.secureAccessPreparedDefaultsKey)
+            markSecureStorePrepared()
         }
         return ok
     }
@@ -182,11 +232,36 @@ final class KeychainService: @unchecked Sendable {
         guard !useFileStorage else {
             return true
         }
-        guard hasPreparedSecureStoreAccess else {
-            return false
-        }
+
         loadSecureVaultIfNeeded(interactive: false)
-        return readVaultSnapshotFromSecureStore(interactive: false) != nil
+        if readVaultSnapshotFromSecureStore(interactive: false) != nil {
+            markSecureStorePrepared()
+            return true
+        }
+
+        if let currentItems = readAllFromSecureStore(service: Self.defaultServiceName, interactive: false)?
+            .filter({ $0.key != Self.vaultAccount && !$0.key.isEmpty && !$0.value.isEmpty }),
+           !currentItems.isEmpty {
+            let normalized = currentItems.reduce(into: [String: String]()) { partialResult, entry in
+                partialResult[cacheKey(service: Self.defaultServiceName, account: entry.key)] = entry.value
+            }
+            mergeIntoCache(normalized)
+            markSecureStorePrepared()
+            return true
+        }
+
+        if let legacyItems = readAllFromSecureStore(service: Self.legacyServiceName, interactive: false)?
+            .filter({ !$0.key.isEmpty && !$0.value.isEmpty }),
+           !legacyItems.isEmpty {
+            let normalized = legacyItems.reduce(into: [String: String]()) { partialResult, entry in
+                partialResult[cacheKey(service: Self.defaultServiceName, account: entry.key)] = entry.value
+            }
+            mergeIntoCache(normalized)
+            markSecureStorePrepared()
+            return true
+        }
+
+        return hasPreparedSecureStoreAccess && readVaultSnapshotFromSecureStore(interactive: false) != nil
     }
 
     func resetAllStoredCredentials() {
@@ -307,6 +382,56 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func readDataFromSecureStore(service: String, account: String, interactive: Bool) -> Data? {
+        secureStore.readData(service, account, interactive)
+    }
+
+    private func readAllFromSecureStore(service: String, interactive: Bool) -> [String: String]? {
+        secureStore.readAll(service, interactive)
+    }
+
+    private func saveDataToSecureStore(_ data: Data, service: String, account: String, interactive: Bool) -> Bool {
+        secureStore.saveData(data, service, account, interactive)
+    }
+
+    private func deleteSecureStoreItem(service: String, account: String) {
+        secureStore.deleteItem(service, account)
+    }
+
+    private func deleteAllSecureStoreItems(service: String) {
+        secureStore.deleteAll(service)
+    }
+
+    private func readFromDisk(service: String, account: String) -> String? {
+        tokenCache["\(service)::\(account)"]
+    }
+
+    private func loadFromDisk() {
+        guard let storageURL,
+              fileManager.fileExists(atPath: storageURL.path),
+              let data = try? Data(contentsOf: storageURL),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return
+        }
+
+        lock.lock()
+        tokenCache = decoded
+        missingCache.removeAll()
+        lock.unlock()
+    }
+
+    private func persist(_ snapshot: [String: String]) -> Bool {
+        guard let storageURL else { return false }
+        do {
+            try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: storageURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func liveReadData(service: String, account: String, interactive: Bool) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -326,7 +451,7 @@ final class KeychainService: @unchecked Sendable {
         return data
     }
 
-    private func readAllFromSecureStore(service: String, interactive: Bool) -> [String: String]? {
+    private static func liveReadAll(service: String, interactive: Bool) -> [String: String]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -364,7 +489,7 @@ final class KeychainService: @unchecked Sendable {
         return result
     }
 
-    private func saveDataToSecureStore(_ data: Data, service: String, account: String, interactive: Bool) -> Bool {
+    private static func liveSaveData(_ data: Data, service: String, account: String, interactive: Bool) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -397,7 +522,7 @@ final class KeychainService: @unchecked Sendable {
         return addStatus == errSecSuccess
     }
 
-    private func deleteSecureStoreItem(service: String, account: String) {
+    private static func liveDeleteItem(service: String, account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -406,7 +531,7 @@ final class KeychainService: @unchecked Sendable {
         SecItemDelete(query as CFDictionary)
     }
 
-    private func deleteAllSecureStoreItems(service: String) {
+    private static func liveDeleteAll(service: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
@@ -414,39 +539,9 @@ final class KeychainService: @unchecked Sendable {
         SecItemDelete(query as CFDictionary)
     }
 
-    private func authenticationContext(interactive: Bool) -> LAContext {
+    private static func authenticationContext(interactive: Bool) -> LAContext {
         let context = LAContext()
         context.interactionNotAllowed = !interactive
         return context
-    }
-
-    private func readFromDisk(service: String, account: String) -> String? {
-        tokenCache["\(service)::\(account)"]
-    }
-
-    private func loadFromDisk() {
-        guard let storageURL,
-              fileManager.fileExists(atPath: storageURL.path),
-              let data = try? Data(contentsOf: storageURL),
-              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return
-        }
-
-        lock.lock()
-        tokenCache = decoded
-        missingCache.removeAll()
-        lock.unlock()
-    }
-
-    private func persist(_ snapshot: [String: String]) -> Bool {
-        guard let storageURL else { return false }
-        do {
-            try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: storageURL, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
     }
 }

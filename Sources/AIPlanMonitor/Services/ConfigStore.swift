@@ -17,6 +17,7 @@ final class ConfigStore {
 
     private let fileURL: URL
     private let backupFileURL: URL
+    private let recoveryFileURL: URL
     private let fileManager: FileManager
 
     init(fileManager: FileManager = .default, baseDirectoryURL: URL? = nil) {
@@ -30,6 +31,7 @@ final class ConfigStore {
         let directory = rootDirectory.appendingPathComponent("AIPlanMonitor", isDirectory: true)
         self.fileURL = directory.appendingPathComponent("config.json")
         self.backupFileURL = directory.appendingPathComponent("config.backup.json")
+        self.recoveryFileURL = directory.appendingPathComponent("config.recovery.json")
     }
 
     func load() throws -> AppConfig {
@@ -37,6 +39,9 @@ final class ConfigStore {
 
         if !fileManager.fileExists(atPath: fileURL.path) {
             if let recovered = try recoverFromBackupIfPossible() {
+                return recovered
+            }
+            if let recovered = try recoverFromRecoverySnapshotIfPossible() {
                 return recovered
             }
             if let recovered = try recoverFromPersistedOfficialStateAndRestoreIfNeeded() {
@@ -59,9 +64,15 @@ final class ConfigStore {
             if !fileManager.fileExists(atPath: backupFileURL.path) {
                 try writeData(data, to: backupFileURL)
             }
+            if !fileManager.fileExists(atPath: recoveryFileURL.path) {
+                try writeData(data, to: recoveryFileURL)
+            }
             return migrated
         } catch {
             if let recovered = try recoverFromBackupIfPossible() {
+                return recovered
+            }
+            if let recovered = try recoverFromRecoverySnapshotIfPossible() {
                 return recovered
             }
             if let recovered = try recoverFromPersistedOfficialStateAndRestoreIfNeeded() {
@@ -76,6 +87,7 @@ final class ConfigStore {
         let data = try encodedConfigData(config)
         try writeData(data, to: fileURL)
         try writeData(data, to: backupFileURL)
+        try writeData(data, to: recoveryFileURL)
     }
 
     func reset() throws {
@@ -84,6 +96,9 @@ final class ConfigStore {
         }
         if fileManager.fileExists(atPath: backupFileURL.path) {
             try fileManager.removeItem(at: backupFileURL)
+        }
+        if fileManager.fileExists(atPath: recoveryFileURL.path) {
+            try fileManager.removeItem(at: recoveryFileURL)
         }
     }
 
@@ -123,6 +138,30 @@ final class ConfigStore {
     private func recoverFromBackupIfPossible() throws -> AppConfig? {
         do {
             return try loadFromBackupAndRestoreIfNeeded()
+        } catch {
+            return nil
+        }
+    }
+
+    private func loadFromRecoverySnapshotAndRestoreIfNeeded() throws -> AppConfig? {
+        guard fileManager.fileExists(atPath: recoveryFileURL.path) else {
+            return nil
+        }
+        let recoveryData = try Data(contentsOf: recoveryFileURL)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: recoveryData)
+        let migrated = decoded.migratedWithSiteDefaults()
+        if migrated != decoded {
+            try save(migrated)
+            return migrated
+        }
+        try writeData(recoveryData, to: fileURL)
+        try writeData(recoveryData, to: backupFileURL)
+        return migrated
+    }
+
+    private func recoverFromRecoverySnapshotIfPossible() throws -> AppConfig? {
+        do {
+            return try loadFromRecoverySnapshotAndRestoreIfNeeded()
         } catch {
             return nil
         }
