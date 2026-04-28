@@ -3062,13 +3062,18 @@ final class AppViewModel {
         syncCodexProfilesCurrentState()
         let activeSlotIDs = Set(codexSlots.filter(\.isActive).map(\.slotID))
         for profile in codexProfiles.sorted(by: { $0.slotID < $1.slotID }) where !activeSlotIDs.contains(profile.slotID) {
-            _ = await refreshCodexProfileSnapshotSlot(profile, descriptor: descriptor)
+            _ = await refreshCodexProfileSnapshotSlot(
+                profile,
+                descriptor: descriptor,
+                allowSessionWindowStabilization: false
+            )
         }
     }
 
     private func refreshCodexProfileSnapshotSlot(
         _ profile: CodexAccountProfile,
-        descriptor: ProviderDescriptor
+        descriptor: ProviderDescriptor,
+        allowSessionWindowStabilization: Bool = true
     ) async -> InactiveProfileRefreshResult {
         if codexPrefetchInFlightSlots.contains(profile.slotID) {
             return .skipped
@@ -3100,7 +3105,8 @@ final class AppViewModel {
         )
         codexSlots = codexSlotStore.upsertInactive(
             snapshot: snapshot,
-            preferredSlotID: profile.slotID
+            preferredSlotID: profile.slotID,
+            allowSessionWindowStabilization: allowSessionWindowStabilization
         )
         return .success
     }

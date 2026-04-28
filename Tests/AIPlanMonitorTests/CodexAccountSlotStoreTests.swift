@@ -170,6 +170,68 @@ final class CodexAccountSlotStoreTests: XCTestCase {
         XCTAssertEqual(slots[0].lastSnapshot.rawMeta["codex.sessionWindowStabilized"], "true")
     }
 
+    func testUpsertActiveTrustsFreshSessionResetEvenBeforePreviousCountdownEnds() throws {
+        let store = makeStore(staleInterval: 10_000)
+        let base = Date(timeIntervalSince1970: 5_200)
+        let accountID = "acc-active-reset"
+
+        let previousSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 42,
+            sessionUsed: 58,
+            sessionReset: base.addingTimeInterval(1_800)
+        )
+        _ = store.upsertActive(snapshot: previousSnapshot, now: base)
+
+        let incomingSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 100,
+            sessionUsed: 0,
+            sessionReset: base.addingTimeInterval(30 + 5 * 60 * 60)
+        )
+        let slots = store.upsertActive(snapshot: incomingSnapshot, now: base.addingTimeInterval(30))
+
+        XCTAssertEqual(slots.count, 1)
+        let sessionWindow = try XCTUnwrap(slots[0].lastSnapshot.quotaWindows.first(where: { $0.kind == .session }))
+        XCTAssertEqual(sessionWindow.remainingPercent, 100, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.usedPercent, 0, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.resetAt, incomingSnapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertNil(slots[0].lastSnapshot.rawMeta["codex.sessionWindowStabilized"])
+    }
+
+    func testUpsertInactiveCanBypassSessionCountdownStabilization() throws {
+        let store = makeStore(staleInterval: 10_000)
+        let base = Date(timeIntervalSince1970: 5_350)
+        let accountID = "acc-manual-refresh"
+
+        let previousSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 15,
+            sessionUsed: 85,
+            sessionReset: base.addingTimeInterval(2_700)
+        )
+        _ = store.upsertInactive(snapshot: previousSnapshot, now: base)
+
+        let incomingSnapshot = makeSnapshot(
+            accountID: accountID,
+            sessionRemaining: 100,
+            sessionUsed: 0,
+            sessionReset: base.addingTimeInterval(45 + 5 * 60 * 60)
+        )
+        let slots = store.upsertInactive(
+            snapshot: incomingSnapshot,
+            now: base.addingTimeInterval(45),
+            allowSessionWindowStabilization: false
+        )
+
+        XCTAssertEqual(slots.count, 1)
+        let sessionWindow = try XCTUnwrap(slots[0].lastSnapshot.quotaWindows.first(where: { $0.kind == .session }))
+        XCTAssertEqual(sessionWindow.remainingPercent, 100, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.usedPercent, 0, accuracy: 0.0001)
+        XCTAssertEqual(sessionWindow.resetAt, incomingSnapshot.quotaWindows.first(where: { $0.kind == .session })?.resetAt)
+        XCTAssertNil(slots[0].lastSnapshot.rawMeta["codex.sessionWindowStabilized"])
+    }
+
     func testUpsertInactiveAcceptsNewSessionCountdownAfterPreviousWindowExpires() throws {
         let store = makeStore(staleInterval: 10_000)
         let base = Date(timeIntervalSince1970: 5_500)

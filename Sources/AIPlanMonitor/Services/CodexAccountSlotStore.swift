@@ -143,7 +143,11 @@ final class CodexAccountSlotStore {
         return slots.sorted(by: sortRule)
     }
 
-    func upsertActive(snapshot: UsageSnapshot, now: Date = Date()) -> [CodexAccountSlot] {
+    func upsertActive(
+        snapshot: UsageSnapshot,
+        now: Date = Date(),
+        allowSessionWindowStabilization: Bool = false
+    ) -> [CodexAccountSlot] {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
         let preferredSlotID = Self.explicitSlotID(from: snapshot)
@@ -168,10 +172,11 @@ final class CodexAccountSlotStore {
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
-            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+            let stabilizedSnapshot = Self.maybeStabilizeCodexSessionWindow(
                 incoming: snapshot,
                 previous: slots[existing].lastSnapshot,
-                now: now
+                now: now,
+                allowSessionWindowStabilization: allowSessionWindowStabilization
             )
             if let preferredSlotID {
                 slots[existing].slotID = preferredSlotID
@@ -186,10 +191,11 @@ final class CodexAccountSlotStore {
 
         // Unknown identity should stay single-slot to avoid fake account splits.
         if accountKey == "unknown", let unknownIndex = slots.firstIndex(where: { $0.accountKey == "unknown" }) {
-            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+            let stabilizedSnapshot = Self.maybeStabilizeCodexSessionWindow(
                 incoming: snapshot,
                 previous: slots[unknownIndex].lastSnapshot,
-                now: now
+                now: now,
+                allowSessionWindowStabilization: allowSessionWindowStabilization
             )
             slots[unknownIndex].displayName = displayName
             slots[unknownIndex].lastSnapshot = stabilizedSnapshot
@@ -218,7 +224,8 @@ final class CodexAccountSlotStore {
     func upsertInactive(
         snapshot: UsageSnapshot,
         preferredSlotID: CodexSlotID? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        allowSessionWindowStabilization: Bool = true
     ) -> [CodexAccountSlot] {
         let accountKey = Self.accountKey(from: snapshot)
         let displayName = Self.accountLabel(from: snapshot)
@@ -240,10 +247,11 @@ final class CodexAccountSlotStore {
         }
 
         if let existing = slots.firstIndex(where: { $0.accountKey == accountKey }) {
-            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+            let stabilizedSnapshot = Self.maybeStabilizeCodexSessionWindow(
                 incoming: snapshot,
                 previous: slots[existing].lastSnapshot,
-                now: now
+                now: now,
+                allowSessionWindowStabilization: allowSessionWindowStabilization
             )
             if let resolvedSlotID {
                 slots[existing].slotID = resolvedSlotID
@@ -257,10 +265,11 @@ final class CodexAccountSlotStore {
         }
 
         if accountKey == "unknown", let unknownIndex = slots.firstIndex(where: { $0.accountKey == "unknown" }) {
-            let stabilizedSnapshot = Self.stabilizeCodexSessionWindowIfNeeded(
+            let stabilizedSnapshot = Self.maybeStabilizeCodexSessionWindow(
                 incoming: snapshot,
                 previous: slots[unknownIndex].lastSnapshot,
-                now: now
+                now: now,
+                allowSessionWindowStabilization: allowSessionWindowStabilization
             )
             slots[unknownIndex].displayName = displayName
             slots[unknownIndex].lastSnapshot = stabilizedSnapshot
@@ -364,6 +373,22 @@ final class CodexAccountSlotStore {
             || key.hasPrefix("subject:")
             || key.hasPrefix("fingerprint:")
             || key.hasPrefix("email:")
+    }
+
+    private static func maybeStabilizeCodexSessionWindow(
+        incoming: UsageSnapshot,
+        previous: UsageSnapshot,
+        now: Date,
+        allowSessionWindowStabilization: Bool
+    ) -> UsageSnapshot {
+        guard allowSessionWindowStabilization else {
+            return incoming
+        }
+        return stabilizeCodexSessionWindowIfNeeded(
+            incoming: incoming,
+            previous: previous,
+            now: now
+        )
     }
 
     private static func stabilizeCodexSessionWindowIfNeeded(
