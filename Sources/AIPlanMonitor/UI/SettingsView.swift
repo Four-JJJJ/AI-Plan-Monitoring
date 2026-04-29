@@ -312,6 +312,85 @@ struct SettingsView: View {
         var percent: Double?
         var barColor: Color
         var isAvailable: Bool = true
+        var healthPercent: Double? = nil
+    }
+
+    enum OfficialMonitoringHealthStatus: Equatable {
+        case unknown
+        case authError
+        case configError
+        case rateLimited
+        case disconnected
+        case sufficient
+        case tight
+        case exhausted
+    }
+
+    nonisolated static func resolvedOfficialMonitoringProvider(
+        type: ProviderType,
+        providers: [ProviderDescriptor]
+    ) -> ProviderDescriptor {
+        if let configured = providers.first(where: { $0.family == .official && $0.type == type }) {
+            return configured
+        }
+
+        return ProviderDescriptor(
+            id: "\(type.rawValue)-official",
+            name: type.rawValue,
+            family: .official,
+            type: type,
+            enabled: false,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: .none,
+            officialConfig: ProviderDescriptor.defaultOfficialConfig(type: type)
+        )
+    }
+
+    nonisolated static func quotaMetricPercents(
+        for window: UsageQuotaWindow,
+        displaysUsedQuota: Bool
+    ) -> (displayPercent: Double, healthPercent: Double) {
+        let healthPercent = max(0, min(100, window.remainingPercent))
+        let displayPercent = displaysUsedQuota
+            ? max(0, min(100, window.usedPercent))
+            : healthPercent
+        return (displayPercent, healthPercent)
+    }
+
+    nonisolated static func officialMonitoringHealthStatus(
+        snapshot: UsageSnapshot?,
+        healthPercents: [Double]
+    ) -> OfficialMonitoringHealthStatus {
+        guard let snapshot else {
+            return .unknown
+        }
+
+        if snapshot.valueFreshness == .empty {
+            switch snapshot.fetchHealth {
+            case .authExpired:
+                return .authError
+            case .endpointMisconfigured:
+                return .configError
+            case .rateLimited:
+                return .rateLimited
+            case .unreachable:
+                return .disconnected
+            case .ok:
+                return .tight
+            }
+        }
+
+        guard let minimum = healthPercents.min() else {
+            return .tight
+        }
+        if minimum > 30 {
+            return .sufficient
+        }
+        if minimum > 10 {
+            return .tight
+        }
+        return .exhausted
     }
 
     private struct OfficialDetailedDataRow: Identifiable {
@@ -6046,8 +6125,9 @@ struct SettingsView: View {
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
-        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
-        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialCodex(), snapshot: snapshot)
+        let provider = officialMonitoringProvider(for: .codex)
+        let status = codexSlotStatus(provider: provider, snapshot: snapshot)
+        let metrics = codexQuotaMetrics(provider: provider, snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .codex, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -6276,8 +6356,9 @@ struct SettingsView: View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
         let isDisplayedInMenuBar = viewModel.isClaudeStatusBarDisplaySlot(slotID: profile.slotID)
-        let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
-        let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
+        let provider = officialMonitoringProvider(for: .claude)
+        let status = codexSlotStatus(provider: provider, snapshot: snapshot)
+        let metrics = codexQuotaMetrics(provider: provider, snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .claude, snapshot: snapshot)
         let hasError = snapshot?.valueFreshness == .empty
         let updatedAt = snapshot?.updatedAt ?? profile.lastImportedAt
@@ -6994,36 +7075,43 @@ struct SettingsView: View {
         return String(trimmed.prefix(8)).lowercased()
     }
 
-    private func codexSlotStatus(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> (text: String, color: Color) {
-        guard let snapshot else {
-            return (viewModel.language == .zhHans ? "未知" : "Unknown", settingsHintColor)
-        }
-        if snapshot.valueFreshness == .empty {
-            switch snapshot.fetchHealth {
-            case .authExpired:
-                return (viewModel.language == .zhHans ? "认证故障" : "Auth Error", Color(hex: 0xD05757))
-            case .endpointMisconfigured:
-                return (viewModel.language == .zhHans ? "配置异常" : "Config Error", Color(hex: 0xD05757))
-            case .rateLimited:
-                return (viewModel.language == .zhHans ? "限流" : "Rate Limited", Color(hex: 0xE88B2D))
-            case .unreachable:
-                return (viewModel.language == .zhHans ? "连接失败" : "Disconnected", Color(hex: 0xD05757))
-            case .ok:
-                return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
-            }
-        }
+    private func officialMonitoringProvider(for type: ProviderType) -> ProviderDescriptor {
+        Self.resolvedOfficialMonitoringProvider(
+            type: type,
+            providers: viewModel.config.providers
+        )
+    }
 
-        let availablePercents = codexQuotaMetrics(provider: provider, snapshot: snapshot).compactMap(\.percent)
-        guard let minimum = availablePercents.min() else {
-            return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
-        }
-        if minimum > 30 {
+    private func localizedOfficialMonitoringStatus(
+        _ status: OfficialMonitoringHealthStatus
+    ) -> (text: String, color: Color) {
+        switch status {
+        case .unknown:
+            return (viewModel.language == .zhHans ? "未知" : "Unknown", settingsHintColor)
+        case .authError:
+            return (viewModel.language == .zhHans ? "认证故障" : "Auth Error", Color(hex: 0xD05757))
+        case .configError:
+            return (viewModel.language == .zhHans ? "配置异常" : "Config Error", Color(hex: 0xD05757))
+        case .rateLimited:
+            return (viewModel.language == .zhHans ? "限流" : "Rate Limited", Color(hex: 0xE88B2D))
+        case .disconnected:
+            return (viewModel.language == .zhHans ? "连接失败" : "Disconnected", Color(hex: 0xD05757))
+        case .sufficient:
             return (viewModel.text(.statusSufficient), Color(hex: 0x69BD64))
-        }
-        if minimum > 10 {
+        case .tight:
             return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
+        case .exhausted:
+            return (viewModel.text(.statusExhausted), Color(hex: 0xD05757))
         }
-        return (viewModel.text(.statusExhausted), Color(hex: 0xD05757))
+    }
+
+    private func codexSlotStatus(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> (text: String, color: Color) {
+        let healthPercents = codexQuotaMetrics(provider: provider, snapshot: snapshot).compactMap(\.healthPercent)
+        let status = Self.officialMonitoringHealthStatus(
+            snapshot: snapshot,
+            healthPercents: healthPercents
+        )
+        return localizedOfficialMonitoringStatus(status)
     }
 
     private func codexQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [CodexQuotaMetricDisplay] {
@@ -7161,10 +7249,10 @@ struct SettingsView: View {
         }
 
         return windows.prefix(2).map { window in
-            let remainingPercent = max(0, min(100, window.remainingPercent))
-            let displayPercent = provider.displaysUsedQuota
-                ? max(0, min(100, window.usedPercent))
-                : remainingPercent
+            let percents = Self.quotaMetricPercents(
+                for: window,
+                displaysUsedQuota: provider.displaysUsedQuota
+            )
             return CodexQuotaMetricDisplay(
                 id: window.id,
                 title: codexQuotaDisplayTitle(window, provider: provider),
@@ -7172,11 +7260,12 @@ struct SettingsView: View {
                     window: window,
                     provider: provider,
                     snapshot: snapshot,
-                    displayPercent: displayPercent
+                    displayPercent: percents.displayPercent
                 ),
                 resetText: codexResetCountdownText(to: window.resetAt),
-                percent: displayPercent,
-                barColor: codexQuotaBarColor(remainingPercent: remainingPercent)
+                percent: percents.displayPercent,
+                barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
+                healthPercent: percents.healthPercent
             )
         }
     }
@@ -7192,7 +7281,8 @@ struct SettingsView: View {
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
-                barColor: codexQuotaBarColor(remainingPercent: 0)
+                barColor: codexQuotaBarColor(remainingPercent: 0),
+                healthPercent: 0
             ),
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-all",
@@ -7203,7 +7293,8 @@ struct SettingsView: View {
                 valueText: "0%",
                 resetText: codexResetCountdownText(to: nil),
                 percent: 0,
-                barColor: codexQuotaBarColor(remainingPercent: 0)
+                barColor: codexQuotaBarColor(remainingPercent: 0),
+                healthPercent: 0
             ),
             CodexQuotaMetricDisplay(
                 id: "\(provider.id)-placeholder-weekly-sonnet",
@@ -7288,10 +7379,10 @@ struct SettingsView: View {
             )
         }
 
-        let remainingPercent = max(0, min(100, window.remainingPercent))
-        let displayPercent = provider.displaysUsedQuota
-            ? max(0, min(100, window.usedPercent))
-            : remainingPercent
+        let percents = Self.quotaMetricPercents(
+            for: window,
+            displaysUsedQuota: provider.displaysUsedQuota
+        )
         return CodexQuotaMetricDisplay(
             id: id,
             title: usagePreferredQuotaTitle(title, provider: provider),
@@ -7299,12 +7390,13 @@ struct SettingsView: View {
                 window: window,
                 provider: provider,
                 snapshot: snapshot,
-                displayPercent: displayPercent
+                displayPercent: percents.displayPercent
             ),
             resetText: codexResetCountdownText(to: window.resetAt),
-            percent: displayPercent,
-            barColor: codexQuotaBarColor(remainingPercent: remainingPercent),
-            isAvailable: true
+            percent: percents.displayPercent,
+            barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
+            isAvailable: true,
+            healthPercent: percents.healthPercent
         )
     }
 
