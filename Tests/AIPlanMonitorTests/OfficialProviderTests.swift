@@ -1384,6 +1384,152 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first(where: { $0.kind == .session })?.remainingPercent ?? -1, 72, accuracy: 0.001)
         XCTAssertEqual(snapshot.extras["planType"], "Pro")
     }
+
+    func testSQLiteShellSnapshotQueryReadsSingleValueFromTemporaryDatabase() throws {
+        let root = try makeTemporaryHomeDirectory(prefix: "sqlite-shell")
+        let databaseURL = root.appendingPathComponent("state.vscdb")
+        try createSQLiteItemTableDatabase(
+            at: databaseURL,
+            rows: [("windsurfAuthStatus", #"{"apiKey":"snapshot-key"}"#)]
+        )
+
+        let result = SQLiteShell.snapshotQuery(
+            databasePath: databaseURL.path,
+            query: "SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1"
+        )
+
+        XCTAssertEqual(result.mode, .readOnlySnapshot)
+        XCTAssertTrue(result.succeeded, result.errorMessage)
+        XCTAssertEqual(result.singleValue, #"{"apiKey":"snapshot-key"}"#)
+    }
+
+    func testSQLiteShellSnapshotQueryReadsDatabaseWhenWALSidecarsExist() throws {
+        let root = try makeTemporaryHomeDirectory(prefix: "sqlite-shell-wal")
+        let databaseURL = root.appendingPathComponent("state.vscdb")
+        try createSQLiteItemTableDatabase(
+            at: databaseURL,
+            rows: [("windsurfAuthStatus", #"{"apiKey":"wal-key"}"#)],
+            useWAL: true
+        )
+
+        let walPath = databaseURL.path + "-wal"
+        let shmPath = databaseURL.path + "-shm"
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: walPath) || FileManager.default.fileExists(atPath: shmPath),
+            "expected WAL sidecars to exist for snapshot read regression coverage"
+        )
+
+        let result = SQLiteShell.snapshotQuery(
+            databasePath: databaseURL.path,
+            query: "SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1"
+        )
+
+        XCTAssertTrue(result.succeeded, result.errorMessage)
+        XCTAssertEqual(result.singleValue, #"{"apiKey":"wal-key"}"#)
+    }
+
+    func testSQLiteShellSnapshotQueryReturnsClearErrorForSQLiteFailure() throws {
+        let root = try makeTemporaryHomeDirectory(prefix: "sqlite-shell-error")
+        let databaseURL = root.appendingPathComponent("state.vscdb")
+        try createSQLiteItemTableDatabase(
+            at: databaseURL,
+            rows: [("windsurfAuthStatus", #"{"apiKey":"broken"}"#)]
+        )
+
+        let result = SQLiteShell.snapshotQuery(
+            databasePath: databaseURL.path,
+            query: "SELECT value FROM MissingTable LIMIT 1"
+        )
+
+        XCTAssertFalse(result.succeeded)
+        XCTAssertTrue(result.errorMessage.localizedCaseInsensitiveContains("no such table"), result.errorMessage)
+    }
+
+    func testWindsurfFetchFallsBackToNextStateDatabase() async throws {
+        let root = try makeTemporaryHomeDirectory(prefix: "windsurf-provider")
+        let stableURL = root.appendingPathComponent("Library/Application Support/Windsurf/User/globalStorage/state.vscdb")
+        let nextURL = root.appendingPathComponent("Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb")
+        try createSQLiteItemTableDatabase(at: stableURL, rows: [("otherKey", "other-value")])
+        try createSQLiteItemTableDatabase(
+            at: nextURL,
+            rows: [("windsurfAuthStatus", #"{"apiKey":"windsurf-next-key"}"#)]
+        )
+
+        OfficialMockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let payload = try XCTUnwrap(requestBodyData(request))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
+            XCTAssertEqual(metadata["apiKey"] as? String, "windsurf-next-key")
+            XCTAssertEqual(metadata["ideName"] as? String, "windsurf-next")
+            let body = """
+            {
+              "userStatus": {
+                "planStatus": {
+                  "planInfo": { "planName": "Pro" },
+                  "dailyQuotaRemainingPercent": 80,
+                  "weeklyQuotaRemainingPercent": 60
+                }
+              }
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+        defer { OfficialMockURLProtocol.requestHandler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfficialMockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        let provider = WindsurfProvider(
+            descriptor: ProviderDescriptor.defaultOfficialWindsurf(),
+            session: session,
+            stateVariants: [
+                .init(ideName: "windsurf", dbPath: stableURL.path),
+                .init(ideName: "windsurf-next", dbPath: nextURL.path),
+            ]
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 60, accuracy: 0.001)
+        XCTAssertEqual(snapshot.sourceLabel, "API")
+    }
+
+    func testWindsurfFetchSurfacesStateDatabaseReadFailure() async throws {
+        let root = try makeTemporaryHomeDirectory(prefix: "windsurf-provider-failure")
+        let databaseURL = root.appendingPathComponent("Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb")
+        try writeText("not-a-sqlite-database", to: databaseURL)
+
+        let provider = WindsurfProvider(
+            descriptor: ProviderDescriptor.defaultOfficialWindsurf(),
+            stateVariants: [
+                .init(ideName: "windsurf-next", dbPath: databaseURL.path)
+            ]
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected state database read failure")
+        } catch let error as ProviderError {
+            guard case .commandFailed(let detail) = error else {
+                return XCTFail("Expected commandFailed, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("Failed to read Windsurf state database"), detail)
+            XCTAssertTrue(
+                detail.localizedCaseInsensitiveContains("database")
+                    || detail.localizedCaseInsensitiveContains("malformed")
+                    || detail.localizedCaseInsensitiveContains("sqlite"),
+                detail
+            )
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
 }
 
 private final class OfficialMockURLProtocol: URLProtocol {
@@ -1453,6 +1599,66 @@ private func makeTemporaryHomeDirectory(prefix: String) throws -> URL {
         .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
+}
+
+private func createSQLiteItemTableDatabase(
+    at url: URL,
+    rows: [(String, String)],
+    useWAL: Bool = false
+) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if useWAL {
+        try runSQLite(databasePath: url.path, sql: "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+    }
+    try runSQLite(databasePath: url.path, sql: "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT, value TEXT);")
+    for (key, value) in rows {
+        let escapedKey = key.replacingOccurrences(of: "'", with: "''")
+        let escapedValue = value.replacingOccurrences(of: "'", with: "''")
+        try runSQLite(
+            databasePath: url.path,
+            sql: "INSERT INTO ItemTable (key, value) VALUES ('\(escapedKey)', '\(escapedValue)');"
+        )
+    }
+}
+
+private func runSQLite(databasePath: String, sql: String) throws {
+    guard let result = ShellCommand.run(
+        executable: "/usr/bin/sqlite3",
+        arguments: [databasePath, sql],
+        timeout: 10
+    ) else {
+        XCTFail("sqlite3 command failed to start")
+        return
+    }
+    if result.status != 0 {
+        XCTFail("sqlite3 command failed: \(result.stderr)")
+    }
+}
+
+private func requestBodyData(_ request: URLRequest) -> Data? {
+    if let httpBody = request.httpBody {
+        return httpBody
+    }
+    guard let stream = request.httpBodyStream else {
+        return nil
+    }
+
+    stream.open()
+    defer { stream.close() }
+
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+
+    var data = Data()
+    while stream.hasBytesAvailable {
+        let count = stream.read(buffer, maxLength: bufferSize)
+        if count <= 0 {
+            break
+        }
+        data.append(buffer, count: count)
+    }
+    return data.isEmpty ? nil : data
 }
 
 private func writeText(_ text: String, to url: URL) throws {

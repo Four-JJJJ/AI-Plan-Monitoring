@@ -1,12 +1,32 @@
 import Foundation
 
 final class WindsurfProvider: UsageProvider, @unchecked Sendable {
+    struct StateVariant: Sendable {
+        let ideName: String
+        let dbPath: String
+    }
+
+    typealias StateQueryRunner = @Sendable (_ databasePath: String, _ query: String) -> SQLiteShell.QueryResult
+
+    private static let authStatusQuery = "SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1"
+
     private let session: URLSession
+    private let stateVariants: [StateVariant]
+    private let stateQueryRunner: StateQueryRunner
     let descriptor: ProviderDescriptor
 
-    init(descriptor: ProviderDescriptor, session: URLSession = .shared) {
+    init(
+        descriptor: ProviderDescriptor,
+        session: URLSession = .shared,
+        stateVariants: [StateVariant] = WindsurfProvider.defaultStateVariants(),
+        stateQueryRunner: @escaping StateQueryRunner = { databasePath, query in
+            SQLiteShell.snapshotQuery(databasePath: databasePath, query: query)
+        }
+    ) {
         self.descriptor = descriptor
         self.session = session
+        self.stateVariants = stateVariants
+        self.stateQueryRunner = stateQueryRunner
     }
 
     func fetch() async throws -> UsageSnapshot {
@@ -15,20 +35,22 @@ final class WindsurfProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.unavailable("Windsurf 官方来源当前仅支持 API 检测")
         }
 
-        let variants = [
-            (ideName: "windsurf", dbPath: "\(NSHomeDirectory())/Library/Application Support/Windsurf/User/globalStorage/state.vscdb"),
-            (ideName: "windsurf-next", dbPath: "\(NSHomeDirectory())/Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb"),
-        ]
-
         var sawAuthFailure = false
-        for variant in variants {
-            guard let raw = SQLiteShell.singleValue(
-                databasePath: variant.dbPath,
-                query: "SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1"
-            ), !raw.isEmpty,
-                  let data = raw.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let apiKey = OfficialValueParser.string(json["apiKey"]) else {
+        var lastReadError: ProviderError?
+        for variant in stateVariants {
+            guard FileManager.default.fileExists(atPath: variant.dbPath) else { continue }
+
+            let result = stateQueryRunner(variant.dbPath, Self.authStatusQuery)
+            guard result.succeeded else {
+                lastReadError = .commandFailed(
+                    "Failed to read Windsurf state database at \(variant.dbPath): \(result.errorMessage)"
+                )
+                continue
+            }
+
+            guard let raw = result.singleValue,
+                  !raw.isEmpty,
+                  let apiKey = Self.extractAPIKey(from: raw) else {
                 continue
             }
             do {
@@ -44,7 +66,23 @@ final class WindsurfProvider: UsageProvider, @unchecked Sendable {
         if sawAuthFailure {
             throw ProviderError.unauthorized
         }
+        if let lastReadError {
+            throw lastReadError
+        }
         throw ProviderError.missingCredential("windsurfAuthStatus")
+    }
+
+    internal static func defaultStateVariants(homeDirectory: String = NSHomeDirectory()) -> [StateVariant] {
+        [
+            StateVariant(
+                ideName: "windsurf",
+                dbPath: "\(homeDirectory)/Library/Application Support/Windsurf/User/globalStorage/state.vscdb"
+            ),
+            StateVariant(
+                ideName: "windsurf-next",
+                dbPath: "\(homeDirectory)/Library/Application Support/Windsurf - Next/User/globalStorage/state.vscdb"
+            ),
+        ]
     }
 
     private func requestSnapshot(apiKey: String, ideName: String) async throws -> UsageSnapshot {
@@ -140,5 +178,13 @@ final class WindsurfProvider: UsageProvider, @unchecked Sendable {
             extras: extras,
             rawMeta: [:]
         )
+    }
+
+    private static func extractAPIKey(from raw: String) -> String? {
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return OfficialValueParser.string(json["apiKey"])
     }
 }

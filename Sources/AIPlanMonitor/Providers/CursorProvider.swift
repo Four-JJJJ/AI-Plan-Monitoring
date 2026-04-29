@@ -1,6 +1,17 @@
 import Foundation
 
 final class CursorProvider: UsageProvider, @unchecked Sendable {
+    private static let authQuery = """
+    SELECT key, value
+    FROM ItemTable
+    WHERE key IN (
+        'cursorAuth/accessToken',
+        'cursorAuth/refreshToken',
+        'cursorAuth/cachedEmail',
+        'cursorAuth/stripeMembershipType'
+    );
+    """
+
     private let session: URLSession
     let descriptor: ProviderDescriptor
 
@@ -63,24 +74,29 @@ final class CursorProvider: UsageProvider, @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             throw ProviderError.missingCredential(dbPath)
         }
-        guard let accessToken = SQLiteShell.singleValue(
-            databasePath: dbPath,
-            query: "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1"
-        ), !accessToken.isEmpty else {
+
+        let result = SQLiteShell.snapshotQuery(databasePath: dbPath, query: Self.authQuery)
+        guard result.succeeded else {
+            throw ProviderError.commandFailed(
+                "Failed to read Cursor state database at \(dbPath): \(result.errorMessage)"
+            )
+        }
+
+        var values: [String: String] = [:]
+        for row in result.rows where row.count >= 2 {
+            let key = row[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = row[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            values[key] = value
+        }
+
+        guard let accessToken = values["cursorAuth/accessToken"], !accessToken.isEmpty else {
             throw ProviderError.missingCredential("cursorAuth/accessToken")
         }
-        let refreshToken = SQLiteShell.singleValue(
-            databasePath: dbPath,
-            query: "SELECT value FROM ItemTable WHERE key = 'cursorAuth/refreshToken' LIMIT 1"
-        )
-        let email = SQLiteShell.singleValue(
-            databasePath: dbPath,
-            query: "SELECT value FROM ItemTable WHERE key = 'cursorAuth/cachedEmail' LIMIT 1"
-        )
-        let membershipType = SQLiteShell.singleValue(
-            databasePath: dbPath,
-            query: "SELECT value FROM ItemTable WHERE key = 'cursorAuth/stripeMembershipType' LIMIT 1"
-        )
+
+        let refreshToken = Self.normalizedOptionalValue(values["cursorAuth/refreshToken"])
+        let email = Self.normalizedOptionalValue(values["cursorAuth/cachedEmail"])
+        let membershipType = Self.normalizedOptionalValue(values["cursorAuth/stripeMembershipType"])
+
         return CursorAuth(
             databasePath: dbPath,
             accessToken: accessToken,
@@ -188,6 +204,12 @@ final class CursorProvider: UsageProvider, @unchecked Sendable {
             rawMeta: [:]
         )
     }
+
+    private static func normalizedOptionalValue(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 private struct CursorAuth {
@@ -197,4 +219,3 @@ private struct CursorAuth {
     var email: String?
     var membershipType: String?
 }
-

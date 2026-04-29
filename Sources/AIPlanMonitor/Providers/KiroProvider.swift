@@ -42,13 +42,23 @@ final class KiroProvider: UsageProvider, @unchecked Sendable {
 
     private func loadFromIDE() throws -> UsageSnapshot {
         var sawStateDatabase = false
+        var lastReadError: ProviderError?
         for stateDatabasePath in Self.ideStateDatabasePaths() {
             guard FileManager.default.fileExists(atPath: stateDatabasePath) else { continue }
             sawStateDatabase = true
-            guard let stateRaw = SQLiteShell.singleValue(
+
+            let result = SQLiteShell.snapshotQuery(
                 databasePath: stateDatabasePath,
                 query: "SELECT value FROM ItemTable WHERE key = '\(Self.stateKey.replacingOccurrences(of: "'", with: "''"))' LIMIT 1;"
-            ), !stateRaw.isEmpty else {
+            )
+            guard result.succeeded else {
+                lastReadError = .commandFailed(
+                    "Failed to read Kiro state database at \(stateDatabasePath): \(result.errorMessage)"
+                )
+                continue
+            }
+
+            guard let stateRaw = result.singleValue, !stateRaw.isEmpty else {
                 continue
             }
 
@@ -63,6 +73,9 @@ final class KiroProvider: UsageProvider, @unchecked Sendable {
             )
         }
 
+        if let lastReadError {
+            throw lastReadError
+        }
         if sawStateDatabase {
             throw ProviderError.missingCredential(Self.stateKey)
         }
