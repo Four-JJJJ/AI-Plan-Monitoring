@@ -759,10 +759,15 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
         let usedTokens = coerceDouble(usageItem["used"] ?? 0) ?? 0
         let limitTokens = coerceDouble(usageItem["limit"] ?? 0) ?? 0
-        let usedPercent = coerceDouble(usageItem["percent"] ?? 0)
-            ?? numericValue(for: "coalesce(data.usage.percent,usage.percent,data.monthUsage.percent,monthUsage.percent)", in: usageRoot)
-            ?? 0
-        let normalizedUsedPercent = min(100, max(0, usedPercent))
+        let rawItemPercent = coerceDouble(usageItem["percent"] ?? 0)
+        let rawRootPercent = numericValue(
+            for: "coalesce(data.usage.percent,usage.percent,data.monthUsage.percent,monthUsage.percent)",
+            in: usageRoot
+        )
+        let rawPercent = rawItemPercent ?? rawRootPercent
+        let derivedUsedPercent = limitTokens > 0 ? (usedTokens / limitTokens) * 100 : nil
+        let fallbackUsedPercent = normalizedXiaomimimoTokenPlanPercent(rawPercent)
+        let normalizedUsedPercent = min(100, max(0, derivedUsedPercent ?? fallbackUsedPercent ?? 0))
         let remainingPercent = max(0, 100 - normalizedUsedPercent)
 
         let planType = PlanTypeDisplayFormatter.normalizedPlanType(
@@ -791,7 +796,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         var rawMeta: [String: String] = [
             "endpointPath": "/api/v1/tokenPlan/detail,/api/v1/tokenPlan/usage",
             "requestMethod": "GET",
-            "remainingPath": "data.usage.percent",
+            "remainingPath": "100 - usedPercent",
             "usedPath": "data.usage.items.*.used",
             "limitPath": "data.usage.items.*.limit",
             "authSource": candidate.source,
@@ -800,8 +805,21 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             "tokenPlanUsed": String(Int(usedTokens.rounded())),
             "tokenPlanLimit": String(Int(limitTokens.rounded())),
             "tokenPlanUsedPercent": String(normalizedUsedPercent),
+            "tokenPlanUsedPercentSource": derivedUsedPercent != nil ? "usedLimitDerived" : "percentFallback",
             "tokenPlanAutoRenew": String(autoRenew)
         ]
+        if let rawItemPercent {
+            rawMeta["tokenPlanUsageItemPercentRaw"] = String(rawItemPercent)
+        }
+        if let rawRootPercent {
+            rawMeta["tokenPlanUsageRootPercentRaw"] = String(rawRootPercent)
+        }
+        if let rawPercent {
+            rawMeta["tokenPlanUsedPercentRaw"] = String(rawPercent)
+        }
+        if let derivedUsedPercent {
+            rawMeta["tokenPlanUsedPercentDerived"] = String(derivedUsedPercent)
+        }
         if let planType {
             rawMeta["planType"] = planType
         }
@@ -842,11 +860,20 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         for candidate in candidates {
             guard let items = candidate as? [Any], !items.isEmpty else { continue }
             let dictionaries = items.compactMap { $0 as? [String: Any] }
-            if let matched = dictionaries.first(where: { item in
-                let name = (item["name"] as? String)?.lowercased() ?? ""
-                return name == "plan_total_token" || name == "month_total_token"
+            if let planTotal = dictionaries.first(where: { item in
+                ((item["name"] as? String)?.lowercased() ?? "") == "plan_total_token"
             }) {
-                return matched
+                return planTotal
+            }
+            if let monthTotal = dictionaries.first(where: { item in
+                ((item["name"] as? String)?.lowercased() ?? "") == "month_total_token"
+            }) {
+                return monthTotal
+            }
+            if let positiveLimit = dictionaries.first(where: { item in
+                (coerceDouble(item["limit"] ?? 0) ?? 0) > 0
+            }) {
+                return positiveLimit
             }
             if let first = dictionaries.first {
                 return first
@@ -854,6 +881,14 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private func normalizedXiaomimimoTokenPlanPercent(_ rawPercent: Double?) -> Double? {
+        guard let rawPercent, rawPercent.isFinite else { return nil }
+        if rawPercent > 0, rawPercent <= 1 {
+            return rawPercent * 100
+        }
+        return rawPercent
     }
 
     private func parseXiaomimimoTokenPlanDate(_ raw: String) -> Date? {

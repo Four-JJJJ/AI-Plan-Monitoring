@@ -867,6 +867,183 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.quotaWindows.first?.usedPercent ?? -1, 0, accuracy: 0.001)
     }
 
+    func testXiaomimimoTokenPlanUsesDerivedPercentWhenItemPercentIsZero() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=abc123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/tokenPlan/detail":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"planCode":"standard","planName":"Standard","currentPeriodEnd":"2026-05-28 23:59:59","expired":false,"enableAutoRenew":false}}"#.utf8)
+                )
+            case "/api/v1/tokenPlan/usage":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"usage":{"percent":0.0,"items":[{"name":"plan_total_token","used":7804244,"limit":200000000,"percent":0.0},{"name":"compensation_total_token","used":0,"limit":0,"percent":0}]}}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=abc123; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/session-cookie"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(
+                service: service,
+                adapterID: "xiaomimimo-token-plan",
+                baseURL: "https://platform.xiaomimimo.com",
+                balanceAccount: "platform.xiaomimimo.com/session-cookie"
+            ),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        let expectedUsedPercent = 3.902122
+        let expectedRemainingPercent = 100 - expectedUsedPercent
+
+        XCTAssertEqual(snapshot.used ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.remaining ?? -1, expectedRemainingPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.quotaWindows.first?.usedPercent ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.quotaWindows.first?.remainingPercent ?? -1, expectedRemainingPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.rawMeta["account.quotaValueText.token-plan-current"], "7,804,244 / 200,000,000")
+        XCTAssertEqual(snapshot.rawMeta["account.tokenPlanUsedPercentSource"], "usedLimitDerived")
+        XCTAssertEqual(Double(snapshot.rawMeta["account.tokenPlanUsedPercentRaw"] ?? "") ?? -1, 0, accuracy: 0.000001)
+        XCTAssertEqual(Double(snapshot.rawMeta["account.tokenPlanUsedPercentDerived"] ?? "") ?? -1, expectedUsedPercent, accuracy: 0.000001)
+    }
+
+    func testXiaomimimoTokenPlanPrefersDerivedPercentWhenAPIReportsFraction() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=abc123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/tokenPlan/detail":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"planCode":"standard","planName":"Standard","currentPeriodEnd":"2026-05-28 23:59:59","expired":false,"enableAutoRenew":false}}"#.utf8)
+                )
+            case "/api/v1/tokenPlan/usage":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"usage":{"percent":0.03902122,"items":[{"name":"plan_total_token","used":7804244,"limit":200000000,"percent":0.03902122}]}}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=abc123; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/session-cookie"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(
+                service: service,
+                adapterID: "xiaomimimo-token-plan",
+                baseURL: "https://platform.xiaomimimo.com",
+                balanceAccount: "platform.xiaomimimo.com/session-cookie"
+            ),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        let expectedUsedPercent = 3.902122
+
+        XCTAssertEqual(snapshot.used ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.quotaWindows.first?.usedPercent ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(Double(snapshot.rawMeta["account.tokenPlanUsedPercentRaw"] ?? "") ?? -1, 0.03902122, accuracy: 0.000001)
+        XCTAssertEqual(Double(snapshot.rawMeta["account.tokenPlanUsedPercentDerived"] ?? "") ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.rawMeta["account.tokenPlanUsedPercentSource"], "usedLimitDerived")
+    }
+
+    func testXiaomimimoTokenPlanFallsBackToPositiveLimitItemWhenNamesChange() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=abc123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/tokenPlan/detail":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"planCode":"standard","planName":"Standard","currentPeriodEnd":"2026-05-28 23:59:59","expired":false,"enableAutoRenew":false}}"#.utf8)
+                )
+            case "/api/v1/tokenPlan/usage":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"usage":{"items":[{"name":"placeholder_item","used":0,"limit":0,"percent":0},{"name":"mystery_package","used":7804244,"limit":200000000,"percent":0.03902122}]}}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=abc123; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/session-cookie"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(
+                service: service,
+                adapterID: "xiaomimimo-token-plan",
+                baseURL: "https://platform.xiaomimimo.com",
+                balanceAccount: "platform.xiaomimimo.com/session-cookie"
+            ),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        let expectedUsedPercent = 3.902122
+
+        XCTAssertEqual(snapshot.used ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.quotaWindows.first?.usedPercent ?? -1, expectedUsedPercent, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.rawMeta["account.tokenPlanUsageName"], "mystery_package")
+        XCTAssertEqual(snapshot.rawMeta["account.quotaValueText.token-plan-current"], "7,804,244 / 200,000,000")
+    }
+
     func testXiaomimimoCookieAutoDetectionFallsBackToParentDomain() async throws {
         RelayMockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=cookie123; userid=20002")
