@@ -384,8 +384,8 @@ struct MenuContentView: View {
         let snapshot = viewModel.snapshots[provider.id]
         let error = viewModel.errors[provider.id]
 
-        // menubar 模型卡入口：官方模型走百分比卡，第三方走余额卡。
-        if provider.family == .official || provider.type == .kimi {
+        // menubar 模型卡入口：官方模型和 quotaPercent relay 走百分比卡，其余第三方走余额卡。
+        if provider.family == .official || provider.type == .kimi || provider.relayDisplayMode == .quotaPercent {
             let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
             let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
             let stale = snapshot?.valueFreshness == .cachedFallback
@@ -395,14 +395,16 @@ struct MenuContentView: View {
 
             PercentageModelCard(
                 title: displayName(for: provider),
-                planType: monitorPlanType(for: provider, snapshot: snapshot),
+                planType: cardPlanType(for: provider, snapshot: snapshot),
                 iconName: iconName(for: provider),
                 iconFallback: fallbackIcon(for: provider),
-                subtitle: officialAccountSubtitle(
-                    providerType: provider.type,
-                    snapshot: snapshot,
-                    codexTeamAliases: codexTeamAliases
-                ),
+                subtitle: provider.family == .official
+                    ? officialAccountSubtitle(
+                        providerType: provider.type,
+                        snapshot: snapshot,
+                        codexTeamAliases: codexTeamAliases
+                    )
+                    : relayQuotaSubtitle(snapshot: snapshot),
                 status: status,
                 metrics: buildPercentageMetricDisplays(
                     from: visibleMetrics,
@@ -423,6 +425,7 @@ struct MenuContentView: View {
             let amountValue = displayedAmountValue(provider: provider, snapshot: snapshot)
             AmountModelCard(
                 title: displayName(for: provider),
+                planType: cardPlanType(for: provider, snapshot: snapshot),
                 iconName: iconName(for: provider),
                 iconFallback: fallbackIcon(for: provider),
                 status: status,
@@ -449,7 +452,7 @@ struct MenuContentView: View {
 
         return PercentageModelCard(
             title: slot.title,
-            planType: monitorPlanType(for: provider, snapshot: slot.snapshot),
+            planType: cardPlanType(for: provider, snapshot: slot.snapshot),
             iconName: "menu_codex_icon",
             iconFallback: "terminal.fill",
             subtitle: officialAccountSubtitle(
@@ -488,7 +491,7 @@ struct MenuContentView: View {
 
         return PercentageModelCard(
             title: slot.title,
-            planType: monitorPlanType(for: provider, snapshot: slot.snapshot),
+            planType: cardPlanType(for: provider, snapshot: slot.snapshot),
             iconName: iconName(for: provider),
             iconFallback: fallbackIcon(for: provider),
             subtitle: officialAccountSubtitle(
@@ -634,16 +637,25 @@ struct MenuContentView: View {
         }
     }
 
-    private func monitorPlanType(for provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
-        guard provider.family == .official else { return nil }
-        let showsPlanType = provider.officialConfig?.showPlanTypeInMenuBar
-            ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).showPlanTypeInMenuBar
-        guard showsPlanType else { return nil }
+    private func cardPlanType(for provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
+        if provider.family == .official {
+            let showsPlanType = provider.officialConfig?.showPlanTypeInMenuBar
+                ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).showPlanTypeInMenuBar
+            guard showsPlanType else { return nil }
 
-        return PlanTypeDisplayFormatter.resolvedPlanType(
-            providerType: provider.type,
-            extrasPlanType: snapshot?.extras["planType"],
-            rawPlanType: snapshot?.rawMeta["planType"]
+            return PlanTypeDisplayFormatter.resolvedPlanType(
+                providerType: provider.type,
+                extrasPlanType: snapshot?.extras["planType"],
+                rawPlanType: snapshot?.rawMeta["planType"]
+            )
+        }
+
+        return PlanTypeDisplayFormatter.normalizedPlanType(
+            snapshot?.extras["planType"],
+            providerType: provider.type
+        ) ?? PlanTypeDisplayFormatter.normalizedPlanType(
+            snapshot?.rawMeta["planType"],
+            providerType: provider.type
         )
     }
 
@@ -846,9 +858,7 @@ struct MenuContentView: View {
             }
         } else if provider.family == .official && provider.type == .claude {
             let slots = viewModel.claudeSlotViewModels()
-            if slots.isEmpty {
-                providerCard(provider)
-            } else {
+            if !slots.isEmpty {
                 ForEach(slots) { slot in
                     claudeSlotCard(slot, provider: provider)
                 }
@@ -1065,6 +1075,9 @@ struct MenuContentView: View {
             if provider.type == .claude {
                 return claudeQuotaMetrics(provider: provider, snapshot: snapshot)
             }
+            if provider.relayDisplayMode == .quotaPercent {
+                return relayQuotaMetrics(provider: provider, snapshot: snapshot)
+            }
             return snapshot.quotaWindows
                 .sorted { metricRank($0.kind) < metricRank($1.kind) }
                 .map {
@@ -1079,6 +1092,22 @@ struct MenuContentView: View {
                 }
         }
         return []
+    }
+
+    private func relayQuotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot) -> [QuotaMetric] {
+        snapshot.quotaWindows
+            .sorted { metricRank($0.kind) < metricRank($1.kind) }
+            .map { window in
+                let displayPercent = provider.displaysUsedQuota ? clamp(window.usedPercent) : clamp(window.remainingPercent)
+                return QuotaMetric(
+                    id: window.id,
+                    title: metricTitle(for: window, provider: provider),
+                    displayPercent: displayPercent,
+                    healthPercent: clamp(window.remainingPercent),
+                    resetAt: window.resetAt,
+                    valueTextOverride: snapshot.rawMeta["quotaValueText.\(window.id)"]
+                )
+            }
     }
 
     private func placeholderQuotaMetrics(provider: ProviderDescriptor) -> [QuotaMetric] {
@@ -1201,6 +1230,18 @@ struct MenuContentView: View {
                 )
             ]
         case .relay, .open, .dragon:
+            if provider.relayDisplayMode == .quotaPercent {
+                return [
+                    QuotaMetric(
+                        id: "\(provider.id)-placeholder-current-plan",
+                        title: relayTokenPlanMetricTitle("Current Plan", provider: provider),
+                        displayPercent: 0,
+                        healthPercent: 0,
+                        resetAt: nil,
+                        valueTextOverride: "0 / 0"
+                    )
+                ]
+            }
             return []
         }
     }
@@ -1349,10 +1390,33 @@ struct MenuContentView: View {
                window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "overall" {
                 baseTitle = viewModel.text(.quotaWeekly)
             } else {
-                baseTitle = window.title
+                baseTitle = relayTokenPlanMetricTitle(window.title, provider: provider)
             }
         }
         return placeholderMetricTitle(baseTitle, provider: provider)
+    }
+
+    private func relayTokenPlanMetricTitle(_ rawTitle: String, provider: ProviderDescriptor) -> String {
+        let normalizedAdapterID = provider.relayConfig?.adapterID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedTitle = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedAdapterID == "xiaomimimo-token-plan" else { return rawTitle }
+        if normalizedTitle == "current plan" {
+            return viewModel.localizedText("当前套餐", "Current Plan")
+        }
+        return rawTitle
+    }
+
+    private func relayQuotaSubtitle(snapshot: UsageSnapshot?) -> String? {
+        guard let raw = snapshot?.rawMeta["account.tokenPlanCurrentPeriodEnd"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        switch viewModel.language {
+        case .zhHans:
+            return "有效期至 \(raw) (UTC)"
+        case .en:
+            return "Valid until \(raw) (UTC)"
+        }
     }
 
     private func localizedTraeMetricTitle(_ rawTitle: String) -> String {
@@ -1736,6 +1800,7 @@ private struct PercentageMetricView: View {
 
 private struct AmountModelCard: View {
     let title: String
+    let planType: String?
     let iconName: String
     let iconFallback: String
     let status: CardStatus
@@ -1751,13 +1816,13 @@ private struct AmountModelCard: View {
         // 余额型模型卡（第三方 relay 等）的整体样式。
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                HStack(spacing: 4) {
+                HStack(alignment: .center, spacing: 6) {
                     BundledIconView(name: iconName, fallback: iconFallback, size: 12, iconOpacity: 0.8)
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.80))
-                        .lineSpacing(0)
-                        .lineLimit(1)
+                    ModelTitleWithPlanType(
+                        title: title,
+                        planType: planType,
+                        textColor: Color.white.opacity(0.80)
+                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 

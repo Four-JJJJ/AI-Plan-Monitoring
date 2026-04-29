@@ -18,6 +18,9 @@ actor ClaudeProfileSnapshotService {
     ) async throws -> ClaudeProfileSnapshotResult {
         var credentialsJSON = try ClaudeAccountProfileStore.resolvedCredentialsJSON(for: profile)
         var parsed = try ClaudeAccountProfileStore.parseCredentialsJSON(credentialsJSON)
+        guard ClaudeAccountProfileStore.supportsQuotaMonitoring(parsed) else {
+            throw ProviderError.unauthorizedDetail("inference-only token cannot read Claude quota")
+        }
 
         if needsRefresh(expiresAtMs: parsed.expiresAtMs), parsed.refreshToken != nil {
             if let refreshed = try await refreshCredentials(rawJSON: credentialsJSON, payload: parsed) {

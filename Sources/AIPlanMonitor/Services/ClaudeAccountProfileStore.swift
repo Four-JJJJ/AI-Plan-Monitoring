@@ -558,6 +558,28 @@ final class ClaudeAccountProfileStore {
         return nil
     }
 
+    static func supportsQuotaMonitoring(_ payload: ClaudeParsedCredentialsPayload) -> Bool {
+        payload.scopes.isEmpty || payload.scopes.contains("user:profile")
+    }
+
+    static func supportsQuotaMonitoring(credentialsJSON: String) -> Bool {
+        guard let payload = try? parseCredentialsJSON(credentialsJSON) else {
+            return false
+        }
+        return supportsQuotaMonitoring(payload)
+    }
+
+    static func supportsQuotaMonitoring(profile: ClaudeAccountProfile) -> Bool {
+        if let credentialsJSON = profile.credentialsJSON?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !credentialsJSON.isEmpty {
+            return supportsQuotaMonitoring(credentialsJSON: credentialsJSON)
+        }
+        guard let credentialsJSON = try? resolvedCredentialsJSON(for: profile) else {
+            return false
+        }
+        return supportsQuotaMonitoring(credentialsJSON: credentialsJSON)
+    }
+
     private static func resolveCredentialsJSON(
         source: ClaudeProfileSource,
         configDir: String?,

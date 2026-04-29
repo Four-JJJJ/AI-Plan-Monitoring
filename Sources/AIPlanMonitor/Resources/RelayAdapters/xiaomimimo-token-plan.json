@@ -1,0 +1,39 @@
+{
+  "id": "xiaomimimo-token-plan",
+  "displayName": "Mimo Token Plan",
+  "match": {
+    "hostPatterns": ["platform.xiaomimimo.com", "xiaomimimo.com"],
+    "defaultDisplayName": "Mimo Token Plan",
+    "defaultTokenChannelEnabled": false,
+    "defaultBalanceChannelEnabled": true
+  },
+  "displayMode": "quotaPercent",
+  "setup": {
+    "recommendedBaseURL": "https://platform.xiaomimimo.com",
+    "requiredInputs": ["balanceAuth"],
+    "balanceAuthHint": {
+      "zhHans": "粘贴浏览器请求里的完整 Cookie，通常至少包含 `api-platform_serviceToken`、`userId`、`api-platform_slh`、`api-platform_ph`。模板会自动读取 `/api/v1/tokenPlan/detail` 与 `/api/v1/tokenPlan/usage` 展示套餐用量。",
+      "en": "Paste the full Cookie value from your browser request. It usually includes `api-platform_serviceToken`, `userId`, `api-platform_slh`, and `api-platform_ph`. The template reads `/api/v1/tokenPlan/detail` and `/api/v1/tokenPlan/usage` to display Token Plan usage."
+    }
+  },
+  "authStrategies": [
+    { "kind": "savedCookieHeader" },
+    { "kind": "browserCookieHeader" }
+  ],
+  "balanceRequest": {
+    "method": "GET",
+    "path": "/api/v1/tokenPlan/detail",
+    "authHeader": "Cookie",
+    "authScheme": "",
+    "headers": {
+      "X-Timezone": "Asia/Shanghai"
+    }
+  },
+  "extract": {
+    "remaining": "data.usage.percent",
+    "used": "data.usage.percent",
+    "limit": "100",
+    "unit": "\"%\"",
+    "accountLabel": "data.planName"
+  }
+}

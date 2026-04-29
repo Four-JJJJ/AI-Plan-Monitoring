@@ -67,6 +67,10 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             copy.displayMode = .hybrid
             copy.supportsBrowserFallback = true
             copy.supportsSeparateBalanceAuth = true
+        case "xiaomimimo-token-plan":
+            copy.displayMode = .quotaPercent
+            copy.supportsBrowserFallback = true
+            copy.supportsSeparateBalanceAuth = true
         case "generic-newapi", "deepseek", "hongmacc", "xiaomimimo", "moonshot", "minimax":
             copy.displayMode = .balance
             copy.supportsBrowserFallback = true
@@ -89,6 +93,11 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             return .init(
                 zhHans: "优先确认 API Key 与后台访问令牌分别填写正确；该站点可同时展示 token 配额和账户余额。",
                 en: "Confirm the API key and dashboard access token separately. This site can expose both token quota and account balance."
+            )
+        case "xiaomimimo-token-plan":
+            return .init(
+                zhHans: "该模板读取 Token Plan 套餐详情与用量接口，展示套餐名称、到期时间和当前套餐用量；如果测试连接失败，优先确认浏览器里 platform.xiaomimimo.com 仍处于登录状态。",
+                en: "This template reads Token Plan detail and usage endpoints to display plan name, expiration time, and current usage. If testing fails, first confirm platform.xiaomimimo.com is still logged in in your browser."
             )
         case "deepseek", "hongmacc", "xiaomimimo", "moonshot", "minimax":
             return .init(

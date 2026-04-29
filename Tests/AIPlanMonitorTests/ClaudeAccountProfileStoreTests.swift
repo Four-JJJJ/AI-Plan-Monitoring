@@ -544,6 +544,48 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
         XCTAssertEqual(profiles.first?.credentialFingerprint, fingerprint)
     }
 
+    func testSupportsQuotaMonitoringReturnsTrueWhenUserProfileScopeExists() throws {
+        let profile = ClaudeAccountProfile(
+            slotID: .a,
+            displayName: "Claude A",
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: sampleCredentialsJSON(
+                accountID: "acc-monitorable",
+                email: "monitorable@example.com",
+                accessToken: "access-monitorable"
+            ),
+            accountId: "acc-monitorable",
+            accountEmail: "monitorable@example.com",
+            credentialFingerprint: "fingerprint-a",
+            lastImportedAt: Date(),
+            isCurrentSystemAccount: false
+        )
+
+        XCTAssertTrue(ClaudeAccountProfileStore.supportsQuotaMonitoring(profile: profile))
+    }
+
+    func testSupportsQuotaMonitoringReturnsFalseForInferenceOnlyScopes() {
+        let profile = ClaudeAccountProfile(
+            slotID: .a,
+            displayName: "Claude A",
+            source: .manualCredentials,
+            configDir: nil,
+            credentialsJSON: sampleInferenceOnlyCredentialsJSON(
+                accountID: "acc-proxy",
+                email: "proxy@example.com",
+                accessToken: "access-proxy"
+            ),
+            accountId: "acc-proxy",
+            accountEmail: "proxy@example.com",
+            credentialFingerprint: "fingerprint-b",
+            lastImportedAt: Date(),
+            isCurrentSystemAccount: true
+        )
+
+        XCTAssertFalse(ClaudeAccountProfileStore.supportsQuotaMonitoring(profile: profile))
+    }
+
     private func makeStore() -> ClaudeAccountProfileStore {
         let path = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("claude-profile-tests-\(UUID().uuidString).json")
@@ -597,6 +639,24 @@ final class ClaudeAccountProfileStoreTests: XCTestCase {
             "ui": [
                 "theme": "dark"
             ]
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func sampleInferenceOnlyCredentialsJSON(
+        accountID: String,
+        email: String,
+        accessToken: String
+    ) -> String {
+        let root: [String: Any] = [
+            "claudeAiOauth": [
+                "accessToken": accessToken,
+                "subscriptionType": "pro",
+                "scopes": ["user:inference"]
+            ],
+            "accountId": accountID,
+            "email": email
         ]
         let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         return String(data: data, encoding: .utf8)!

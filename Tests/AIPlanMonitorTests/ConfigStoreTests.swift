@@ -8,6 +8,7 @@ final class ConfigStoreTests: XCTestCase {
 
         var config = AppConfig.default
         config.language = .en
+        config.claudeStatusBarDisplaySlotID = .b
         if let codexIndex = config.providers.firstIndex(where: { $0.id == "codex-official" }) {
             config.providers[codexIndex].enabled = true
         }
@@ -20,6 +21,7 @@ final class ConfigStoreTests: XCTestCase {
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.language, .en)
+        XCTAssertEqual(loaded.claudeStatusBarDisplaySlotID, .b)
         XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
     }
 
@@ -85,6 +87,7 @@ final class ConfigStoreTests: XCTestCase {
         config.statusBarMultiUsageEnabled = true
         config.statusBarProviderID = "codex-official"
         config.statusBarMultiProviderIDs = ["codex-official", "claude-official"]
+        config.claudeStatusBarDisplaySlotID = .b
         config.statusBarAppearanceMode = .dark
         config.statusBarDisplayStyle = .barNamePercent
         if let codexIndex = config.providers.firstIndex(where: { $0.id == "codex-official" }) {
@@ -103,6 +106,7 @@ final class ConfigStoreTests: XCTestCase {
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.statusBarProviderID, "codex-official")
+        XCTAssertEqual(loaded.claudeStatusBarDisplaySlotID, .b)
         XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
         XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "claude-official"])
         XCTAssertEqual(loaded.statusBarAppearanceMode, .dark)

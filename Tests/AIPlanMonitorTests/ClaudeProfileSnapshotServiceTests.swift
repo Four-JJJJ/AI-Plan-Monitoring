@@ -121,6 +121,44 @@ final class ClaudeProfileSnapshotServiceTests: XCTestCase {
         }
     }
 
+    func testFetchSnapshotRejectsInferenceOnlyCredentialsWithoutNetworkRequest() async {
+        ClaudeSnapshotMockURLProtocol.requestHandler = { _ in
+            XCTFail("network request should not happen for inference-only credentials")
+            throw URLError(.badURL)
+        }
+
+        let service = makeService()
+        let descriptor = ProviderDescriptor.defaultOfficialClaude()
+        let profile = ClaudeAccountProfile(
+            slotID: .a,
+            displayName: "Claude A",
+            source: .manualCredentials,
+            configDir: "/tmp/claude-a",
+            credentialsJSON: sampleInferenceOnlyCredentialsJSON(
+                accountID: "acc-inference-only",
+                email: "proxy@example.com",
+                accessToken: "access-inference-only"
+            ),
+            accountId: "acc-inference-only",
+            accountEmail: "proxy@example.com",
+            credentialFingerprint: ClaudeAccountProfileStore.credentialFingerprint(for: "access-inference-only"),
+            lastImportedAt: Date(),
+            isCurrentSystemAccount: true
+        )
+
+        do {
+            _ = try await service.fetchSnapshot(profile: profile, descriptor: descriptor)
+            XCTFail("expected unauthorizedDetail error")
+        } catch let error as ProviderError {
+            guard case .unauthorizedDetail(let detail) = error else {
+                return XCTFail("unexpected provider error: \(error)")
+            }
+            XCTAssertEqual(detail, "inference-only token cannot read Claude quota")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     private func makeService() -> ClaudeProfileSnapshotService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ClaudeSnapshotMockURLProtocol.self]
@@ -173,6 +211,24 @@ final class ClaudeProfileSnapshotServiceTests: XCTestCase {
         }
         let root: [String: Any] = [
             "claudeAiOauth": oauth,
+            "accountId": accountID,
+            "email": email
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func sampleInferenceOnlyCredentialsJSON(
+        accountID: String,
+        email: String,
+        accessToken: String
+    ) -> String {
+        let root: [String: Any] = [
+            "claudeAiOauth": [
+                "accessToken": accessToken,
+                "subscriptionType": "pro",
+                "scopes": ["user:inference"]
+            ],
             "accountId": accountID,
             "email": email
         ]

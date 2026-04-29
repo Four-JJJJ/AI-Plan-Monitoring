@@ -223,6 +223,15 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(manifest.id, "xiaomimimo")
     }
 
+    func testRegistryMatchesXiaomimimoTokenPlanManifestWhenPreferred() {
+        let manifest = RelayAdapterRegistry.shared.manifest(
+            for: "https://platform.xiaomimimo.com",
+            preferredID: "xiaomimimo-token-plan"
+        )
+        XCTAssertEqual(manifest.id, "xiaomimimo-token-plan")
+        XCTAssertEqual(manifest.displayMode, .quotaPercent)
+    }
+
     func testRegistryMatchesMoonshotManifest() {
         let manifest = RelayAdapterRegistry.shared.manifest(for: "https://platform.moonshot.cn")
         XCTAssertEqual(manifest.id, "moonshot")
@@ -749,6 +758,113 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.remaining ?? -1, 88.56, accuracy: 0.001)
         XCTAssertEqual(snapshot.unit, "CNY")
         XCTAssertEqual(snapshot.rawMeta["account.endpointPath"], "/api/v1/balance")
+    }
+
+    func testXiaomimimoCarriesTokenPlanAcrossProbeRequests() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "platform_serviceToken=abc123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/userProfile":
+                return (
+                    response,
+                    Data(#"{"data":{"nickname":"mimo-user","currentTokenPlan":{"plan_name":"token-plan-standard"}}}"#.utf8)
+                )
+            case "/api/v1/balance":
+                return (
+                    response,
+                    Data(#"{"payload":{"wallet":{"available_amount":"88.56"},"usage":{"monthly_spend":"1.44"}}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("platform_serviceToken=abc123; userId=10001", service: service, account: "platform.xiaomimimo.com/system-token"))
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 88.56, accuracy: 0.001)
+        XCTAssertEqual(snapshot.used ?? -1, 1.44, accuracy: 0.001)
+        XCTAssertEqual(snapshot.extras["planType"], "Standard")
+        XCTAssertEqual(snapshot.rawMeta["planType"], "Standard")
+        XCTAssertEqual(snapshot.rawMeta["account.planType"], "Standard")
+        XCTAssertTrue(snapshot.note.contains("Plan Standard"))
+    }
+
+    func testXiaomimimoTokenPlanFetchBuildsQuotaWindow() async throws {
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "api-platform_serviceToken=abc123; userId=10001")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/v1/tokenPlan/detail":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"planCode":"standard","planName":"Standard","currentPeriodEnd":"2026-05-28 23:59:59","expired":false,"enableAutoRenew":false}}"#.utf8)
+                )
+            case "/api/v1/tokenPlan/usage":
+                return (
+                    response,
+                    Data(#"{"code":0,"message":"","data":{"monthUsage":{"percent":0,"items":[{"name":"month_total_token","used":0,"limit":200000000,"percent":0}]},"usage":{"percent":0.0,"items":[{"name":"plan_total_token","used":0,"limit":200000000,"percent":0.0},{"name":"compensation_total_token","used":0,"limit":0,"percent":0}]}}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "api-platform_serviceToken=abc123; userId=10001",
+                service: service,
+                account: "platform.xiaomimimo.com/session-cookie"
+            )
+        )
+
+        let provider = RelayProvider(
+            descriptor: makeRelayDescriptor(
+                service: service,
+                adapterID: "xiaomimimo-token-plan",
+                baseURL: "https://platform.xiaomimimo.com",
+                balanceAccount: "platform.xiaomimimo.com/session-cookie"
+            ),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService()
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.unit, "%")
+        XCTAssertEqual(snapshot.remaining ?? -1, 100, accuracy: 0.001)
+        XCTAssertEqual(snapshot.used ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.limit ?? -1, 100, accuracy: 0.001)
+        XCTAssertEqual(snapshot.extras["planType"], "Standard")
+        XCTAssertEqual(snapshot.rawMeta["account.tokenPlanCurrentPeriodEnd"], "2026-05-28 23:59:59")
+        XCTAssertEqual(snapshot.rawMeta["account.quotaValueText.token-plan-current"], "0 / 200,000,000")
+        XCTAssertEqual(snapshot.quotaWindows.count, 1)
+        XCTAssertEqual(snapshot.quotaWindows.first?.title, "Current Plan")
+        XCTAssertEqual(snapshot.quotaWindows.first?.usedPercent ?? -1, 0, accuracy: 0.001)
     }
 
     func testXiaomimimoCookieAutoDetectionFallsBackToParentDomain() async throws {
@@ -1591,7 +1707,8 @@ final class RelayProviderTests: XCTestCase {
     private func makeRelayDescriptor(
         service: String,
         adapterID: String,
-        baseURL: String
+        baseURL: String,
+        balanceAccount: String? = nil
     ) -> ProviderDescriptor {
         let host = URL(string: baseURL)?.host ?? "relay.example"
         return ProviderDescriptor(
@@ -1608,7 +1725,11 @@ final class RelayProviderTests: XCTestCase {
                 baseURL: baseURL,
                 tokenChannelEnabled: false,
                 balanceChannelEnabled: true,
-                balanceAuth: AuthConfig(kind: .bearer, keychainService: service, keychainAccount: "\(host)/system-token"),
+                balanceAuth: AuthConfig(
+                    kind: .bearer,
+                    keychainService: service,
+                    keychainAccount: balanceAccount ?? "\(host)/system-token"
+                ),
                 manualOverrides: nil
             )
         )

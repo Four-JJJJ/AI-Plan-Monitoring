@@ -534,6 +534,7 @@ struct AppConfig: Codable, Equatable {
     var launchAtLoginEnabled: Bool
     var simplifiedRelayConfig: Bool
     var showOfficialAccountEmailInMenuBar: Bool
+    var claudeStatusBarDisplaySlotID: CodexSlotID?
     var statusBarProviderID: String?
     var statusBarMultiUsageEnabled: Bool
     var statusBarMultiProviderIDs: [String]
@@ -546,6 +547,7 @@ struct AppConfig: Codable, Equatable {
         launchAtLoginEnabled: Bool = false,
         simplifiedRelayConfig: Bool = true,
         showOfficialAccountEmailInMenuBar: Bool = false,
+        claudeStatusBarDisplaySlotID: CodexSlotID? = nil,
         statusBarProviderID: String? = nil,
         statusBarMultiUsageEnabled: Bool = false,
         statusBarMultiProviderIDs: [String]? = nil,
@@ -559,6 +561,7 @@ struct AppConfig: Codable, Equatable {
         self.launchAtLoginEnabled = launchAtLoginEnabled
         self.simplifiedRelayConfig = simplifiedRelayConfig
         self.showOfficialAccountEmailInMenuBar = showOfficialAccountEmailInMenuBar
+        self.claudeStatusBarDisplaySlotID = claudeStatusBarDisplaySlotID
         self.statusBarProviderID = resolvedStatusProviderID
         self.statusBarMultiUsageEnabled = statusBarMultiUsageEnabled
         let decodedMultiProviderIDs = statusBarMultiProviderIDs
@@ -600,6 +603,7 @@ struct AppConfig: Codable, Equatable {
         case launchAtLoginEnabled
         case simplifiedRelayConfig
         case showOfficialAccountEmailInMenuBar
+        case claudeStatusBarDisplaySlotID
         case statusBarProviderID
         case statusBarMultiUsageEnabled
         case statusBarMultiProviderIDs
@@ -673,6 +677,7 @@ struct AppConfig: Codable, Equatable {
         self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
         self.simplifiedRelayConfig = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig) ?? true
         self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
+        self.claudeStatusBarDisplaySlotID = try container.decodeIfPresent(CodexSlotID.self, forKey: .claudeStatusBarDisplaySlotID)
         let decodedProviders = try container.decodeIfPresent(LossyProviderDescriptorArray.self, forKey: .providers)?.values
             ?? AppConfig.default.providers
         self.providers = decodedProviders.map { $0.normalized() }
@@ -786,6 +791,15 @@ extension ProviderDescriptor {
                 }
                 if relay.adapterID == "generic-newapi" {
                     relay.manualOverrides = Self.migrateGenericNewAPIDefaultOverride(relay.manualOverrides)
+                }
+                let effectiveManifest = RelayAdapterRegistry.shared.manifest(
+                    for: normalizedBaseURL,
+                    preferredID: relay.adapterID
+                )
+                if relay.adapterID != "generic-newapi",
+                   relay.manualOverrides != nil,
+                   Self.looksLikeTemplateDefaultOverride(relay.manualOverrides, manifest: effectiveManifest) {
+                    relay.manualOverrides = nil
                 }
                 relay.balanceAuth = relay.balanceAuth.withFallback(
                     service: copy.auth.keychainService ?? KeychainService.defaultServiceName,
@@ -1115,7 +1129,7 @@ extension ProviderDescriptor {
             return "dragoncode.codes/auth_token"
         case "hongmacc":
             return "hongmacc.com/auth_token"
-        case "xiaomimimo":
+        case "xiaomimimo", "xiaomimimo-token-plan":
             return "platform.xiaomimimo.com/session-cookie"
         case "moonshot":
             return "platform.moonshot.cn/auth_token"
@@ -1274,6 +1288,75 @@ extension ProviderDescriptor {
         override.limitExpression = "div(add(data.quota,data.used_quota),50000)"
         override.unitExpression = "USD"
         return override
+    }
+
+    private static func looksLikeTemplateDefaultOverride(
+        _ override: RelayManualOverride?,
+        manifest: RelayAdapterManifest
+    ) -> Bool {
+        guard let override else { return true }
+
+        func normalized(_ value: String?) -> String {
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        }
+
+        func normalizedHeaders(_ headers: [String: String]?) -> [String: String] {
+            guard let headers else { return [:] }
+            return Dictionary(uniqueKeysWithValues: headers.map { key, value in
+                (
+                    key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                )
+            })
+        }
+
+        let request = manifest.balanceRequest
+        let extract = manifest.extract
+
+        let defaultMethod = normalized(request.method)
+        let defaultAuthHeader = normalized(request.authHeader ?? "Authorization")
+        let defaultAuthScheme = normalized(request.authScheme ?? "Bearer")
+        let defaultEndpoint = normalized(request.path)
+        let defaultRemaining = normalized(extract.remaining)
+        let defaultUsed = normalized(extract.used)
+        let defaultLimit = normalized(extract.limit)
+        let defaultSuccess = normalized(extract.success)
+        let defaultUnit = normalized(extract.unit)
+        let defaultAccountLabel = normalized(extract.accountLabel)
+        let defaultUserID = normalized(request.userID)
+        let defaultUserIDHeader = normalized(request.userIDHeader ?? "New-Api-User")
+        let defaultBody = normalized(request.bodyJSON)
+        let defaultHeaders = normalizedHeaders(request.headers)
+
+        let method = normalized(override.requestMethod)
+        let authHeader = normalized(override.authHeader)
+        let authScheme = normalized(override.authScheme)
+        let endpoint = normalized(override.endpointPath)
+        let remaining = normalized(override.remainingExpression)
+        let used = normalized(override.usedExpression)
+        let limit = normalized(override.limitExpression)
+        let success = normalized(override.successExpression)
+        let unit = normalized(override.unitExpression)
+        let accountLabel = normalized(override.accountLabelExpression)
+        let userID = normalized(override.userID)
+        let userIDHeader = normalized(override.userIDHeader)
+        let body = normalized(override.requestBodyJSON)
+        let staticHeaders = normalizedHeaders(override.staticHeaders)
+
+        return (method.isEmpty || method == defaultMethod) &&
+            (authHeader.isEmpty || authHeader == defaultAuthHeader) &&
+            (authScheme.isEmpty || authScheme == defaultAuthScheme) &&
+            (endpoint.isEmpty || endpoint == defaultEndpoint) &&
+            (remaining.isEmpty || remaining == defaultRemaining) &&
+            (used.isEmpty || used == defaultUsed) &&
+            (limit.isEmpty || limit == defaultLimit) &&
+            (success.isEmpty || success == defaultSuccess) &&
+            (unit.isEmpty || unit == defaultUnit) &&
+            (accountLabel.isEmpty || accountLabel == defaultAccountLabel) &&
+            (userID.isEmpty || userID == defaultUserID) &&
+            (userIDHeader.isEmpty || userIDHeader == defaultUserIDHeader) &&
+            (body.isEmpty || body == defaultBody) &&
+            (staticHeaders.isEmpty || staticHeaders == defaultHeaders)
     }
 
     var relayManifest: RelayAdapterManifest? {

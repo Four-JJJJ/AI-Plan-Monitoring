@@ -334,6 +334,10 @@ final class AppViewModel {
         config.showOfficialAccountEmailInMenuBar
     }
 
+    var claudeStatusBarDisplaySlotID: CodexSlotID? {
+        config.claudeStatusBarDisplaySlotID
+    }
+
     func thirdPartyBarPercent(for providerID: String) -> Double? {
         thirdPartyBalanceBaselineTracker.percent(for: providerID)
     }
@@ -505,6 +509,32 @@ final class AppViewModel {
         config.providers[idx] = provider
         try? configStore.save(config)
         notifyStatusBarDisplayConfigChanged()
+    }
+
+    func claudeStatusBarResolvedDisplaySlotID() -> CodexSlotID? {
+        resolvedClaudeStatusBarDisplaySlotID()
+    }
+
+    func isClaudeStatusBarDisplaySlot(slotID: CodexSlotID) -> Bool {
+        resolvedClaudeStatusBarDisplaySlotID() == slotID
+    }
+
+    func setClaudeStatusBarDisplaySlotID(_ slotID: CodexSlotID?) {
+        let normalized = normalizedClaudeStatusBarDisplaySlotID(slotID)
+        let previousConfiguredSlotID = config.claudeStatusBarDisplaySlotID
+        let previousResolvedSlotID = resolvedClaudeStatusBarDisplaySlotID()
+        guard previousConfiguredSlotID != normalized else {
+            triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: resolvedClaudeStatusBarDisplaySlotID())
+            return
+        }
+        config.claudeStatusBarDisplaySlotID = normalized
+        normalizeStatusBarSelections()
+        try? configStore.save(config)
+        triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: resolvedClaudeStatusBarDisplaySlotID())
+        if previousResolvedSlotID != resolvedClaudeStatusBarDisplaySlotID()
+            || previousConfiguredSlotID != config.claudeStatusBarDisplaySlotID {
+            notifyStatusBarDisplayConfigChanged()
+        }
     }
 
     func statusBarProvider() -> ProviderDescriptor? {
@@ -1136,7 +1166,7 @@ final class AppViewModel {
     }
 
     func claudeProfilesForSettings() -> [ClaudeAccountProfile] {
-        claudeProfiles.sorted { $0.slotID < $1.slotID }
+        claudeDisplayableProfiles()
     }
 
     func refreshSettingsProfileState() {
@@ -1204,7 +1234,9 @@ final class AppViewModel {
             triggerClaudeProfileSnapshotPrefetchIfNeeded()
         }
         let now = Date()
+        let visibleSlotIDs = Self.visibleClaudeMonitoringSlotIDs(profiles: claudeProfiles)
         return mergedClaudeSlotsForMenu()
+            .filter { visibleSlotIDs.contains($0.slotID) }
             .sorted { lhs, rhs in
                 if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
                 if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
@@ -1283,6 +1315,8 @@ final class AppViewModel {
     }
 
     func removeClaudeProfile(slotID: CodexSlotID) {
+        let previousConfiguredDisplaySlotID = config.claudeStatusBarDisplaySlotID
+        let previousResolvedDisplaySlotID = resolvedClaudeStatusBarDisplaySlotID()
         syncClaudeProfilesCurrentState()
         claudeProfiles = claudeProfileStore.removeProfile(slotID: slotID)
         claudeSlots = claudeSlotStore.remove(slotID: slotID)
@@ -1290,6 +1324,15 @@ final class AppViewModel {
         claudePrefetchInFlightSlots.remove(slotID)
         claudeInactiveRefreshRetryState.remove(slotID: slotID)
         setClaudeSwitchFeedback(nil, for: slotID)
+        normalizeStatusBarSelections()
+        if config.claudeStatusBarDisplaySlotID != previousConfiguredDisplaySlotID {
+            try? configStore.save(config)
+        }
+        let resolvedDisplaySlotID = resolvedClaudeStatusBarDisplaySlotID()
+        if resolvedDisplaySlotID != previousResolvedDisplaySlotID {
+            triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: resolvedDisplaySlotID)
+            notifyStatusBarDisplayConfigChanged()
+        }
     }
 
     func requestNotificationPermission() {
@@ -2326,6 +2369,7 @@ final class AppViewModel {
             config.statusBarMultiProviderIDs,
             providers: config.providers
         ).filter { enabledProviderIDs.contains($0) }
+        normalizeClaudeStatusBarDisplaySelection()
     }
 
     private func pruneThirdPartyBalanceBaselines() {
@@ -3408,6 +3452,121 @@ final class AppViewModel {
         return codexProfiles[index]
     }
 
+    func claudeStatusBarDisplaySnapshot() -> UsageSnapshot? {
+        if let slotID = resolvedClaudeStatusBarDisplaySlotID(),
+           let slot = claudeSlotViewModels(refreshFromStore: true, triggerPrefetch: false)
+            .first(where: { $0.slotID == slotID }) {
+            return slot.snapshot
+        }
+        guard let descriptor = claudeOfficialProviderDescriptor() else {
+            return nil
+        }
+        return snapshots[descriptor.id]
+    }
+
+    private func claudeOfficialProviderDescriptor() -> ProviderDescriptor? {
+        config.providers.first(where: { $0.type == .claude && $0.family == .official })
+    }
+
+    private func claudeDisplayableProfiles() -> [ClaudeAccountProfile] {
+        claudeProfiles
+            .filter(Self.canDisplayClaudeMonitoringProfile(_:))
+            .sorted { $0.slotID < $1.slotID }
+    }
+
+    private func resolvedClaudeStatusBarDisplaySlotID() -> CodexSlotID? {
+        Self.resolveClaudeStatusBarDisplaySlotID(
+            configuredSlotID: config.claudeStatusBarDisplaySlotID,
+            profiles: claudeProfiles,
+            slots: claudeSlots
+        )
+    }
+
+    private func normalizedClaudeStatusBarDisplaySlotID(_ slotID: CodexSlotID?) -> CodexSlotID? {
+        guard let slotID else { return nil }
+        let visibleSlotIDs = Self.visibleClaudeMonitoringSlotIDs(profiles: claudeProfiles)
+        guard visibleSlotIDs.contains(slotID) else { return nil }
+        return slotID
+    }
+
+    private func normalizeClaudeStatusBarDisplaySelection() {
+        guard !claudeProfiles.isEmpty else { return }
+        let visibleSlotIDs = Self.visibleClaudeMonitoringSlotIDs(profiles: claudeProfiles)
+        if let selectedSlotID = config.claudeStatusBarDisplaySlotID,
+           !visibleSlotIDs.contains(selectedSlotID) {
+            config.claudeStatusBarDisplaySlotID = nil
+        }
+    }
+
+    private func triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: CodexSlotID?) {
+        guard let slotID,
+              let descriptor = claudeOfficialProviderDescriptor(),
+              let profile = claudeProfiles.first(where: { $0.slotID == slotID }),
+              Self.canDisplayClaudeMonitoringProfile(profile) else {
+            return
+        }
+        guard !profile.isCurrentSystemAccount else {
+            notifyStatusBarDisplayConfigChanged()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.refreshClaudeProfileSnapshotSlot(profile, descriptor: descriptor)
+            self.notifyStatusBarDisplayConfigChanged()
+        }
+    }
+
+    nonisolated static func canDisplayClaudeMonitoringProfile(_ profile: ClaudeAccountProfile) -> Bool {
+        ClaudeAccountProfileStore.supportsQuotaMonitoring(profile: profile)
+    }
+
+    nonisolated static func visibleClaudeMonitoringSlotIDs(profiles: [ClaudeAccountProfile]) -> Set<CodexSlotID> {
+        Set(
+            profiles
+                .filter(canDisplayClaudeMonitoringProfile(_:))
+                .map(\.slotID)
+        )
+    }
+
+    nonisolated static func resolveClaudeStatusBarDisplaySlotID(
+        configuredSlotID: CodexSlotID?,
+        profiles: [ClaudeAccountProfile],
+        slots: [ClaudeAccountSlot]
+    ) -> CodexSlotID? {
+        let monitorableProfiles = profiles.filter(canDisplayClaudeMonitoringProfile(_:))
+        let monitorableSlotIDs = Set(monitorableProfiles.map(\.slotID))
+        if let configuredSlotID, monitorableSlotIDs.contains(configuredSlotID) {
+            return configuredSlotID
+        }
+
+        let currentProfiles = monitorableProfiles
+            .filter(\.isCurrentSystemAccount)
+            .sorted { lhs, rhs in
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+        if let slotID = currentProfiles.first?.slotID {
+            return slotID
+        }
+
+        let lastSeenBySlotID = Dictionary(uniqueKeysWithValues: slots.map { ($0.slotID, $0.lastSeenAt) })
+        return monitorableProfiles
+            .sorted { lhs, rhs in
+                let leftSeenAt = lastSeenBySlotID[lhs.slotID] ?? lhs.lastImportedAt
+                let rightSeenAt = lastSeenBySlotID[rhs.slotID] ?? rhs.lastImportedAt
+                if leftSeenAt != rightSeenAt {
+                    return leftSeenAt > rightSeenAt
+                }
+                if lhs.lastImportedAt != rhs.lastImportedAt {
+                    return lhs.lastImportedAt > rhs.lastImportedAt
+                }
+                return lhs.slotID < rhs.slotID
+            }
+            .first?.slotID
+    }
+
     private func markClaudeSnapshotActive(
         _ snapshot: UsageSnapshot,
         preferredSlotID: CodexSlotID? = nil,
@@ -3478,6 +3637,8 @@ final class AppViewModel {
     }
 
     private func syncClaudeProfilesCurrentState(triggerPrefetchOnChange: Bool = true) {
+        let previousConfiguredDisplaySlotID = config.claudeStatusBarDisplaySlotID
+        let previousResolvedDisplaySlotID = resolvedClaudeStatusBarDisplaySlotID()
         let previousProfileSetIdentity = claudeProfileSetIdentity(claudeProfiles)
         let latestProfiles = claudeProfileStore.captureCurrentCredentialsIfNeeded(
             credentialsJSON: claudeDesktopAuthService.currentCredentialsJSON(),
@@ -3491,10 +3652,20 @@ final class AppViewModel {
         claudePrefetchAttemptedIdentity = claudePrefetchAttemptedIdentity.filter { visibleSlotIDs.contains($0.key) }
         claudePrefetchInFlightSlots = claudePrefetchInFlightSlots.intersection(visibleSlotIDs)
         claudeInactiveRefreshRetryState.prune(keeping: visibleSlotIDs)
+        normalizeClaudeStatusBarDisplaySelection()
+
+        if config.claudeStatusBarDisplaySlotID != previousConfiguredDisplaySlotID {
+            try? configStore.save(config)
+        }
 
         if triggerPrefetchOnChange,
            previousProfileSetIdentity != claudeProfileSetIdentity(latestProfiles) {
             triggerClaudeProfileSnapshotPrefetchIfNeeded()
+        }
+        let resolvedDisplaySlotID = resolvedClaudeStatusBarDisplaySlotID()
+        if resolvedDisplaySlotID != previousResolvedDisplaySlotID {
+            triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: resolvedDisplaySlotID)
+            notifyStatusBarDisplayConfigChanged()
         }
     }
 
@@ -3505,7 +3676,7 @@ final class AppViewModel {
     private func refreshClaudeProfileCardsAfterManualRefresh(descriptor: ProviderDescriptor) async {
         syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
         let activeSlotIDs = Set(claudeSlots.filter(\.isActive).map(\.slotID))
-        for profile in claudeProfiles.sorted(by: { $0.slotID < $1.slotID }) where !activeSlotIDs.contains(profile.slotID) {
+        for profile in claudeDisplayableProfiles() where !activeSlotIDs.contains(profile.slotID) {
             _ = await refreshClaudeProfileSnapshotSlot(profile, descriptor: descriptor)
         }
     }
@@ -3514,6 +3685,9 @@ final class AppViewModel {
         _ profile: ClaudeAccountProfile,
         descriptor: ProviderDescriptor
     ) async -> InactiveProfileRefreshResult {
+        guard Self.canDisplayClaudeMonitoringProfile(profile) else {
+            return .skipped
+        }
         if claudePrefetchInFlightSlots.contains(profile.slotID) {
             return .skipped
         }
@@ -3546,6 +3720,9 @@ final class AppViewModel {
             snapshot: snapshot,
             preferredSlotID: profile.slotID
         )
+        if resolvedClaudeStatusBarDisplaySlotID() == profile.slotID {
+            notifyStatusBarDisplayConfigChanged()
+        }
         return .success
     }
 
@@ -3553,8 +3730,12 @@ final class AppViewModel {
         guard let descriptor = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
             return
         }
+        let monitorableProfiles = claudeDisplayableProfiles()
+        guard !monitorableProfiles.isEmpty else {
+            return
+        }
 
-        let preferredActiveSlotID = claudeProfiles
+        let preferredActiveSlotID = monitorableProfiles
             .filter(\.isCurrentSystemAccount)
             .sorted { lhs, rhs in
                 if lhs.lastImportedAt != rhs.lastImportedAt {
@@ -3569,7 +3750,7 @@ final class AppViewModel {
             RuntimeDiagnosticsLimits.claudePrefetchMaxConcurrent - claudePrefetchInFlightSlots.count
         )
         let candidates = ClaudePrefetchPlanner.selectCandidates(
-            profiles: claudeProfiles,
+            profiles: monitorableProfiles,
             preferredActiveSlotID: preferredActiveSlotID,
             activeRuntimeSlotIDs: activeRuntimeSlotIDs,
             inFlightSlots: claudePrefetchInFlightSlots,
@@ -3579,7 +3760,7 @@ final class AppViewModel {
         guard !candidates.isEmpty else {
             return
         }
-        let profilesBySlotID = Dictionary(uniqueKeysWithValues: claudeProfiles.map { ($0.slotID, $0) })
+        let profilesBySlotID = Dictionary(uniqueKeysWithValues: monitorableProfiles.map { ($0.slotID, $0) })
 
         for candidate in candidates {
             guard let profile = profilesBySlotID[candidate.slotID] else {

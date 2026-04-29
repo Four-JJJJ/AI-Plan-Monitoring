@@ -377,8 +377,13 @@ final class StatusBarController: NSObject {
             return "\(Int(percent.rounded()))%"
         }
 
-        guard let snapshot = viewModel.snapshots[provider.id] else {
+        guard let snapshot = statusSnapshot(for: provider) else {
             return ""
+        }
+
+        if provider.relayDisplayMode == .quotaPercent,
+           let percent = preferredPercent(from: snapshot, provider: provider) {
+            return "\(Int(percent.rounded()))%"
         }
 
         if provider.family == .thirdParty {
@@ -463,8 +468,15 @@ final class StatusBarController: NSObject {
            let percent = viewModel.thirdPartyBarPercent(for: provider.id) {
             return percent
         }
-        guard let snapshot = viewModel.snapshots[provider.id] else { return nil }
+        guard let snapshot = statusSnapshot(for: provider) else { return nil }
         return preferredPercent(from: snapshot, provider: provider)
+    }
+
+    private func statusSnapshot(for provider: ProviderDescriptor) -> UsageSnapshot? {
+        if provider.type == .claude, provider.family == .official {
+            return viewModel.claudeStatusBarDisplaySnapshot()
+        }
+        return viewModel.snapshots[provider.id]
     }
 
     private func statusDisplayEntry(

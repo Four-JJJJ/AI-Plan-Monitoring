@@ -94,6 +94,17 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
         let authSource = rawMeta["account.authSource"] ?? rawMeta["token.authSource"]
         rawMeta["relay.displayMode"] = manifest.displayMode.rawValue
+        let resolvedPlanType = balanceChannel?.planType
+        let quotaWindows = balanceChannel?.quotaWindows ?? []
+
+        var extras: [String: String] = [
+            "relayAdapter": manifest.displayName,
+            "relayDisplayMode": manifest.displayMode.rawValue
+        ]
+        if let resolvedPlanType {
+            extras["planType"] = resolvedPlanType
+            rawMeta["planType"] = resolvedPlanType
+        }
 
         return UsageSnapshot(
             source: normalized.id,
@@ -106,15 +117,12 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             unit: unit,
             updatedAt: Date(),
             note: noteParts.isEmpty ? "No detail" : noteParts.joined(separator: " | "),
-            quotaWindows: [],
+            quotaWindows: quotaWindows,
             sourceLabel: "Third-Party",
             accountLabel: balanceChannel?.accountLabel,
             authSourceLabel: authSource,
             diagnosticCode: nil,
-            extras: [
-                "relayAdapter": manifest.displayName,
-                "relayDisplayMode": manifest.displayMode.rawValue
-            ],
+            extras: extras,
             rawMeta: rawMeta
         )
     }
@@ -265,8 +273,18 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
         }
 
+        if manifest.id == "xiaomimimo-token-plan" {
+            return try await attemptXiaomimimoTokenPlanFetch(
+                candidates: candidates,
+                baseURL: baseURL,
+                relayConfig: relayConfig,
+                request: requests.first ?? resolveBalanceRequest(manifest: manifest, relayConfig: relayConfig)
+            )
+        }
+
         var lastError: ProviderError = .missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
     candidateLoop: for candidate in candidates {
+            var harvestedPlanType: String?
             if candidate.source == "savedBearerExpired" {
                 throw ProviderError.unauthorizedDetail("saved bearer token expired")
             }
@@ -278,6 +296,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                         method: request.method,
                         bodyJSON: request.bodyJSON
                     )
+                    if manifest.id == "xiaomimimo",
+                       let extractedPlanType = extractXiaomimimoPlanType(from: root) {
+                        harvestedPlanType = extractedPlanType
+                    }
 
                     let extracted = try await extractAccountValues(
                         root: root,
@@ -285,7 +307,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                         request: request,
                         manifest: manifest,
                         headers: candidate.headers,
-                        candidate: candidate
+                        candidate: candidate,
+                        supplementalPlanType: harvestedPlanType
                     )
 
                     if let persisted = candidate.persistedCredential {
@@ -316,7 +339,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         request: ResolvedRelayRequest,
         manifest: RelayAdapterManifest,
         headers: [String: String],
-        candidate: RelayCredentialCandidate
+        candidate: RelayCredentialCandidate,
+        supplementalPlanType: String? = nil
     ) async throws -> AccountChannelResult {
         if let successExpression = request.successExpression,
            let success = boolValue(for: successExpression, in: root),
@@ -339,7 +363,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
            let mimoFallback = extractXiaomimimoAccountValues(
             root: root,
             request: request,
-            candidate: candidate
+            candidate: candidate,
+            planType: supplementalPlanType ?? extractXiaomimimoPlanType(from: root)
            ) {
             return mimoFallback
         }
@@ -402,6 +427,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             limit: limit,
             unit: unit,
             accountLabel: accountLabel,
+            planType: nil,
+            quotaWindows: [],
             note: note,
             rawMeta: extraMeta
         )
@@ -452,6 +479,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 limit: normalizedLimit,
                 unit: unit,
                 accountLabel: accountLabel,
+                planType: nil,
+                quotaWindows: [],
                 note: "Account remaining \(String(format: "%.2f", normalizedRemaining))",
                 rawMeta: extraMeta
             )
@@ -561,6 +590,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 limit: normalizedLimit,
                 unit: unit,
                 accountLabel: accountLabel,
+                planType: nil,
+                quotaWindows: [],
                 note: "Account remaining \(String(format: "%.2f", normalizedRemaining))",
                 rawMeta: extraMeta
             )
@@ -580,7 +611,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     private func extractXiaomimimoAccountValues(
         root: Any,
         request: ResolvedRelayRequest,
-        candidate: RelayCredentialCandidate
+        candidate: RelayCredentialCandidate,
+        planType: String?
     ) -> AccountChannelResult? {
         let remainingKeys = [
             "available_amount",
@@ -629,22 +661,360 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             in: root
         )
 
+        var rawMeta: [String: String] = [
+            "endpointPath": normalizedPath(request.path),
+            "requestMethod": request.method,
+            "remainingPath": "xiaomimimoRecursiveFallback",
+            "usedPath": request.usedExpression ?? "",
+            "limitPath": request.limitExpression ?? "",
+            "authSource": candidate.source
+        ]
+        if let planType {
+            rawMeta["planType"] = planType
+        }
+
+        var noteParts: [String] = []
+        if let planType {
+            noteParts.append("Plan \(planType)")
+        }
+        noteParts.append("Account remaining \(String(format: "%.2f", remaining))")
+
         return AccountChannelResult(
             remaining: remaining,
             used: used,
             limit: limit,
             unit: "CNY",
             accountLabel: accountLabel,
-            note: "Account remaining \(String(format: "%.2f", remaining))",
-            rawMeta: [
-                "endpointPath": normalizedPath(request.path),
-                "requestMethod": request.method,
-                "remainingPath": "xiaomimimoRecursiveFallback",
-                "usedPath": request.usedExpression ?? "",
-                "limitPath": request.limitExpression ?? "",
-                "authSource": candidate.source
-            ]
+            planType: planType,
+            quotaWindows: [],
+            note: noteParts.joined(separator: " | "),
+            rawMeta: rawMeta
         )
+    }
+
+    private func attemptXiaomimimoTokenPlanFetch(
+        candidates: [RelayCredentialCandidate],
+        baseURL: URL,
+        relayConfig: RelayProviderConfig,
+        request: ResolvedRelayRequest
+    ) async throws -> AccountChannelResult {
+        var lastError: ProviderError = .missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
+
+        for candidate in candidates {
+            if candidate.source == "savedBearerExpired" {
+                throw ProviderError.unauthorizedDetail("saved bearer token expired")
+            }
+
+            do {
+                let headers = candidate.headers.merging(request.staticHeaders, uniquingKeysWith: { _, rhs in rhs })
+                let detailRoot = try await requestJSON(
+                    url: relayURL(baseURL: baseURL, rawPath: "/api/v1/tokenPlan/detail"),
+                    headers: headers,
+                    method: "GET",
+                    bodyJSON: nil
+                )
+                let usageRoot = try await requestJSON(
+                    url: relayURL(baseURL: baseURL, rawPath: "/api/v1/tokenPlan/usage"),
+                    headers: headers,
+                    method: "GET",
+                    bodyJSON: nil
+                )
+
+                let extracted = try extractXiaomimimoTokenPlanValues(
+                    detailRoot: detailRoot,
+                    usageRoot: usageRoot,
+                    candidate: candidate
+                )
+
+                if let persisted = candidate.persistedCredential {
+                    _ = persistTokenCandidate(persisted, auth: relayConfig.balanceAuth)
+                }
+
+                return extracted
+            } catch let error as ProviderError {
+                switch error {
+                case .invalidResponse:
+                    lastError = error
+                    continue
+                case .unauthorized, .unauthorizedDetail:
+                    lastError = error
+                    continue
+                default:
+                    throw error
+                }
+            }
+        }
+
+        throw lastError
+    }
+
+    private func extractXiaomimimoTokenPlanValues(
+        detailRoot: Any,
+        usageRoot: Any,
+        candidate: RelayCredentialCandidate
+    ) throws -> AccountChannelResult {
+        guard let usageItem = extractXiaomimimoTokenPlanUsageItem(from: usageRoot) else {
+            throw ProviderError.invalidResponse("missing xiaomimimo token plan usage item")
+        }
+
+        let usedTokens = coerceDouble(usageItem["used"] ?? 0) ?? 0
+        let limitTokens = coerceDouble(usageItem["limit"] ?? 0) ?? 0
+        let usedPercent = coerceDouble(usageItem["percent"] ?? 0)
+            ?? numericValue(for: "coalesce(data.usage.percent,usage.percent,data.monthUsage.percent,monthUsage.percent)", in: usageRoot)
+            ?? 0
+        let normalizedUsedPercent = min(100, max(0, usedPercent))
+        let remainingPercent = max(0, 100 - normalizedUsedPercent)
+
+        let planType = PlanTypeDisplayFormatter.normalizedPlanType(
+            stringValue(for: "coalesce(data.planName,planName,data.planCode,planCode)", in: detailRoot)
+        )
+        let periodEndRaw = stringValue(for: "coalesce(data.currentPeriodEnd,currentPeriodEnd)", in: detailRoot)
+        let periodEndDate = periodEndRaw.flatMap(parseXiaomimimoTokenPlanDate(_:))
+        let autoRenew = boolValue(for: "coalesce(data.enableAutoRenew,enableAutoRenew)", in: detailRoot) ?? false
+        let valueText = "\(formattedWholeNumber(usedTokens)) / \(formattedWholeNumber(limitTokens))"
+        let windowID = "token-plan-current"
+        let title = "Current Plan"
+
+        var noteParts: [String] = []
+        if let planType {
+            noteParts.append("Plan \(planType)")
+        }
+        noteParts.append(valueText)
+        noteParts.append("Used \(String(format: "%.1f", normalizedUsedPercent))%")
+        if let periodEndRaw, !periodEndRaw.isEmpty {
+            noteParts.append("Valid until \(periodEndRaw) UTC")
+        }
+        if autoRenew {
+            noteParts.append("Auto renew")
+        }
+
+        var rawMeta: [String: String] = [
+            "endpointPath": "/api/v1/tokenPlan/detail,/api/v1/tokenPlan/usage",
+            "requestMethod": "GET",
+            "remainingPath": "data.usage.percent",
+            "usedPath": "data.usage.items.*.used",
+            "limitPath": "data.usage.items.*.limit",
+            "authSource": candidate.source,
+            "quotaValueText.\(windowID)": valueText,
+            "tokenPlanUsageName": (usageItem["name"] as? String) ?? "plan_total_token",
+            "tokenPlanUsed": String(Int(usedTokens.rounded())),
+            "tokenPlanLimit": String(Int(limitTokens.rounded())),
+            "tokenPlanUsedPercent": String(normalizedUsedPercent),
+            "tokenPlanAutoRenew": String(autoRenew)
+        ]
+        if let planType {
+            rawMeta["planType"] = planType
+        }
+        if let periodEndRaw, !periodEndRaw.isEmpty {
+            rawMeta["tokenPlanCurrentPeriodEnd"] = periodEndRaw
+        }
+
+        let quotaWindow = UsageQuotaWindow(
+            id: windowID,
+            title: title,
+            remainingPercent: remainingPercent,
+            usedPercent: normalizedUsedPercent,
+            resetAt: periodEndDate,
+            kind: .custom
+        )
+
+        return AccountChannelResult(
+            remaining: remainingPercent,
+            used: normalizedUsedPercent,
+            limit: 100,
+            unit: "%",
+            accountLabel: periodEndRaw,
+            planType: planType,
+            quotaWindows: [quotaWindow],
+            note: noteParts.joined(separator: " | "),
+            rawMeta: rawMeta
+        )
+    }
+
+    private func extractXiaomimimoTokenPlanUsageItem(from root: Any) -> [String: Any]? {
+        let candidates = [
+            value(at: "data.usage.items", in: root),
+            value(at: "usage.items", in: root),
+            value(at: "data.monthUsage.items", in: root),
+            value(at: "monthUsage.items", in: root)
+        ]
+
+        for candidate in candidates {
+            guard let items = candidate as? [Any], !items.isEmpty else { continue }
+            let dictionaries = items.compactMap { $0 as? [String: Any] }
+            if let matched = dictionaries.first(where: { item in
+                let name = (item["name"] as? String)?.lowercased() ?? ""
+                return name == "plan_total_token" || name == "month_total_token"
+            }) {
+                return matched
+            }
+            if let first = dictionaries.first {
+                return first
+            }
+        }
+
+        return nil
+    }
+
+    private func parseXiaomimimoTokenPlanDate(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: trimmed)
+    }
+
+    private func formattedWholeNumber(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.maximumFractionDigits = 0
+        formatter.minimumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? String(Int(value.rounded()))
+    }
+
+    private func extractXiaomimimoPlanType(from root: Any) -> String? {
+        let prioritizedKeys = [
+            "tokenPlanName",
+            "token_plan_name",
+            "tokenPlanType",
+            "token_plan_type",
+            "tokenPlan",
+            "token_plan",
+            "currentTokenPlan",
+            "current_token_plan",
+            "planName",
+            "plan_name",
+            "planType",
+            "plan_type",
+            "currentPlan",
+            "current_plan",
+            "packageName",
+            "package_name",
+            "subscriptionName",
+            "subscription_name",
+            "subscriptionType",
+            "subscription_type",
+            "tierName",
+            "tier_name",
+            "membershipType",
+            "membership_type",
+            "plan"
+        ]
+
+        for key in prioritizedKeys {
+            guard let rawValue = firstNestedValue(matchingKey: key, in: root),
+                  let normalized = normalizedXiaomimimoPlanType(from: rawValue) else {
+                continue
+            }
+            return normalized
+        }
+
+        return nil
+    }
+
+    private func normalizedXiaomimimoPlanType(from value: Any) -> String? {
+        if let string = value as? String {
+            return normalizedXiaomimimoPlanType(string)
+        }
+        if let number = value as? NSNumber {
+            return normalizedXiaomimimoPlanType(number.stringValue)
+        }
+        if let dict = value as? [String: Any] {
+            let nestedKeys = [
+                "displayName",
+                "display_name",
+                "name",
+                "title",
+                "type",
+                "planName",
+                "plan_name",
+                "planType",
+                "plan_type",
+                "tierName",
+                "tier_name",
+                "levelName",
+                "level_name",
+                "label"
+            ]
+            for key in nestedKeys {
+                guard let nestedValue = dict[key],
+                      let normalized = normalizedXiaomimimoPlanType(from: nestedValue) else {
+                    continue
+                }
+                return normalized
+            }
+            return nil
+        }
+        if let array = value as? [Any] {
+            for item in array {
+                if let normalized = normalizedXiaomimimoPlanType(from: item) {
+                    return normalized
+                }
+            }
+        }
+        return nil
+    }
+
+    private func normalizedXiaomimimoPlanType(_ raw: String) -> String? {
+        let collapsed = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "[_\\-]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty,
+              collapsed.count <= 48,
+              collapsed.lowercased().contains("http") == false else {
+            return nil
+        }
+        guard let normalized = PlanTypeDisplayFormatter.normalizedPlanType(collapsed) else {
+            return nil
+        }
+
+        let lower = normalized.lowercased()
+        let knownTiers: [String: String] = [
+            "lite": "Lite",
+            "standard": "Standard",
+            "pro": "Pro",
+            "max": "Max"
+        ]
+        for (token, display) in knownTiers {
+            if lower == token ||
+                lower.hasSuffix(" \(token)") ||
+                lower.contains("token plan \(token)") ||
+                lower.contains("plan \(token)") {
+                return display
+            }
+        }
+
+        return titleCaseASCIIWords(normalized)
+    }
+
+    private func titleCaseASCIIWords(_ value: String) -> String {
+        guard value.unicodeScalars.allSatisfy(\.isASCII) else {
+            return value
+        }
+
+        var output = ""
+        var shouldUppercase = true
+        for scalar in value.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                if shouldUppercase {
+                    output += String(scalar).uppercased()
+                    shouldUppercase = false
+                } else {
+                    output.append(Character(scalar))
+                }
+            } else {
+                output.append(Character(scalar))
+                shouldUppercase = scalar == " " || scalar == "-" || scalar == "_" || scalar == "/"
+            }
+        }
+        return output
     }
 
     private func resolveTokenCandidates(
@@ -1355,6 +1725,14 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 return .unauthorizedDetail("XiaomiMIMO cookie looks incomplete. Paste the full Cookie header and make sure it includes api-platform_serviceToken and userId.")
             }
             return .unauthorizedDetail("No usable XiaomiMIMO cookie was found. Paste the full Cookie header, or switch to Browser First and make sure platform.xiaomimimo.com is logged in.")
+        case "xiaomimimo-token-plan":
+            if credentialMode != .manualPreferred, browserCookie == nil {
+                return .unauthorizedDetail("No live XiaomiMIMO Token Plan login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
+            }
+            if let savedRaw, !savedRaw.lowercased().contains("api-platform_servicetoken") {
+                return .unauthorizedDetail("XiaomiMIMO Token Plan cookie looks incomplete. Paste the full Cookie header and make sure it includes api-platform_serviceToken and userId.")
+            }
+            return .unauthorizedDetail("No usable XiaomiMIMO Token Plan cookie was found. Paste the full Cookie header, or switch to Browser First and make sure platform.xiaomimimo.com is logged in.")
         case "minimax":
             if credentialMode != .manualPreferred, browserCookie == nil {
                 return .unauthorizedDetail("No live MiniMax login was found in the browser. Log in to platform.minimaxi.com first, or switch back to Manual First and paste the full Cookie header.")
@@ -1382,18 +1760,26 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 return .unauthorizedDetail("Moonshot login expired. Paste a fresh bearer token, or switch to Browser First and log in again in platform.moonshot.cn.")
             case "xiaomimimo":
                 return .unauthorizedDetail("XiaomiMIMO login expired. Paste a fresh Cookie, or switch to Browser First and log in again in platform.xiaomimimo.com.")
+            case "xiaomimimo-token-plan":
+                return .unauthorizedDetail("XiaomiMIMO Token Plan login expired. Paste a fresh Cookie, or switch to Browser First and log in again in platform.xiaomimimo.com.")
             case "minimax":
                 return .unauthorizedDetail("MiniMax login expired. Paste a fresh Cookie, or switch to Browser First and log in again in platform.minimaxi.com.")
             default:
                 return .unauthorized
             }
         case .invalidResponse(let detail):
+            if manifest.id == "xiaomimimo-token-plan",
+               detail.contains("xiaomimimo token plan") {
+                return .invalidResponse("XiaomiMIMO Token Plan connected, but the package detail or usage payload did not contain expected fields. Re-login in browser first; if it still fails, the site response likely changed.")
+            }
             if detail.contains("missing remaining path") {
                 switch manifest.id {
                 case "moonshot":
                     return .invalidResponse("Moonshot connected, but the returned payload still does not contain balance fields. Try Browser First and Test Connection again; if it still fails, the site response likely changed and the template needs an update.")
                 case "xiaomimimo":
                     return .invalidResponse("XiaomiMIMO connected, but the balance payload did not contain balance fields. Re-login in browser first; if it still fails, the site response likely changed.")
+                case "xiaomimimo-token-plan":
+                    return .invalidResponse("XiaomiMIMO Token Plan connected, but the package usage payload did not contain expected fields. Re-login in browser first; if it still fails, the site response likely changed.")
                 case "minimax":
                     return .invalidResponse("MiniMax connected, but the balance payload did not contain balance fields. Make sure GroupId is correct; if it is, the site response likely changed and the template needs an update.")
                 default:
@@ -1920,6 +2306,8 @@ private struct AccountChannelResult {
     let limit: Double?
     let unit: String
     let accountLabel: String?
+    let planType: String?
+    let quotaWindows: [UsageQuotaWindow]
     let note: String
     let rawMeta: [String: String]
 }

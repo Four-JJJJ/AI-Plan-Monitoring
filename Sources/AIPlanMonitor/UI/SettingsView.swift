@@ -3382,6 +3382,51 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private func claudeStatusBarDisplayRow() -> some View {
+        let profiles = viewModel.claudeProfilesForSettings()
+        if !profiles.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                thirdPartyConfigRow(title: officialDisplayAccountTitle) {
+                    Picker("", selection: Binding(
+                        get: { viewModel.claudeStatusBarDisplaySlotID?.rawValue ?? "auto" },
+                        set: { newValue in
+                            viewModel.setClaudeStatusBarDisplaySlotID(
+                                newValue == "auto" ? nil : CodexSlotID(rawValue: newValue)
+                            )
+                        }
+                    )) {
+                        Text(viewModel.localizedText("自动", "Auto")).tag("auto")
+                        ForEach(profiles, id: \.slotID.rawValue) { profile in
+                            Text(claudeStatusBarDisplayOptionTitle(profile)).tag(profile.slotID.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+
+                if let slotID = viewModel.claudeStatusBarResolvedDisplaySlotID(),
+                   let profile = profiles.first(where: { $0.slotID == slotID }) {
+                    thirdPartyHintText(
+                        viewModel.localizedText(
+                            "当前菜单栏展示：\(claudeStatusBarDisplayOptionTitle(profile))",
+                            "Current menubar account: \(claudeStatusBarDisplayOptionTitle(profile))"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private func claudeStatusBarDisplayOptionTitle(_ profile: ClaudeAccountProfile) -> String {
+        let fallback = viewModel.localizedText("未识别账号", "Account unavailable")
+        let subtitle = claudeProfileSubtitle(profile: profile, fallback: fallback)
+        if subtitle == fallback {
+            return profile.displayName
+        }
+        return "\(profile.displayName) · \(subtitle)"
+    }
+
     private func officialProviderSettingsCard(
         _ provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
@@ -3409,6 +3454,10 @@ struct SettingsView: View {
                     get: { viewModel.showOfficialPlanTypeInMenuBar(providerID: provider.id) },
                     set: { viewModel.setShowOfficialPlanTypeInMenuBar($0, providerID: provider.id) }
                 ))
+
+                if provider.type == .claude {
+                    claudeStatusBarDisplayRow()
+                }
 
                 officialConfigSection(provider)
             }
@@ -5371,6 +5420,19 @@ struct SettingsView: View {
         )
     }
 
+    private func settingsProviderPlanType(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
+        if provider.family == .official {
+            return officialMonitorPlanType(providerType: provider.type, snapshot: snapshot)
+        }
+        return PlanTypeDisplayFormatter.normalizedPlanType(
+            snapshot?.extras["planType"],
+            providerType: provider.type
+        ) ?? PlanTypeDisplayFormatter.normalizedPlanType(
+            snapshot?.rawMeta["planType"],
+            providerType: provider.type
+        )
+    }
+
     @ViewBuilder
     private func settingsModelTitleWithPlanType(title: String, planType: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -5894,6 +5956,10 @@ struct SettingsView: View {
         viewModel.language == .zhHans ? "状态栏显示" : "Status Bar"
     }
 
+    private var officialDisplayAccountTitle: String {
+        viewModel.localizedText("展示账号", "Display Account")
+    }
+
     private var officialThresholdTitle: String {
         viewModel.language == .zhHans ? "余额阈值" : "Threshold"
     }
@@ -6209,6 +6275,7 @@ struct SettingsView: View {
     ) -> some View {
         let key = profile.slotID.rawValue
         let snapshot = slotViewModel?.snapshot
+        let isDisplayedInMenuBar = viewModel.isClaudeStatusBarDisplaySlot(slotID: profile.slotID)
         let status = codexSlotStatus(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
         let metrics = codexQuotaMetrics(provider: ProviderDescriptor.defaultOfficialClaude(), snapshot: snapshot)
         let planType = officialMonitorPlanType(providerType: .claude, snapshot: snapshot)
@@ -6273,6 +6340,12 @@ struct SettingsView: View {
                     .padding(.top, hasError ? 8 : 10)
 
                 HStack(spacing: 8) {
+                    if isDisplayedInMenuBar {
+                        Text(viewModel.localizedText("展示中", "Shown"))
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(settingsAccentBlue)
+                    }
+
                     if profile.isCurrentSystemAccount {
                         Text(viewModel.localizedText("正在使用", "Current"))
                             .font(.system(size: 10, weight: .regular))
@@ -7278,9 +7351,19 @@ struct SettingsView: View {
         case .weekly, .modelWeekly:
             baseTitle = viewModel.text(.quotaWeekly)
         default:
-            baseTitle = window.title
+            baseTitle = relayTokenPlanMetricTitle(window.title, provider: provider)
         }
         return usagePreferredQuotaTitle(baseTitle, provider: provider)
+    }
+
+    private func relayTokenPlanMetricTitle(_ rawTitle: String, provider: ProviderDescriptor) -> String {
+        let normalizedAdapterID = provider.relayConfig?.adapterID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedTitle = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedAdapterID == "xiaomimimo-token-plan" else { return rawTitle }
+        if normalizedTitle == "current plan" {
+            return viewModel.localizedText("当前套餐", "Current Plan")
+        }
+        return rawTitle
     }
 
     private func usagePreferredQuotaTitle(_ baseTitle: String, provider: ProviderDescriptor) -> String {
@@ -8985,7 +9068,7 @@ struct SettingsView: View {
         )
     }
 
-    private func relayRuntimeStatusSection(_ provider: ProviderDescriptor, selectedTemplate: RelayAdapterManifest) -> some View {
+    private func relayRuntimeStatusSection(_ provider: ProviderDescriptor, selectedTemplate: RelayAdapterManifest) -> AnyView {
         let snapshot = viewModel.snapshots[provider.id]
         let authSource = viewModel.relayAuthSource(for: provider.id)
         let fetchHealth = viewModel.relayFetchHealth(for: provider.id)
@@ -9009,7 +9092,82 @@ struct SettingsView: View {
             ? "来源：\(sourceValue)｜\(freshnessText)"
             : "Source: \(sourceValue) | \(freshnessText)"
 
-        return VStack(alignment: .leading, spacing: 8) {
+        if provider.relayDisplayMode == .quotaPercent {
+            let metrics = relayQuotaMetricDisplays(provider: provider, snapshot: snapshot)
+            let subtitle = relayTokenPlanSubtitle(snapshot: snapshot)
+            let planType = settingsProviderPlanType(provider: provider, snapshot: snapshot)
+
+            return AnyView(
+                officialAccountMonitorCard(
+                    highlightColor: hasError ? Color(hex: 0xD05757) : nil
+                ) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .center, spacing: 8) {
+                            providerIcon(for: provider, size: 12)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                settingsModelTitleWithPlanType(
+                                    title: sidebarDisplayName(for: provider),
+                                    planType: planType
+                                )
+                                if let subtitle, !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(.system(size: 10, weight: .regular))
+                                        .foregroundStyle(settingsHintColor)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Text(summaryStatus.text)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(summaryStatus.color)
+                                .lineLimit(1)
+                        }
+                        .frame(height: 24)
+
+                        quotaMetricLayout(metrics: metrics, twoByTwo: false)
+                            .padding(.top, 8)
+
+                        if let error, !error.isEmpty {
+                            Text(error)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(Color(hex: 0xD05757))
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 8)
+                        }
+
+                        dividerLine
+                            .padding(.top, error?.isEmpty == false ? 8 : 10)
+
+                        HStack(spacing: 8) {
+                            Text(healthStatus.text)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(healthStatus.color)
+                                .lineLimit(1)
+
+                            Text(updatedText)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 8)
+
+                            Text(sourceLine)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineLimit(1)
+                        }
+                        .frame(height: 10)
+                    }
+                }
+            )
+        }
+
+        return AnyView(VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 providerIcon(for: provider, size: 12)
                 Text(sidebarDisplayName(for: provider))
@@ -9088,7 +9246,61 @@ struct SettingsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(outlineColor, lineWidth: 1)
-        )
+        ))
+    }
+
+    private func relayQuotaMetricDisplays(
+        provider: ProviderDescriptor,
+        snapshot: UsageSnapshot?
+    ) -> [CodexQuotaMetricDisplay] {
+        let windows = snapshot?.quotaWindows ?? [
+            UsageQuotaWindow(
+                id: "\(provider.id)-placeholder-current-plan",
+                title: "Current Plan",
+                remainingPercent: 0,
+                usedPercent: 100,
+                resetAt: nil,
+                kind: .custom
+            )
+        ]
+
+        return windows.map { window in
+            let displayPercent = provider.displaysUsedQuota
+                ? min(100, max(0, window.usedPercent))
+                : min(100, max(0, window.remainingPercent))
+            let valueText = snapshot?.rawMeta["account.quotaValueText.\(window.id)"]
+                ?? snapshot?.rawMeta["quotaValueText.\(window.id)"]
+                ?? codexQuotaValueText(
+                    window: window,
+                    provider: provider,
+                    snapshot: snapshot,
+                    displayPercent: displayPercent
+                )
+            let healthPercent = min(100, max(0, window.remainingPercent))
+            return CodexQuotaMetricDisplay(
+                id: window.id,
+                title: codexQuotaDisplayTitle(window, provider: provider),
+                valueText: valueText,
+                resetText: codexResetCountdownText(to: window.resetAt),
+                percent: displayPercent > 0 ? displayPercent : 0,
+                barColor: codexQuotaBarColor(remainingPercent: healthPercent),
+                isAvailable: snapshot != nil
+            )
+        }
+    }
+
+    private func relayTokenPlanSubtitle(snapshot: UsageSnapshot?) -> String? {
+        guard let raw = snapshot?.rawMeta["account.tokenPlanCurrentPeriodEnd"] ?? snapshot?.rawMeta["tokenPlanCurrentPeriodEnd"] else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        switch viewModel.language {
+        case .zhHans:
+            return "有效期至 \(trimmed) (UTC)"
+        case .en:
+            return "Valid until \(trimmed) (UTC)"
+        }
     }
 
     private func relayProviderSummaryStatus(

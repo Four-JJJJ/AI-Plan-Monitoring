@@ -7,6 +7,7 @@ final class AppConfigTests: XCTestCase {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         XCTAssertEqual(config.language, .zhHans)
         XCTAssertNil(config.statusBarProviderID)
+        XCTAssertNil(config.claudeStatusBarDisplaySlotID)
         XCTAssertFalse(config.statusBarMultiUsageEnabled)
         XCTAssertTrue(config.statusBarMultiProviderIDs.isEmpty)
         XCTAssertEqual(config.statusBarAppearanceMode, .followWallpaper)
@@ -189,6 +190,34 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(relayProvider.displaysUsedQuota)
     }
 
+    func testNormalizeXiaomimimoStripsTemplateDefaultManualOverrides() {
+        var provider = ProviderDescriptor.makeOpenRelay(
+            name: "Mimo",
+            baseURL: "https://platform.xiaomimimo.com",
+            preferredAdapterID: "xiaomimimo"
+        )
+        provider.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Cookie",
+            authScheme: "",
+            userID: nil,
+            userIDHeader: "New-Api-User",
+            requestMethod: "GET",
+            requestBodyJSON: nil,
+            endpointPath: "/api/v1/userProfile",
+            remainingExpression: "coalesce(data.balance,data.data.balance,data.result.balance,data.user.balance,data.data.user.balance,data.account.balance,data.data.account.balance,data.result.account.balance,data.wallet.balance,data.data.wallet.balance,data.result.wallet.balance,data.walletBalance,data.data.walletBalance,data.result.walletBalance,data.accountBalance,data.data.accountBalance,data.result.accountBalance,data.availableBalance,data.data.availableBalance,data.result.availableBalance,data.available_amount,data.data.available_amount,data.result.available_amount,data.availableAmount,data.data.availableAmount,data.result.availableAmount,data.currentBalance,data.data.currentBalance,data.result.currentBalance,data.remainBalance,data.data.remainBalance,data.result.remainBalance,data.remainingBalance,data.data.remainingBalance,data.result.remainingBalance,data.amount,data.data.amount,data.result.amount,balance,availableBalance,available_amount,availableAmount,currentBalance,walletBalance,accountBalance,remainBalance,remainingBalance,amount)",
+            usedExpression: "coalesce(data.monthlyUsage,data.data.monthlyUsage,data.result.monthlyUsage,data.monthlySpend,data.data.monthlySpend,data.result.monthlySpend,data.monthly_spend,data.data.monthly_spend,data.result.monthly_spend,data.used,data.data.used,data.result.used,data.consume,data.data.consume,data.result.consume,data.totalUsage,data.data.totalUsage,data.result.totalUsage,data.totalSpend,data.data.totalSpend,data.result.totalSpend,monthlyUsage,monthlySpend,monthly_spend,used,consume,totalUsage,totalSpend)",
+            limitExpression: "coalesce(data.totalLimit,data.data.totalLimit,data.result.totalLimit,data.limit,data.data.limit,data.result.limit,data.totalAmount,data.data.totalAmount,data.result.totalAmount,data.total_amount,data.data.total_amount,data.result.total_amount,data.quota,data.data.quota,data.result.quota,totalLimit,limit,totalAmount,total_amount,quota)",
+            successExpression: nil,
+            unitExpression: "\"CNY\"",
+            accountLabelExpression: nil,
+            staticHeaders: ["X-Timezone": "Asia/Shanghai"]
+        )
+
+        let normalized = provider.normalized()
+        XCTAssertEqual(normalized.relayConfig?.adapterID, "xiaomimimo")
+        XCTAssertNil(normalized.relayConfig?.manualOverrides)
+    }
+
     func testDecodeOfficialConfigDefaultsPlanTypeDisplayEnabled() throws {
         let json = #"""
         {
@@ -271,6 +300,7 @@ final class AppConfigTests: XCTestCase {
         """#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         XCTAssertEqual(config.statusBarProviderID, "codex-official")
+        XCTAssertNil(config.claudeStatusBarDisplaySlotID)
         XCTAssertEqual(config.statusBarMultiProviderIDs, ["codex-official"])
         XCTAssertFalse(config.statusBarMultiUsageEnabled)
         XCTAssertEqual(config.statusBarAppearanceMode, .followWallpaper)
@@ -315,6 +345,31 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.statusBarMultiProviderIDs, ["codex-official", "claude-official"])
         XCTAssertEqual(config.statusBarAppearanceMode, .followWallpaper)
         XCTAssertEqual(config.statusBarDisplayStyle, .iconPercent)
+    }
+
+    func testDecodeClaudeStatusBarDisplaySlotIDWhenPresent() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "claudeStatusBarDisplaySlotID":"B",
+          "providers":[
+            {
+              "id":"claude-official",
+              "name":"Official Claude",
+              "family":"official",
+              "type":"claude",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://claude.ai"
+            }
+          ]
+        }
+        """#
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(config.claudeStatusBarDisplaySlotID, .b)
     }
 
     func testDecodeStatusBarDisplayStyleWhenPresent() throws {
