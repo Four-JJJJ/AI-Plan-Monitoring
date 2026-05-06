@@ -175,7 +175,7 @@ final class CountdownFormatterTests: XCTestCase {
                 placeholder: "-",
                 language: .zhHans
             ),
-            "1时0分 · 官方确认"
+            "1时0分"
         )
     }
 }

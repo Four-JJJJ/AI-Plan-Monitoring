@@ -8,13 +8,7 @@ enum CountdownFormatter {
         placeholder: String,
         language: AppLanguage
     ) -> String {
-        let countdown = text(to: window.resetAt, now: now, placeholder: placeholder, language: language)
-        let label = resetTrustLabel(
-            for: window,
-            snapshotFreshness: snapshotFreshness,
-            language: language
-        )
-        return "\(countdown) · \(label)"
+        text(to: window.resetAt, now: now, placeholder: placeholder, language: language)
     }
 
     static func resetTrustLabel(

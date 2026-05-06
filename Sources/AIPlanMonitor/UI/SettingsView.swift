@@ -309,6 +309,7 @@ struct SettingsView: View {
         var barColor: Color
         var isAvailable: Bool = true
         var healthPercent: Double? = nil
+        var isBlockedByDepletedQuota: Bool = false
     }
 
     enum OfficialMonitoringHealthStatus: Equatable {
@@ -3677,59 +3678,64 @@ struct SettingsView: View {
         return officialAccountMonitorCard(
             highlightColor: hasError ? Color(hex: 0xD05757) : nil
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 8) {
-                    providerIcon(for: provider, size: 12)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        settingsModelTitleWithPlanType(
-                            title: sidebarDisplayName(for: provider),
-                            planType: planType
-                        )
-                        if let subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(settingsHintColor)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 4) {
+                    settingsModelIconBadge {
+                        providerIcon(for: provider, size: 12)
                     }
 
-                    Spacer(minLength: 8)
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            settingsModelTitleWithPlanType(
+                                title: sidebarDisplayName(for: provider),
+                                planType: planType
+                            )
+                            if let subtitle, !subtitle.isEmpty {
+                                Text(subtitle)
+                                    .font(.system(size: 10, weight: .regular))
+                                    .foregroundStyle(settingsHintColor)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(status.text)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(status.color)
-                        .lineLimit(1)
+                        Text(status.text)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(status.color)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(height: 24)
+
+                settingsModelCardDivider
 
                 quotaMetricLayout(
                     metrics: metrics,
                     twoByTwo: provider.type == .claude
                 )
-                .padding(.top, 8)
 
                 if let error, !error.isEmpty {
+                    settingsModelCardDivider
+
                     Text(error)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color(hex: 0xD05757))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
                 } else if let snapshot,
                           snapshot.valueFreshness == .empty,
                           !snapshot.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    settingsModelCardDivider
+
                     Text(snapshot.note)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color(hex: 0xD05757))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
                 }
 
-                dividerLine
-                    .padding(.top, hasError ? 8 : 10)
+                settingsModelCardDivider
 
                 HStack(spacing: 8) {
                     Text(viewModel.localizedText("正在使用", "Current"))
@@ -3742,7 +3748,6 @@ struct SettingsView: View {
 
                     Spacer(minLength: 8)
                 }
-                .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -6067,6 +6072,7 @@ struct SettingsView: View {
 
     private func officialAccountMonitorCard<Content: View>(
         highlightColor: Color? = nil,
+        leadingAccentColor: Color? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
@@ -6079,6 +6085,44 @@ struct SettingsView: View {
                 DialogSmoothRoundedRectangle(cornerRadius: 12, smoothing: 0.6)
                     .stroke(highlightColor ?? outlineColor, lineWidth: 1)
             )
+            .overlay {
+                if let leadingAccentColor {
+                    GeometryReader { proxy in
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(leadingAccentColor)
+                            .frame(
+                                width: 2,
+                                height: max(0, proxy.size.height - 24)
+                            )
+                            .padding(.leading, 4)
+                            .padding(.vertical, 12)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+    }
+
+    private var settingsModelCardDivider: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(dividerColor)
+            .frame(height: 1)
+    }
+
+    private var settingsModelIconBadgeFillColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.06) : Color.white.opacity(0.15)
+    }
+
+    private var settingsCurrentAccountAccentColor: Color {
+        settingsUsesLightAppearance ? Color.black.opacity(0.80) : Color.white.opacity(0.80)
+    }
+
+    private func settingsModelIconBadge<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(settingsModelIconBadgeFillColor)
+            .frame(width: 24, height: 24)
+            .overlay {
+                content()
+            }
     }
 
     @ViewBuilder
@@ -6126,54 +6170,59 @@ struct SettingsView: View {
         )
 
         return officialAccountMonitorCard(
-            highlightColor: hasError ? Color(hex: 0xD05757) : nil
+            highlightColor: hasError ? Color(hex: 0xD05757) : nil,
+            leadingAccentColor: profile.isCurrentSystemAccount ? settingsCurrentAccountAccentColor : nil
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 8) {
-                    codexAccountIcon(size: 12)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 4) {
+                    settingsModelIconBadge {
+                        codexAccountIcon(size: 12)
+                    }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        settingsModelTitleWithPlanType(
-                            title: "Codex \(profile.slotID.rawValue)",
-                            planType: planType
-                        )
-                        Text(subtitle)
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(settingsHintColor)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let teamDisplay {
-                            Text(localizedCodexTeamInfoText(teamDisplay))
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            settingsModelTitleWithPlanType(
+                                title: "Codex \(profile.slotID.rawValue)",
+                                planType: planType
+                            )
+                            Text(subtitle)
                                 .font(.system(size: 10, weight: .regular))
                                 .foregroundStyle(settingsHintColor)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                            if let teamDisplay {
+                                Text(localizedCodexTeamInfoText(teamDisplay))
+                                    .font(.system(size: 10, weight: .regular))
+                                    .foregroundStyle(settingsHintColor)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Text(status.text)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(status.color)
+                            .lineLimit(1)
                     }
-
-                    Spacer(minLength: 8)
-
-                    Text(status.text)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(status.color)
-                        .lineLimit(1)
                 }
                 .frame(height: 24)
 
+                settingsModelCardDivider
+
                 quotaMetricLayout(metrics: metrics, twoByTwo: false)
-                    .padding(.top, 8)
 
                 if hasError, let note = snapshot?.note, !note.isEmpty {
+                    settingsModelCardDivider
+
                     Text(note)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color(hex: 0xD05757))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
                 }
 
-                dividerLine
-                    .padding(.top, hasError ? 8 : 10)
+                settingsModelCardDivider
 
                 HStack(spacing: 8) {
                     if profile.isCurrentSystemAccount {
@@ -6195,14 +6244,12 @@ struct SettingsView: View {
                         codexProfilePendingDelete = profile.slotID
                     }
                 }
-                .padding(.top, 8)
 
                 if let result = codexProfileResult[key], !result.isEmpty {
                     Text(result)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(result.contains(viewModel.text(.codexProfileImportFailed)) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
                         .lineLimit(1)
-                        .padding(.top, 8)
                 }
             }
         }
@@ -6270,8 +6317,10 @@ struct SettingsView: View {
 
         return officialAccountMonitorCard {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    codexAccountIcon(size: 12)
+                HStack(alignment: .center, spacing: 4) {
+                    settingsModelIconBadge {
+                        codexAccountIcon(size: 12)
+                    }
                     Text(viewModel.language == .zhHans ? "导入另一个Codex" : viewModel.text(.codexImportNextProfile))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(settingsBodyColor)
@@ -6279,7 +6328,7 @@ struct SettingsView: View {
                 }
                 .frame(height: 24)
 
-                dividerLine
+                settingsModelCardDivider
                     .padding(.top, 8)
 
                 HStack(spacing: 8) {
@@ -6356,54 +6405,58 @@ struct SettingsView: View {
         )
 
         return officialAccountMonitorCard(
-            highlightColor: hasError ? Color(hex: 0xD05757) : nil
+            highlightColor: hasError ? Color(hex: 0xD05757) : nil,
+            leadingAccentColor: profile.isCurrentSystemAccount ? settingsCurrentAccountAccentColor : nil
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 8) {
-                    claudeAccountIcon(size: 12)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        settingsModelTitleWithPlanType(
-                            title: "Claude \(profile.slotID.rawValue)",
-                            planType: planType
-                        )
-                        Text(subtitle)
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(settingsHintColor)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 4) {
+                    settingsModelIconBadge {
+                        claudeAccountIcon(size: 12)
                     }
 
-                    Spacer(minLength: 8)
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            settingsModelTitleWithPlanType(
+                                title: "Claude \(profile.slotID.rawValue)",
+                                planType: planType
+                            )
+                            Text(subtitle)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(status.text)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(status.color)
-                        .lineLimit(1)
+                        Text(status.text)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(status.color)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(height: 24)
 
+                settingsModelCardDivider
+
                 quotaMetricLayout(metrics: metrics, twoByTwo: true)
-                    .padding(.top, 8)
 
                 Text(claudeProfileSourceHint(profile))
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(settingsHintColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .padding(.top, 8)
 
                 if hasError, let note = snapshot?.note, !note.isEmpty {
+                    settingsModelCardDivider
+
                     Text(note)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color(hex: 0xD05757))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
                 }
 
-                dividerLine
-                    .padding(.top, hasError ? 8 : 10)
+                settingsModelCardDivider
 
                 HStack(spacing: 8) {
                     if isDisplayedInMenuBar {
@@ -6431,14 +6484,12 @@ struct SettingsView: View {
                         claudeProfilePendingDelete = profile.slotID
                     }
                 }
-                .padding(.top, 8)
 
                 if let result = claudeProfileResult[key], !result.isEmpty {
                     Text(result)
                         .font(.system(size: 10, weight: .regular))
                         .foregroundStyle((result.contains("失败") || result.localizedCaseInsensitiveContains("failed")) ? Color(hex: 0xD05757) : Color(hex: 0x69BD64))
                         .lineLimit(1)
-                        .padding(.top, 8)
                 }
             }
         }
@@ -6450,8 +6501,10 @@ struct SettingsView: View {
 
         return officialAccountMonitorCard {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    claudeAccountIcon(size: 12)
+                HStack(alignment: .center, spacing: 4) {
+                    settingsModelIconBadge {
+                        claudeAccountIcon(size: 12)
+                    }
                     Text(viewModel.localizedText("导入另一个 Claude", "Import another Claude account"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(settingsBodyColor)
@@ -6459,7 +6512,7 @@ struct SettingsView: View {
                 }
                 .frame(height: 24)
 
-                dividerLine
+                settingsModelCardDivider
                     .padding(.top, 8)
 
                 HStack(spacing: 8) {
@@ -6843,7 +6896,7 @@ struct SettingsView: View {
 
             HStack(spacing: 5) {
                 Text(metric.valueText)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppFonts.numeric(size: 16, fallbackWeight: .semibold))
                     .foregroundStyle(settingsBodyColor)
                     .lineSpacing(0)
                     .frame(width: MetricValueLayoutFormatter.metricValueColumnWidth, alignment: .leading)
@@ -6857,8 +6910,14 @@ struct SettingsView: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(metric.barColor)
                                 .frame(width: max(1, proxy.size.width * percent / 100))
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        if metric.isBlockedByDepletedQuota {
+                            QuotaBlockedStripePattern()
+                                .fill(Color(hex: 0x4D4D4D))
                         }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .frame(height: 4)
             }
@@ -7250,7 +7309,12 @@ struct SettingsView: View {
                 resetText: codexResetCountdownText(for: window, snapshot: snapshot),
                 percent: percents.displayPercent,
                 barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
-                healthPercent: percents.healthPercent
+                healthPercent: percents.healthPercent,
+                isBlockedByDepletedQuota: QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+                    window: window,
+                    in: windows,
+                    provider: provider
+                )
             )
         }
     }
@@ -7313,13 +7377,17 @@ struct SettingsView: View {
         snapshot: UsageSnapshot
     ) -> [CodexQuotaMetricDisplay] {
         let windows = snapshot.quotaWindows
+        let sessionWindow = windows.first(where: { $0.kind == .session })
         return [
             claudeCodexQuotaMetric(
                 provider: provider,
                 id: "\(provider.id)-session",
                 title: viewModel.text(.quotaFiveHour),
-                window: windows.first(where: { $0.kind == .session }),
-                snapshot: snapshot
+                window: sessionWindow,
+                snapshot: snapshot,
+                isBlockedByDepletedQuota: sessionWindow.map {
+                    QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(window: $0, in: windows, provider: provider)
+                } ?? false
             ),
             claudeCodexQuotaMetric(
                 provider: provider,
@@ -7350,7 +7418,8 @@ struct SettingsView: View {
         id: String,
         title: String,
         window: UsageQuotaWindow?,
-        snapshot: UsageSnapshot
+        snapshot: UsageSnapshot,
+        isBlockedByDepletedQuota: Bool = false
     ) -> CodexQuotaMetricDisplay {
         guard let window else {
             return CodexQuotaMetricDisplay(
@@ -7381,7 +7450,8 @@ struct SettingsView: View {
             percent: percents.displayPercent,
             barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
             isAvailable: true,
-            healthPercent: percents.healthPercent
+            healthPercent: percents.healthPercent,
+            isBlockedByDepletedQuota: isBlockedByDepletedQuota
         )
     }
 
@@ -7530,13 +7600,7 @@ struct SettingsView: View {
     }
 
     private func codexResetCountdownText(for window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> String {
-        CountdownFormatter.textWithTrustLabel(
-            for: window,
-            snapshotFreshness: snapshot?.valueFreshness,
-            now: settingsNow,
-            placeholder: "--:--:--",
-            language: viewModel.language
-        )
+        codexResetCountdownText(to: window.resetAt)
     }
 
     static func codexCountdownText(to target: Date?, now: Date, language: AppLanguage) -> String {
@@ -9153,7 +9217,7 @@ struct SettingsView: View {
                             .foregroundStyle(settingsBodyColor)
                     }
                     Text(balanceText)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(AppFonts.numeric(size: 16, fallbackWeight: .semibold))
                         .foregroundStyle(settingsBodyColor)
                 }
             }

@@ -26,7 +26,7 @@ enum TraeMetricKind: Equatable {
 enum MetricValueLayoutFormatter {
     static let metricValueMinimumWidth: CGFloat = 46
     static let metricValueReferenceText: String = "900%"
-    static var metricValueFont: NSFont { NSFont.systemFont(ofSize: 16, weight: .semibold) }
+    static var metricValueFont: NSFont { AppFonts.numericNSFont(size: 16, fallbackWeight: .semibold) }
 
     static var metricValueReferenceTextWidth: CGFloat {
         ceil((metricValueReferenceText as NSString).size(withAttributes: [.font: metricValueFont]).width)

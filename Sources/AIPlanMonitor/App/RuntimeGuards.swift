@@ -60,6 +60,7 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app stays menu-bar only even if started from terminal context.
         applyBundledAppIcon()
+        AppFonts.registerBundledFonts()
         NSApp.setActivationPolicy(.accessory)
 
         if !SingleInstanceLock.shared.acquire() {

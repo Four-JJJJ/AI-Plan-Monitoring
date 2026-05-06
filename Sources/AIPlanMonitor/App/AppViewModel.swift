@@ -361,12 +361,32 @@ final class AppViewModel {
 
     var shouldShowPermissionGuide: Bool {
         let hasEnabledProviders = config.providers.contains(where: \.enabled)
+        return Self.shouldShowPermissionGuide(
+            hasEnabledProviders: hasEnabledProviders,
+            hasPersistedOfficialMonitoringState: hasPersistedOfficialMonitoringState,
+            hasNotificationPermission: hasNotificationPermission,
+            secureStorageReady: secureStorageReady,
+            fullDiskAccessRelevant: fullDiskAccessRelevant,
+            fullDiskAccessRequested: fullDiskAccessRequested,
+            fullDiskAccessGranted: fullDiskAccessGranted
+        )
+    }
+
+    nonisolated static func shouldShowPermissionGuide(
+        hasEnabledProviders: Bool,
+        hasPersistedOfficialMonitoringState: Bool,
+        hasNotificationPermission: Bool,
+        secureStorageReady: Bool,
+        fullDiskAccessRelevant: Bool,
+        fullDiskAccessRequested: Bool,
+        fullDiskAccessGranted: Bool
+    ) -> Bool {
         guard !hasEnabledProviders else { return false }
         guard !hasPersistedOfficialMonitoringState else { return false }
         if !hasNotificationPermission { return true }
         if !secureStorageReady { return true }
         if (fullDiskAccessRelevant || fullDiskAccessRequested) && !fullDiskAccessGranted { return true }
-        return true
+        return false
     }
 
     var canRunLocalDiscoveryFromOnboarding: Bool {

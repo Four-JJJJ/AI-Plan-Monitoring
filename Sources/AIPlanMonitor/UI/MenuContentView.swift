@@ -38,7 +38,7 @@ struct MenuContentView: View {
     private let updateHintColor = Color(hex: 0x69BD65)
     private let updateErrorColor = Color(hex: 0xD05757)
     // menubar 卡片区最大高度：约 5.5 张模型卡可见，超出后在卡片区内滚动。
-    private let modelCardHeightEstimate: CGFloat = 86
+    private let modelCardHeightEstimate: CGFloat = 95
     private let maxVisibleModelCards: CGFloat = 5.5
     private let cardsViewportCornerRadius: CGFloat = 12
 
@@ -408,6 +408,7 @@ struct MenuContentView: View {
                 status: status,
                 metrics: buildPercentageMetricDisplays(
                     from: visibleMetrics,
+                    blockageCandidates: metrics,
                     provider: provider,
                     snapshot: snapshot,
                     disconnected: disconnected
@@ -464,6 +465,7 @@ struct MenuContentView: View {
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
             metrics: buildPercentageMetricDisplays(
                 from: visibleMetrics,
+                blockageCandidates: metrics,
                 provider: provider,
                 snapshot: slot.snapshot,
                 disconnected: false
@@ -502,6 +504,7 @@ struct MenuContentView: View {
             status: percentageStatus(metrics: visibleMetrics, snapshot: slot.snapshot, disconnected: false),
             metrics: buildPercentageMetricDisplays(
                 from: visibleMetrics,
+                blockageCandidates: metrics,
                 provider: provider,
                 snapshot: slot.snapshot,
                 disconnected: false
@@ -593,6 +596,7 @@ struct MenuContentView: View {
 
     private func buildPercentageMetricDisplays(
         from metrics: [QuotaMetric],
+        blockageCandidates: [QuotaMetric],
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
         disconnected: Bool
@@ -600,6 +604,11 @@ struct MenuContentView: View {
         metrics.map { metric in
             let percent = (disconnected || !metric.isAvailable) ? nil : metric.displayPercent
             let displayPercent = percent.map { Int($0.rounded()) }
+            let isBlockedByDepletedQuota = isBlockedByDepletedWeeklyQuota(
+                metric,
+                in: blockageCandidates,
+                disconnected: disconnected
+            )
             let valueText: String
             if disconnected {
                 valueText = "-"
@@ -621,12 +630,7 @@ struct MenuContentView: View {
             } else if !metric.isAvailable {
                 resetLabel = "-"
             } else {
-                let countdown = Self.countdownText(to: metric.resetAt, now: now, language: viewModel.language)
-                if let resetTrustLabel = metric.resetTrustLabel {
-                    resetLabel = "\(countdown) · \(resetTrustLabel)"
-                } else {
-                    resetLabel = countdown
-                }
+                resetLabel = Self.countdownText(to: metric.resetAt, now: now, language: viewModel.language)
             }
             return PercentageMetricDisplay(
                 id: metric.id,
@@ -637,9 +641,33 @@ struct MenuContentView: View {
                 barColor: percentageBarColor(
                     metric.healthPercent,
                     displayPercent: metric.healthPercent.map { Int($0.rounded()) }
-                )
+                ),
+                isBlockedByDepletedQuota: isBlockedByDepletedQuota
             )
         }
+    }
+
+    private func isBlockedByDepletedWeeklyQuota(
+        _ metric: QuotaMetric,
+        in metrics: [QuotaMetric],
+        disconnected: Bool
+    ) -> Bool {
+        guard !disconnected else {
+            return false
+        }
+
+        return QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            currentKind: metric.kind,
+            currentRemainingPercent: metric.healthPercent,
+            currentIsAvailable: metric.isAvailable,
+            candidateWindows: metrics.map {
+                (
+                    kind: $0.kind,
+                    remainingPercent: $0.healthPercent,
+                    isAvailable: $0.isAvailable
+                )
+            }
+        )
     }
 
     private func cardPlanType(for provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> String? {
@@ -957,7 +985,8 @@ struct MenuContentView: View {
                         displayPercent: displayPercent,
                         healthPercent: clamp($0.remainingPercent),
                         resetAt: $0.resetAt,
-                        resetTrustLabel: resetTrustLabel(for: $0, snapshot: snapshot)
+                        resetTrustLabel: resetTrustLabel(for: $0, snapshot: snapshot),
+                        kind: quotaMetricKind(for: $0, provider: provider)
                     )
                 }
         }
@@ -976,7 +1005,8 @@ struct MenuContentView: View {
                     healthPercent: clamp(window.remainingPercent),
                     resetAt: window.resetAt,
                     resetTrustLabel: resetTrustLabel(for: window, snapshot: snapshot),
-                    valueTextOverride: snapshot.rawMeta["quotaValueText.\(window.id)"]
+                    valueTextOverride: snapshot.rawMeta["quotaValueText.\(window.id)"],
+                    kind: quotaMetricKind(for: window, provider: provider)
                 )
             }
     }
@@ -1217,8 +1247,13 @@ struct MenuContentView: View {
             displayPercent: displayPercent,
             healthPercent: clamp(window.remainingPercent),
             resetAt: window.resetAt,
-            resetTrustLabel: resetTrustLabel(for: window, snapshot: snapshot)
+            resetTrustLabel: resetTrustLabel(for: window, snapshot: snapshot),
+            kind: window.kind
         )
+    }
+
+    private func quotaMetricKind(for window: UsageQuotaWindow, provider: ProviderDescriptor) -> UsageQuotaKind {
+        QuotaBlockagePresenter.normalizedKind(for: window, provider: provider)
     }
 
     private func resetTrustLabel(for window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> String {
@@ -1416,10 +1451,14 @@ private struct PercentageModelCard: View {
     var body: some View {
         // 百分比型模型卡（Codex/Claude/Gemini 等）的整体样式。
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 6) {
-                    BundledIconView(name: iconName, fallback: iconFallback, size: 12, iconOpacity: 0.8)
-                    VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 4) {
+                ModelIconBadge(
+                    iconName: iconName,
+                    fallback: iconFallback
+                )
+
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
                         ModelTitleWithPlanType(
                             title: title,
                             planType: planType,
@@ -1428,32 +1467,37 @@ private struct PercentageModelCard: View {
                         if let subtitle, !subtitle.isEmpty {
                             Text(subtitle)
                                 .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(Color.white.opacity(0.80))
+                                .foregroundStyle(Color.white.opacity(0.55))
                                 .lineSpacing(0)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
 
-                HStack(spacing: 12) {
-                    if let actionLabel, let action {
-                        HoverActionButton(title: actionLabel, disabled: actionDisabled, action: action)
+                    HStack(spacing: 12) {
+                        if let actionLabel, let action {
+                            HoverActionButton(title: actionLabel, disabled: actionDisabled, action: action)
+                        }
+
+                        Text(status.text)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(status.color)
+                            .lineSpacing(0)
+                            .lineLimit(1)
                     }
-
-                    Text(status.text)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(status.color)
-                        .lineSpacing(0)
-                        .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .frame(height: 24)
+
+            ModelCardDivider()
 
             if metrics.count > 2 {
                 VStack(spacing: 8) {
                     ForEach(0..<2, id: \.self) { row in
-                        HStack(spacing: 24) {
+                        HStack(spacing: 16) {
                             ForEach(metricsForRow(row), id: \.id) { metric in
                                 PercentageMetricView(metric: metric)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1462,7 +1506,7 @@ private struct PercentageModelCard: View {
                     }
                 }
             } else {
-                HStack(spacing: 24) {
+                HStack(spacing: 16) {
                     ForEach(metrics) { metric in
                         PercentageMetricView(metric: metric)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1471,6 +1515,8 @@ private struct PercentageModelCard: View {
             }
 
             if let errorText, !errorText.isEmpty {
+                ModelCardDivider()
+
                 Text(errorText)
                     .font(.system(size: 10))
                     .foregroundStyle(Color(hex: 0xD05757))
@@ -1531,6 +1577,33 @@ private struct PercentageModelCard: View {
         guard start < metrics.count else { return [] }
         let end = min(start + 2, metrics.count)
         return Array(metrics[start..<end])
+    }
+}
+
+private struct ModelCardDivider: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color.white.opacity(0.15))
+            .frame(height: 1)
+    }
+}
+
+private struct ModelIconBadge: View {
+    let iconName: String
+    let fallback: String
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color.white.opacity(0.15))
+            .frame(width: 24, height: 24)
+            .overlay {
+                BundledIconView(
+                    name: iconName,
+                    fallback: fallback,
+                    size: 12,
+                    iconOpacity: 0.8
+                )
+            }
     }
 }
 
@@ -1595,7 +1668,7 @@ private struct HoverActionButton: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(borderColor, lineWidth: 1)
+                        .stroke(borderColor, lineWidth: 0.5)
                 )
         }
         .buttonStyle(.plain)
@@ -1660,7 +1733,7 @@ private struct PercentageMetricView: View {
 
             HStack(spacing: 5) {
                 Text(metric.valueText)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppFonts.numeric(size: 16, fallbackWeight: .bold))
                     .foregroundStyle(Color.white.opacity(0.80))
                     .lineSpacing(0)
                     .frame(width: MetricValueLayoutFormatter.metricValueColumnWidth, alignment: .leading)
@@ -1674,8 +1747,14 @@ private struct PercentageMetricView: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(metric.barColor)
                                 .frame(width: max(1, geo.size.width * percent / 100))
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        if metric.isBlockedByDepletedQuota {
+                            QuotaBlockedStripePattern()
+                                .fill(Color(hex: 0x4D4D4D))
                         }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .frame(height: 4)
             }
@@ -1700,27 +1779,36 @@ private struct AmountModelCard: View {
     var body: some View {
         // 余额型模型卡（第三方 relay 等）的整体样式。
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 6) {
-                    BundledIconView(name: iconName, fallback: iconFallback, size: 12, iconOpacity: 0.8)
+            HStack(alignment: .center, spacing: 4) {
+                ModelIconBadge(
+                    iconName: iconName,
+                    fallback: iconFallback
+                )
+
+                HStack(alignment: .center, spacing: 12) {
                     ModelTitleWithPlanType(
                         title: title,
                         planType: planType,
                         textColor: Color.white.opacity(0.80)
                     )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                    Text(status.text)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(status.color)
+                        .lineSpacing(0)
+                        .lineLimit(1)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(status.text)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(status.color)
-                    .lineSpacing(0)
-                    .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: false)
             }
+            .frame(height: 24)
 
-            VStack(alignment: .leading, spacing: 6) {
+            ModelCardDivider()
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(balanceLabel)
-                    .font(.system(size: 10))
+                    .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.55))
                     .lineSpacing(0)
                     .lineLimit(1)
@@ -1729,12 +1817,14 @@ private struct AmountModelCard: View {
                         name: "menu_balance_icon",
                         fallback: "dollarsign.circle.fill",
                         size: 16,
-                        iconOpacity: 0.8
+                        iconOpacity: 0.9
                     )
                     Text(amountText)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(AppFonts.numeric(size: 16, fallbackWeight: .semibold))
                 }
                 .foregroundStyle(Color.white.opacity(0.80))
+                .lineSpacing(0)
+                .frame(height: 16)
 
                 if let secondaryText, !secondaryText.isEmpty {
                     Text(secondaryText)
@@ -1746,6 +1836,8 @@ private struct AmountModelCard: View {
             }
 
             if let errorText, !errorText.isEmpty {
+                ModelCardDivider()
+
                 Text(errorText)
                     .font(.system(size: 10))
                     .foregroundStyle(Color(hex: 0xD05757))
@@ -1908,6 +2000,7 @@ private struct PercentageMetricDisplay: Identifiable {
     let resetText: String
     let percent: Double?
     let barColor: Color
+    let isBlockedByDepletedQuota: Bool
 }
 
 private struct QuotaMetric: Identifiable {
@@ -1919,6 +2012,7 @@ private struct QuotaMetric: Identifiable {
     let resetTrustLabel: String?
     let isAvailable: Bool
     let valueTextOverride: String?
+    let kind: UsageQuotaKind?
 
     init(
         id: String,
@@ -1928,7 +2022,8 @@ private struct QuotaMetric: Identifiable {
         resetAt: Date?,
         resetTrustLabel: String? = nil,
         isAvailable: Bool = true,
-        valueTextOverride: String? = nil
+        valueTextOverride: String? = nil,
+        kind: UsageQuotaKind? = nil
     ) {
         self.id = id
         self.title = title
@@ -1938,5 +2033,6 @@ private struct QuotaMetric: Identifiable {
         self.resetTrustLabel = resetTrustLabel
         self.isAvailable = isAvailable
         self.valueTextOverride = valueTextOverride
+        self.kind = kind
     }
 }

@@ -79,3 +79,53 @@ enum SettingsQuotaPresenter {
         return .exhausted
     }
 }
+
+enum QuotaBlockagePresenter {
+    nonisolated static func normalizedKind(
+        for window: UsageQuotaWindow,
+        provider: ProviderDescriptor
+    ) -> UsageQuotaKind {
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if provider.type == .kimi, window.kind == .custom, normalizedTitle == "overall" {
+            return .weekly
+        }
+        return window.kind
+    }
+
+    nonisolated static func isBlockedByDepletedWeeklyQuota(
+        currentKind: UsageQuotaKind?,
+        currentRemainingPercent: Double?,
+        currentIsAvailable: Bool = true,
+        candidateWindows: [(kind: UsageQuotaKind?, remainingPercent: Double?, isAvailable: Bool)]
+    ) -> Bool {
+        guard currentIsAvailable,
+              currentKind == .session,
+              (currentRemainingPercent ?? 0) > 0 else {
+            return false
+        }
+
+        return candidateWindows.contains { candidate in
+            candidate.isAvailable
+                && candidate.kind == .weekly
+                && (candidate.remainingPercent ?? 100) <= 0
+        }
+    }
+
+    nonisolated static func isBlockedByDepletedWeeklyQuota(
+        window: UsageQuotaWindow,
+        in windows: [UsageQuotaWindow],
+        provider: ProviderDescriptor
+    ) -> Bool {
+        isBlockedByDepletedWeeklyQuota(
+            currentKind: normalizedKind(for: window, provider: provider),
+            currentRemainingPercent: window.remainingPercent,
+            candidateWindows: windows.map {
+                (
+                    kind: normalizedKind(for: $0, provider: provider),
+                    remainingPercent: $0.remainingPercent,
+                    isAvailable: true
+                )
+            }
+        )
+    }
+}

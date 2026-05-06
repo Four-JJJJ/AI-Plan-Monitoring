@@ -42,6 +42,149 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
         XCTAssertEqual(percents.healthPercent, 71, accuracy: 0.0001)
     }
 
+    func testSessionQuotaIsBlockedWhenWeeklyQuotaIsDepleted() {
+        let session = UsageQuotaWindow(
+            id: "codex-session",
+            title: "5h",
+            remainingPercent: 127,
+            usedPercent: 0,
+            resetAt: nil,
+            kind: .session
+        )
+        let weekly = UsageQuotaWindow(
+            id: "codex-weekly",
+            title: "Weekly",
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetAt: nil,
+            kind: .weekly
+        )
+
+        let blocked = QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            window: session,
+            in: [session, weekly],
+            provider: .defaultOfficialCodex()
+        )
+
+        XCTAssertTrue(blocked)
+    }
+
+    func testSessionQuotaIsNotBlockedWhenWeeklyQuotaHasRemainingCapacity() {
+        let session = UsageQuotaWindow(
+            id: "codex-session",
+            title: "5h",
+            remainingPercent: 127,
+            usedPercent: 0,
+            resetAt: nil,
+            kind: .session
+        )
+        let weekly = UsageQuotaWindow(
+            id: "codex-weekly",
+            title: "Weekly",
+            remainingPercent: 1,
+            usedPercent: 99,
+            resetAt: nil,
+            kind: .weekly
+        )
+
+        let blocked = QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            window: session,
+            in: [session, weekly],
+            provider: .defaultOfficialCodex()
+        )
+
+        XCTAssertFalse(blocked)
+    }
+
+    func testSessionQuotaIsNotBlockedWhenSessionQuotaIsDepleted() {
+        let session = UsageQuotaWindow(
+            id: "codex-session",
+            title: "5h",
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetAt: nil,
+            kind: .session
+        )
+        let weekly = UsageQuotaWindow(
+            id: "codex-weekly",
+            title: "Weekly",
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetAt: nil,
+            kind: .weekly
+        )
+
+        let blocked = QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            window: session,
+            in: [session, weekly],
+            provider: .defaultOfficialCodex()
+        )
+
+        XCTAssertFalse(blocked)
+    }
+
+    func testKimiOverallCustomWindowCountsAsWeeklyQuotaForBlocking() {
+        let session = UsageQuotaWindow(
+            id: "kimi-session",
+            title: "5h",
+            remainingPercent: 42,
+            usedPercent: 58,
+            resetAt: nil,
+            kind: .session
+        )
+        let overall = UsageQuotaWindow(
+            id: "kimi-overall",
+            title: "Overall",
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetAt: nil,
+            kind: .custom
+        )
+
+        let blocked = QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            window: session,
+            in: [session, overall],
+            provider: .defaultOfficialKimi()
+        )
+
+        XCTAssertTrue(blocked)
+    }
+
+    func testKimiOverallCandidateBlocksEvenWhenOtherCustomWindowsExist() {
+        let session = UsageQuotaWindow(
+            id: "kimi-session",
+            title: "5h",
+            remainingPercent: 42,
+            usedPercent: 58,
+            resetAt: nil,
+            kind: .session
+        )
+        let otherCustom = UsageQuotaWindow(
+            id: "kimi-model",
+            title: "Model Window",
+            remainingPercent: 100,
+            usedPercent: 0,
+            resetAt: nil,
+            kind: .custom
+        )
+        let overall = UsageQuotaWindow(
+            id: "kimi-overall",
+            title: "Overall",
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetAt: nil,
+            kind: .custom
+        )
+
+        let blocked = QuotaBlockagePresenter.isBlockedByDepletedWeeklyQuota(
+            window: session,
+            in: [session, otherCustom, overall],
+            provider: .defaultOfficialKimi()
+        )
+
+        XCTAssertTrue(blocked)
+    }
+
     func testOfficialMonitoringHealthStatusUsesRemainingHealthWhenDisplayModeIsUsed() {
         let snapshot = UsageSnapshot(
             source: "claude-official",

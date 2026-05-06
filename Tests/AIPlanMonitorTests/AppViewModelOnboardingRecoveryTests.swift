@@ -39,6 +39,48 @@ final class AppViewModelOnboardingRecoveryTests: XCTestCase {
         XCTAssertFalse(viewModel.shouldShowPermissionGuide)
     }
 
+    func testPermissionGuideHidesWhenAllPermissionRequirementsAreSatisfied() {
+        XCTAssertFalse(
+            AppViewModel.shouldShowPermissionGuide(
+                hasEnabledProviders: false,
+                hasPersistedOfficialMonitoringState: false,
+                hasNotificationPermission: true,
+                secureStorageReady: true,
+                fullDiskAccessRelevant: true,
+                fullDiskAccessRequested: false,
+                fullDiskAccessGranted: true
+            )
+        )
+    }
+
+    func testPermissionGuideShowsWhenRequiredFullDiskAccessIsMissing() {
+        XCTAssertTrue(
+            AppViewModel.shouldShowPermissionGuide(
+                hasEnabledProviders: false,
+                hasPersistedOfficialMonitoringState: false,
+                hasNotificationPermission: true,
+                secureStorageReady: true,
+                fullDiskAccessRelevant: true,
+                fullDiskAccessRequested: false,
+                fullDiskAccessGranted: false
+            )
+        )
+    }
+
+    func testPermissionGuideShowsWhenNotificationPermissionIsMissing() {
+        XCTAssertTrue(
+            AppViewModel.shouldShowPermissionGuide(
+                hasEnabledProviders: false,
+                hasPersistedOfficialMonitoringState: false,
+                hasNotificationPermission: false,
+                secureStorageReady: true,
+                fullDiskAccessRelevant: false,
+                fullDiskAccessRequested: false,
+                fullDiskAccessGranted: false
+            )
+        )
+    }
+
     private func makeViewModel(
         root: URL,
         codexSlotStore: CodexAccountSlotStore? = nil,
