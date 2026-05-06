@@ -166,7 +166,7 @@ final class AppViewModel {
     init(
         testingConfig: AppConfig = .default,
         testingCurrentAppVersion: String = "0.0.0",
-        configurationRepository: AppConfigurationRepository = AppConfigurationRepository(),
+        configurationRepository: AppConfigurationRepository = AppViewModel.makeTestingConfigurationRepository(),
         appUpdateService: any AppUpdateServicing,
         postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
         codexSlotStore: CodexAccountSlotStore = CodexAccountSlotStore(),
@@ -208,6 +208,13 @@ final class AppViewModel {
         bootstrapClaudeProfileState()
         restorePersistedOfficialProvidersIfNeeded()
     }
+
+    private static func makeTestingConfigurationRepository() -> AppConfigurationRepository {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AIPlanMonitorTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return AppConfigurationRepository(store: ConfigStore(baseDirectoryURL: root))
+    }
 #endif
 
     private func makeRefreshScheduler() -> ProviderRefreshScheduler {
@@ -236,6 +243,7 @@ final class AppViewModel {
         hasStarted = true
         refreshPermissionStatuses(force: true)
         restartPolling()
+        refreshDisplayedStatusBarProviders()
     }
 
     func restartPolling() {
@@ -444,6 +452,7 @@ final class AppViewModel {
         normalizeStatusBarSelections()
         try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
+        refreshDisplayedStatusBarProviders()
     }
 
     func setStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
@@ -481,6 +490,7 @@ final class AppViewModel {
             normalizeStatusBarSelections()
             try? configurationRepository.save(config)
             notifyStatusBarDisplayConfigChanged()
+            refreshDisplayedStatusBarProviders()
             return
         }
 
@@ -507,6 +517,7 @@ final class AppViewModel {
         normalizeStatusBarSelections()
         try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
+        refreshDisplayedStatusBarProviders()
     }
 
     func setShowOfficialAccountEmailInMenuBar(_ enabled: Bool) {
@@ -1651,6 +1662,7 @@ final class AppViewModel {
 
         try? configurationRepository.save(config)
         restartPolling()
+        notifyStatusBarDisplayConfigChanged()
         return Localizer.localDiscoveryFoundBody(providerNames: discoveredNames, language: config.language)
     }
 
@@ -1692,6 +1704,7 @@ final class AppViewModel {
                     errors.removeValue(forKey: descriptor.id)
                     consecutiveFailures[descriptor.id] = 0
                     lastUpdatedAt = Date()
+                    notifyStatusBarDisplayConfigChanged()
                 }
                 let successMessage = codexSwitchMessage(
                     for: restartResult,
@@ -1791,6 +1804,7 @@ final class AppViewModel {
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
+                notifyStatusBarDisplayConfigChanged()
                 let successMessage = localizedText("已切换 Claude 账号", "Claude account switched")
                 setClaudeSwitchFeedback(
                     ClaudeSwitchFeedback(message: successMessage, isError: false),
@@ -1959,6 +1973,8 @@ final class AppViewModel {
             config.statusBarProviderID = providerID
         }
         persistAndRestart()
+        notifyStatusBarDisplayConfigChanged()
+        refreshDisplayedStatusBarProviders()
     }
 
     func reorderEnabledProviders(
@@ -2159,6 +2175,8 @@ final class AppViewModel {
             config.statusBarProviderID = provider.id
         }
         persistAndRestart()
+        notifyStatusBarDisplayConfigChanged()
+        refreshDisplayedStatusBarProviders()
     }
 
     func removeProvider(providerID: String) {
@@ -2175,6 +2193,8 @@ final class AppViewModel {
         activeAlerts.remove("fail:\(providerID)")
         activeAlerts.remove("auth:\(providerID)")
         persistAndRestart()
+        notifyStatusBarDisplayConfigChanged()
+        refreshDisplayedStatusBarProviders()
     }
 
     func updateOpenProviderSettings(
@@ -2453,6 +2473,7 @@ final class AppViewModel {
             snapshots[descriptor.id] = boundedSnapshot(snapshot)
             errors.removeValue(forKey: descriptor.id)
             lastUpdatedAt = Date()
+            notifyStatusBarDisplayConfigChanged()
             return RelayDiagnosticResult(
                 success: true,
                 fetchHealth: snapshot.fetchHealth,
@@ -2576,6 +2597,23 @@ final class AppViewModel {
         restartPolling()
         syncClaudeProfilesCurrentState()
         triggerClaudeProfileSnapshotPrefetchIfNeeded()
+    }
+
+    private func refreshDisplayedStatusBarProviders(forceRefresh: Bool = false) {
+        var providersToRefresh: [ProviderDescriptor] = []
+        var seenProviderIDs: Set<String> = []
+        for provider in statusBarProvidersForDisplay() where provider.enabled {
+            if seenProviderIDs.insert(provider.id).inserted {
+                providersToRefresh.append(provider)
+            }
+        }
+        guard !providersToRefresh.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for descriptor in providersToRefresh {
+                await self.refreshProvider(descriptor, forceRefresh: forceRefresh)
+            }
+        }
     }
 
     private func normalizeStatusBarSelections() {
@@ -2722,6 +2760,7 @@ final class AppViewModel {
             errors.removeValue(forKey: descriptor.id)
             consecutiveFailures[descriptor.id] = 0
             lastUpdatedAt = Date()
+            notifyStatusBarDisplayConfigChanged()
             if descriptor.family == .official {
                 if forceRefresh {
                     await refreshOfficialProfileCardsAfterManualRefresh(for: descriptor)
@@ -2754,12 +2793,14 @@ final class AppViewModel {
                 errors.removeValue(forKey: descriptor.id)
                 consecutiveFailures[descriptor.id] = 0
                 lastUpdatedAt = Date()
+                notifyStatusBarDisplayConfigChanged()
                 return
             }
 
             errors[descriptor.id] = error.localizedDescription
             consecutiveFailures[descriptor.id, default: 0] += 1
             let health = classifyFetchHealth(error)
+            var shouldRefreshStatusBarDisplay = false
             if descriptor.isRelay || descriptor.family == .official {
                 if var previous = snapshots[descriptor.id] {
                     previous.fetchHealth = health
@@ -2771,13 +2812,18 @@ final class AppViewModel {
                         appending: error.localizedDescription
                     )
                     snapshots[descriptor.id] = boundedSnapshot(previous)
+                    shouldRefreshStatusBarDisplay = true
                 } else if let emptySnapshot = Self.emptySnapshotForFetchFailure(
                     descriptor: descriptor,
                     health: health,
                     message: error.localizedDescription
                 ) {
                     snapshots[descriptor.id] = boundedSnapshot(emptySnapshot)
+                    shouldRefreshStatusBarDisplay = true
                 }
+            }
+            if shouldRefreshStatusBarDisplay {
+                notifyStatusBarDisplayConfigChanged()
             }
 
             let failureCount = consecutiveFailures[descriptor.id, default: 0]

@@ -193,29 +193,25 @@ final class StatusBarDisplayRendererTests: XCTestCase {
     private func hasOpaquePixel(in image: NSImage, region: NSRect) -> Bool {
         guard
             let tiff = image.tiffRepresentation,
-            let bitmap = NSBitmapImageRep(data: tiff),
-            let data = bitmap.bitmapData
+            let bitmap = NSBitmapImageRep(data: tiff)
         else {
             return false
         }
 
         let width = bitmap.pixelsWide
         let height = bitmap.pixelsHigh
-        let samplesPerPixel = bitmap.samplesPerPixel
-        let bytesPerRow = bitmap.bytesPerRow
         let scaleX = CGFloat(width) / max(image.size.width, 1)
         let scaleY = CGFloat(height) / max(image.size.height, 1)
         let minX = max(0, Int(floor(region.minX * scaleX)))
         let maxX = min(width - 1, Int(ceil(region.maxX * scaleX)) - 1)
-        let minY = max(0, Int(floor(region.minY * scaleY)))
-        let maxY = min(height - 1, Int(ceil(region.maxY * scaleY)) - 1)
+        let minY = max(0, Int(floor((image.size.height - region.maxY) * scaleY)))
+        let maxY = min(height - 1, Int(ceil((image.size.height - region.minY) * scaleY)) - 1)
         guard minX <= maxX, minY <= maxY else { return false }
 
         for y in minY...maxY {
             for x in minX...maxX {
-                let offset = y * bytesPerRow + x * samplesPerPixel
-                let alpha = bitmap.hasAlpha ? Int(data[offset + samplesPerPixel - 1]) : 255
-                if alpha > 16 {
+                let alpha = bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                if alpha > 0.06 {
                     return true
                 }
             }

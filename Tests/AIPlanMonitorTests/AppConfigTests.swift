@@ -588,6 +588,39 @@ final class AppConfigTests: XCTestCase {
         XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
     }
 
+    func testMigrationRemovesStatusBarRefreshFixtureProviders() {
+        var first = ProviderDescriptor.makeOpenRelay(
+            name: "First Relay",
+            baseURL: "https://first-status-provider.test",
+            preferredAdapterID: "generic-newapi"
+        )
+        first.id = "status-provider-first"
+
+        var second = ProviderDescriptor.makeOpenRelay(
+            name: "Second Relay",
+            baseURL: "https://second-status-provider.test",
+            preferredAdapterID: "generic-newapi"
+        )
+        second.id = "status-provider-second"
+
+        var codex = ProviderDescriptor.defaultOfficialCodex()
+        codex.enabled = true
+
+        let config = AppConfig(
+            language: .zhHans,
+            statusBarProviderID: second.id,
+            statusBarMultiUsageEnabled: true,
+            statusBarMultiProviderIDs: [first.id, second.id, codex.id],
+            providers: [first, second, codex]
+        )
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == first.id }))
+        XCTAssertNil(migrated.providers.first(where: { $0.id == second.id }))
+        XCTAssertEqual(migrated.statusBarProviderID, codex.id)
+        XCTAssertEqual(migrated.statusBarMultiProviderIDs, [codex.id])
+    }
+
     func testMigrationStatusBarFallsBackWhenLegacyRelayExampleWasSelected() {
         var codex = ProviderDescriptor.defaultOfficialCodex()
         codex.enabled = true

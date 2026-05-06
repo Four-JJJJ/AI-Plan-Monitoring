@@ -368,6 +368,187 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredData))
     }
 
+    func testLoadImportsLegacyRelayProvidersAndTopLevelSettingsFromAIBalanceMonitor() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+
+        var currentConfig = AppConfig.default
+        if let codexIndex = currentConfig.providers.firstIndex(where: { $0.id == "codex-official" }) {
+            currentConfig.providers[codexIndex].enabled = true
+        }
+        try store.save(currentConfig)
+
+        let legacyCodexRelay = makeLegacyRelayProvider(
+            id: "open-legacy-codex-relay",
+            name: "Codex 中转",
+            baseURL: "https://dragoncode.codes"
+        )
+        let legacyMiMoRelay = makeLegacyRelayProvider(
+            id: "open-legacy-mimo-relay",
+            name: "MiMo 中转",
+            baseURL: "https://platform.xiaomimimo.com"
+        )
+
+        var legacyProviders = AppConfig.default.providers
+        legacyProviders.insert(legacyMiMoRelay, at: 0)
+        legacyProviders.insert(legacyCodexRelay, at: 0)
+        let legacyConfig = AppConfig(
+            language: .en,
+            launchAtLoginEnabled: true,
+            showOfficialAccountEmailInMenuBar: true,
+            statusBarProviderID: legacyCodexRelay.id,
+            statusBarMultiUsageEnabled: true,
+            statusBarMultiProviderIDs: ["codex-official", legacyCodexRelay.id],
+            statusBarAppearanceMode: .dark,
+            statusBarDisplayStyle: .barNamePercent,
+            providers: legacyProviders
+        )
+        try writeLegacyConfig(legacyConfig, in: root)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.language, .en)
+        XCTAssertTrue(loaded.showOfficialAccountEmailInMenuBar)
+        XCTAssertEqual(loaded.statusBarProviderID, legacyCodexRelay.id)
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", legacyCodexRelay.id])
+        XCTAssertEqual(loaded.statusBarAppearanceMode, .dark)
+        XCTAssertEqual(loaded.statusBarDisplayStyle, .barNamePercent)
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == legacyCodexRelay.id && $0.enabled }))
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == legacyMiMoRelay.id && $0.enabled }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyImportMarkerURL(in: root).path))
+        XCTAssertEqual(legacyImportBackupDirectories(in: root).count, 1)
+    }
+
+    func testLoadCopiesMissingLegacySupplementalFiles() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        try store.save(.default)
+        try writeLegacyConfig(.default, in: root)
+
+        let legacyDirectory = legacyAppSupportDirectory(in: root)
+        let legacyProfilesData = Data("legacy-codex-profiles".utf8)
+        let legacyHistoryData = Data("legacy-local-history".utf8)
+        try legacyProfilesData.write(to: legacyDirectory.appendingPathComponent("codex_profiles.json"), options: .atomic)
+        try legacyHistoryData.write(to: legacyDirectory.appendingPathComponent("local_usage_history_cache.json"), options: .atomic)
+
+        _ = try store.load()
+
+        let currentDirectory = appSupportDirectory(in: root)
+        XCTAssertEqual(
+            try Data(contentsOf: currentDirectory.appendingPathComponent("codex_profiles.json")),
+            legacyProfilesData
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: currentDirectory.appendingPathComponent("local_usage_history_cache.json")),
+            legacyHistoryData
+        )
+    }
+
+    func testLoadDoesNotReimportLegacyProvidersAfterMarkerIsWritten() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        try store.save(.default)
+
+        let legacyRelay = makeLegacyRelayProvider(
+            id: "open-legacy-dragoncode-relay",
+            name: "Codex 中转",
+            baseURL: "https://dragoncode.codes"
+        )
+        let legacyConfig = AppConfig(
+            providers: [legacyRelay] + AppConfig.default.providers
+        )
+        try writeLegacyConfig(legacyConfig, in: root)
+
+        let firstLoad = try store.load()
+        let secondLoad = try store.load()
+
+        let expectedIdentity = try XCTUnwrap(legacyRelay.legacyRelayImportIdentity)
+        XCTAssertEqual(firstLoad.providers.filter { $0.legacyRelayImportIdentity == expectedIdentity }.count, 1)
+        XCTAssertEqual(secondLoad.providers.filter { $0.legacyRelayImportIdentity == expectedIdentity }.count, 1)
+        XCTAssertEqual(legacyImportBackupDirectories(in: root).count, 1)
+    }
+
+    func testLoadKeepsCurrentProviderForDuplicateLegacyRelayIdentity() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+
+        var currentProviders = AppConfig.default.providers
+        if let codexIndex = currentProviders.firstIndex(where: { $0.id == "codex-official" }) {
+            currentProviders[codexIndex].enabled = true
+        }
+        var currentRelay = makeLegacyRelayProvider(
+            id: "open-current-dragoncode-relay",
+            name: "当前 Codex 中转",
+            baseURL: "https://dragoncode.codes"
+        )
+        currentRelay.relayConfig?.manualOverrides = nil
+        currentProviders.insert(currentRelay, at: 0)
+        let currentConfig = AppConfig(providers: currentProviders)
+        try store.save(currentConfig)
+
+        var legacyRelay = makeLegacyRelayProvider(
+            id: "open-legacy-dragoncode-relay-1776234471",
+            name: "旧版 Codex 中转",
+            baseURL: "https://dragoncode.codes"
+        )
+        legacyRelay.relayConfig?.manualOverrides = RelayManualOverride(
+            authHeader: "Authorization",
+            authScheme: "Bearer",
+            userID: nil,
+            userIDHeader: "New-Api-User",
+            requestMethod: "GET",
+            requestBodyJSON: nil,
+            endpointPath: "/api/v1/auth/me",
+            remainingExpression: "data.balance",
+            usedExpression: nil,
+            limitExpression: nil,
+            successExpression: nil,
+            unitExpression: "balance",
+            accountLabelExpression: nil,
+            staticHeaders: ["X-Legacy-Trace": "1"]
+        )
+        let legacyConfig = AppConfig(
+            statusBarProviderID: legacyRelay.id,
+            statusBarMultiUsageEnabled: true,
+            statusBarMultiProviderIDs: ["codex-official", legacyRelay.id],
+            providers: [legacyRelay] + AppConfig.default.providers
+        )
+        try writeLegacyConfig(legacyConfig, in: root)
+
+        let loaded = try store.load()
+
+        let currentIdentity = try XCTUnwrap(currentRelay.legacyRelayImportIdentity)
+        let matchingProviders = loaded.providers.filter { $0.legacyRelayImportIdentity == currentIdentity }
+        XCTAssertEqual(matchingProviders.count, 1)
+        XCTAssertEqual(matchingProviders.first?.id, currentRelay.id)
+        XCTAssertEqual(matchingProviders.first?.name, currentRelay.name)
+        XCTAssertEqual(
+            matchingProviders.first?.relayConfig?.manualOverrides?.staticHeaders?["X-Legacy-Trace"],
+            "1"
+        )
+        XCTAssertEqual(loaded.statusBarProviderID, currentRelay.id)
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", currentRelay.id])
+    }
+
+    func testLoadSkipsInvalidLegacyConfigWithoutMutatingCurrentConfig() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let currentConfig = makeConfigWithRelayAndStatusBarState()
+        try store.save(currentConfig)
+
+        let legacyDirectory = legacyAppSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: legacyDirectory.appendingPathComponent("config.json"), options: .atomic)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded, currentConfig)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyImportMarkerURL(in: root).path))
+        XCTAssertTrue(legacyImportBackupDirectories(in: root).isEmpty)
+    }
+
     func testResetRemovesPrimaryAndBackup() throws {
         let root = try makeTempDirectory()
         let store = ConfigStore(baseDirectoryURL: root)
@@ -402,6 +583,36 @@ final class ConfigStoreTests: XCTestCase {
         root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
     }
 
+    private func legacyAppSupportDirectory(in root: URL) -> URL {
+        root.appendingPathComponent("AIBalanceMonitor", isDirectory: true)
+    }
+
+    private func legacyImportMarkerURL(in root: URL) -> URL {
+        appSupportDirectory(in: root).appendingPathComponent("legacy-import-aibalancemonitor.done")
+    }
+
+    private func legacyImportBackupDirectories(in root: URL) -> [URL] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: appSupportDirectory(in: root),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return urls.filter { url in
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            return isDirectory && url.lastPathComponent.hasPrefix("legacy-import-backup-aibalancemonitor-")
+        }
+    }
+
+    private func writeLegacyConfig(_ config: AppConfig, in root: URL) throws {
+        let directory = legacyAppSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder.prettySorted.encode(config)
+        try data.write(to: directory.appendingPathComponent("config.json"), options: .atomic)
+    }
+
     private func makeConfigWithRelayAndStatusBarState() -> AppConfig {
         var providers = AppConfig.default.providers
         if let codexIndex = providers.firstIndex(where: { $0.id == "codex-official" }) {
@@ -428,6 +639,17 @@ final class ConfigStoreTests: XCTestCase {
             statusBarDisplayStyle: .barNamePercent,
             providers: providers
         )
+    }
+
+    private func makeLegacyRelayProvider(
+        id: String,
+        name: String,
+        baseURL: String
+    ) -> ProviderDescriptor {
+        var relay = ProviderDescriptor.makeOpenRelay(name: name, baseURL: baseURL)
+        relay.id = id
+        relay.enabled = true
+        return relay.normalized()
     }
 
     private func makeLossyConfigJSON() -> String {

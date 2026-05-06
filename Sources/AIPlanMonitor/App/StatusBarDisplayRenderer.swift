@@ -274,11 +274,13 @@ enum StatusBarDisplayRenderer {
     }
 
     private static func drawIconBoundsCentered(_ icon: NSImage, in targetRect: NSRect) {
-        let sourceRect = visibleIconContentRect(for: icon) ?? NSRect(origin: .zero, size: icon.size)
+        var sourceRect = visibleIconContentRect(for: icon) ?? NSRect(origin: .zero, size: icon.size)
         guard sourceRect.width > 0, sourceRect.height > 0 else {
             icon.draw(in: targetRect)
             return
         }
+
+        sourceRect.origin.y = max(0, icon.size.height - sourceRect.maxY)
 
         let scale = min(1, min(targetRect.width / sourceRect.width, targetRect.height / sourceRect.height))
         let drawSize = NSSize(width: sourceRect.width * scale, height: sourceRect.height * scale)
@@ -293,30 +295,7 @@ enum StatusBarDisplayRenderer {
             width: drawSize.width,
             height: drawSize.height
         )
-        guard
-            let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil),
-            let croppedImage = croppedCGImage(cgImage, sourceRect: sourceRect, imageSize: icon.size)
-        else {
-            icon.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1.0)
-            return
-        }
-
-        let iconCanvas = NSImage(size: targetRect.size)
-        iconCanvas.lockFocusFlipped(true)
-        if let canvasContext = NSGraphicsContext.current?.cgContext {
-            canvasContext.interpolationQuality = .none
-            canvasContext.draw(
-                croppedImage,
-                in: CGRect(
-                    x: drawRect.minX - targetRect.minX,
-                    y: drawRect.minY - targetRect.minY,
-                    width: drawRect.width,
-                    height: drawRect.height
-                )
-            )
-        }
-        iconCanvas.unlockFocus()
-        iconCanvas.draw(in: targetRect)
+        icon.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1.0)
     }
 
     private static func visibleIconContentRect(for icon: NSImage) -> NSRect? {
@@ -392,29 +371,6 @@ enum StatusBarDisplayRenderer {
 
         return rendered ? data : nil
     }
-
-    private static func croppedCGImage(_ cgImage: CGImage, sourceRect: NSRect, imageSize: NSSize) -> CGImage? {
-        guard imageSize.width > 0, imageSize.height > 0 else {
-            return nil
-        }
-
-        let scaleX = CGFloat(cgImage.width) / imageSize.width
-        let scaleY = CGFloat(cgImage.height) / imageSize.height
-        let cropRect = CGRect(
-            x: floor(sourceRect.minX * scaleX),
-            y: floor(sourceRect.minY * scaleY),
-            width: ceil(sourceRect.width * scaleX),
-            height: ceil(sourceRect.height * scaleY)
-        ).integral
-
-        let imageBounds = CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
-        let boundedCropRect = cropRect.intersection(imageBounds)
-        guard !boundedCropRect.isNull, boundedCropRect.width > 0, boundedCropRect.height > 0 else {
-            return nil
-        }
-        return cgImage.cropping(to: boundedCropRect)
-    }
-
     private static func drawText(
         _ text: String,
         attributes: [NSAttributedString.Key: Any],
