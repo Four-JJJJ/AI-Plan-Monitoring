@@ -114,19 +114,68 @@ final class CountdownFormatterTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 40_000)
         let target = now.addingTimeInterval(84 * 3_600)
         XCTAssertEqual(
-            SettingsView.codexCountdownText(to: target, now: now, language: .zhHans),
+            SettingsCountdownPresenter.codexCountdownText(to: target, now: now, language: .zhHans),
             CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: .zhHans)
         )
-        XCTAssertEqual(SettingsView.codexCountdownText(to: nil, now: now, language: .zhHans), "--:--:--")
+        XCTAssertEqual(SettingsCountdownPresenter.codexCountdownText(to: nil, now: now, language: .zhHans), "--:--:--")
     }
 
     func testSettingsCountdownTextUsesSharedFormatterForEnglish() {
         let now = Date(timeIntervalSince1970: 40_000)
         let target = now.addingTimeInterval(84 * 3_600)
         XCTAssertEqual(
-            SettingsView.codexCountdownText(to: target, now: now, language: .en),
+            SettingsCountdownPresenter.codexCountdownText(to: target, now: now, language: .en),
             CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: .en)
         )
-        XCTAssertEqual(SettingsView.codexCountdownText(to: nil, now: now, language: .en), "--:--:--")
+        XCTAssertEqual(SettingsCountdownPresenter.codexCountdownText(to: nil, now: now, language: .en), "--:--:--")
+    }
+
+    func testResetTrustLabelsReflectSourceAndFreshness() {
+        let now = Date(timeIntervalSince1970: 50_000)
+        let official = UsageQuotaWindow(
+            id: "official",
+            title: "5h",
+            remainingPercent: 80,
+            usedPercent: 20,
+            resetAt: now.addingTimeInterval(3_600),
+            kind: .session,
+            resetSource: .official,
+            observedAt: now,
+            confidence: .confirmed
+        )
+        let local = UsageQuotaWindow(
+            id: "local",
+            title: "5h",
+            remainingPercent: 80,
+            usedPercent: 20,
+            resetAt: now.addingTimeInterval(3_600),
+            kind: .session,
+            resetSource: .localEstimate,
+            observedAt: now,
+            confidence: .estimated
+        )
+
+        XCTAssertEqual(
+            CountdownFormatter.resetTrustLabel(for: official, snapshotFreshness: .live, language: .zhHans),
+            "官方确认"
+        )
+        XCTAssertEqual(
+            CountdownFormatter.resetTrustLabel(for: local, snapshotFreshness: .live, language: .zhHans),
+            "本地估算"
+        )
+        XCTAssertEqual(
+            CountdownFormatter.resetTrustLabel(for: official, snapshotFreshness: .cachedFallback, language: .zhHans),
+            "待刷新"
+        )
+        XCTAssertEqual(
+            CountdownFormatter.textWithTrustLabel(
+                for: official,
+                snapshotFreshness: .live,
+                now: now,
+                placeholder: "-",
+                language: .zhHans
+            ),
+            "1时0分 · 官方确认"
+        )
     }
 }

@@ -6,7 +6,7 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
         var claude = ProviderDescriptor.defaultOfficialClaude()
         claude.officialConfig?.quotaDisplayMode = .remaining
 
-        let resolved = SettingsView.resolvedOfficialMonitoringProvider(
+        let resolved = SettingsQuotaPresenter.resolvedOfficialMonitoringProvider(
             type: .claude,
             providers: [claude]
         )
@@ -15,7 +15,7 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
     }
 
     func testResolvedOfficialMonitoringProviderFallsBackToClaudeDefaultWhenMissing() {
-        let resolved = SettingsView.resolvedOfficialMonitoringProvider(
+        let resolved = SettingsQuotaPresenter.resolvedOfficialMonitoringProvider(
             type: .claude,
             providers: []
         )
@@ -33,7 +33,7 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
             kind: .session
         )
 
-        let percents = SettingsView.quotaMetricPercents(
+        let percents = SettingsQuotaPresenter.quotaMetricPercents(
             for: window,
             displaysUsedQuota: true
         )
@@ -65,7 +65,7 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
             sourceLabel: "API"
         )
 
-        let status = SettingsView.officialMonitoringHealthStatus(
+        let status = SettingsQuotaPresenter.officialMonitoringHealthStatus(
             snapshot: snapshot,
             healthPercents: [71]
         )
@@ -96,7 +96,7 @@ final class SettingsViewQuotaDisplayTests: XCTestCase {
             sourceLabel: "API"
         )
 
-        let status = SettingsView.officialMonitoringHealthStatus(
+        let status = SettingsQuotaPresenter.officialMonitoringHealthStatus(
             snapshot: snapshot,
             healthPercents: [25]
         )

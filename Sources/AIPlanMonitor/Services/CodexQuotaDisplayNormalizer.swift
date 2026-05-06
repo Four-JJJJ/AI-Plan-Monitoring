@@ -34,6 +34,10 @@ enum CodexQuotaDisplayNormalizer {
         copy.remainingPercent = 100
         copy.usedPercent = 0
         copy.resetAt = nextReset
+        copy.resetSource = .localEstimate
+        copy.confidence = .estimated
+        copy.observedAt = now
+        copy.windowIdentity = UsageQuotaWindow.defaultWindowIdentity(for: copy)
         return copy
     }
 

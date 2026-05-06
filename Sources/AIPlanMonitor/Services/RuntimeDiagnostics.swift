@@ -6,7 +6,14 @@ enum RuntimeDiagnosticsLimits {
     static let localUsageTrendCacheMaxEntries = 24
     static let thirdPartyBalanceBaselineCacheMaxEntries = 24
     static let localUsageTrendCacheEntryTTL: TimeInterval = 15 * 60
+    static let localUsageTrendFingerprintProbeInterval: TimeInterval = 60
     static let localUsageTrendModelBreakdownCacheEntries = 0
+    static let backgroundProviderPollIntervalMultiplier = 3
+    static let backgroundProviderPollIntervalFloorSeconds = 5 * 60
+    static let localSessionSignalActiveSleepSeconds: TimeInterval = 15
+    static let localSessionSignalIdleSleepSeconds: TimeInterval = 60
+    static let menuClockIntervalSeconds: TimeInterval = 5
+    static let settingsClockIntervalSeconds: TimeInterval = 15
     static let claudePrefetchMaxConcurrent = 2
     static let claudeSignalMaxTrackedFiles = 200
     static let jsonlMaxLineBytes = 512 * 1024

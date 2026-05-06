@@ -1,6 +1,55 @@
 import Foundation
 
 enum CountdownFormatter {
+    static func textWithTrustLabel(
+        for window: UsageQuotaWindow,
+        snapshotFreshness: ValueFreshness?,
+        now: Date = Date(),
+        placeholder: String,
+        language: AppLanguage
+    ) -> String {
+        let countdown = text(to: window.resetAt, now: now, placeholder: placeholder, language: language)
+        let label = resetTrustLabel(
+            for: window,
+            snapshotFreshness: snapshotFreshness,
+            language: language
+        )
+        return "\(countdown) · \(label)"
+    }
+
+    static func resetTrustLabel(
+        for window: UsageQuotaWindow,
+        snapshotFreshness: ValueFreshness?,
+        language: AppLanguage
+    ) -> String {
+        if snapshotFreshness == .cachedFallback ||
+            snapshotFreshness == .empty ||
+            window.resetAt == nil ||
+            window.confidence == .stale ||
+            window.confidence == .unknown {
+            return localized(zhHans: "待刷新", en: "Pending", language: language)
+        }
+
+        switch (window.resetSource, window.confidence) {
+        case (.official, .confirmed):
+            return localized(zhHans: "官方确认", en: "Official", language: language)
+        case (.userCalibrated, .confirmed):
+            return localized(zhHans: "用户校准", en: "Calibrated", language: language)
+        case (.webObserved, _):
+            return localized(zhHans: "网页观测", en: "Observed", language: language)
+        case (.localEstimate, _):
+            return localized(zhHans: "本地估算", en: "Estimated", language: language)
+        case (.unknown, _):
+            return localized(zhHans: "待刷新", en: "Pending", language: language)
+        case (_, .estimated):
+            return localized(zhHans: "本地估算", en: "Estimated", language: language)
+        case (_, .stale), (_, .unknown):
+            return localized(zhHans: "待刷新", en: "Pending", language: language)
+        case (_, .confirmed):
+            return localized(zhHans: "官方确认", en: "Official", language: language)
+        }
+    }
+
     static func text(
         to target: Date?,
         now: Date = Date(),
@@ -26,6 +75,15 @@ enum CountdownFormatter {
             return "\(hours)时\(minutes)分"
         case .en:
             return "\(hours) h \(minutes) m"
+        }
+    }
+
+    private static func localized(zhHans: String, en: String, language: AppLanguage) -> String {
+        switch language {
+        case .zhHans:
+            return zhHans
+        case .en:
+            return en
         }
     }
 }

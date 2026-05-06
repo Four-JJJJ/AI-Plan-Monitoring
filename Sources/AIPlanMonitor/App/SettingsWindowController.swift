@@ -59,7 +59,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
 
         let rootView = AnyView(
-            SettingsView(viewModel: viewModel, onDone: { [weak self] in
+            SettingsRootView(viewModel: viewModel, onDone: { [weak self] in
                 self?.hideSettingsWindow()
             })
             .frame(

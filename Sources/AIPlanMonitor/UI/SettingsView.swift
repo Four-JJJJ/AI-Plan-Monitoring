@@ -66,6 +66,7 @@ struct SettingsView: View {
     @State private var selectedRelayTemplateInputs: [String: String] = [:]
     @State private var relayCredentialModeInputs: [String: RelayCredentialMode] = [:]
     @State private var officialThresholdInputs: [String: String] = [:]
+    @State private var thresholdDraftValues: [String: Double] = [:]
     @State private var isNewAPISiteDialogPresented = false
     @FocusState private var focusedThresholdProviderID: String?
 
@@ -81,17 +82,12 @@ struct SettingsView: View {
     @State private var reorderPreviewProviderIDs: [String]?
     @State private var dropTargetProviderID: String?
     @State private var dropTargetInsertAfter = false
-    @State private var localUsageTrendSummaries: [String: LocalUsageSummary] = [:]
-    @State private var localUsageTrendErrors: [String: String] = [:]
-    @State private var localUsageTrendLoadingQueryKeys: Set<String> = []
     @State private var localUsageTrendScopes: [String: LocalUsageTrendScope] = [:]
     @State private var localUsageTrendSelectedAccountKeys: [String: String] = [:]
-    @State private var localUsageTrendQueryLastRefreshedAt: [String: Date] = [:]
     @State private var localUsageTrendExpandedAccountSelectorProviderID: String?
     @State private var settingsWallpaperLuminance: Double?
 
     private let settingsClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    private let localUsageTrendRefreshTTL: TimeInterval = 60
 
     // MARK: - 设置页视觉 Token（改这里可全局影响样式）
     // 整个设置页外层背景。
@@ -330,67 +326,41 @@ struct SettingsView: View {
         type: ProviderType,
         providers: [ProviderDescriptor]
     ) -> ProviderDescriptor {
-        if let configured = providers.first(where: { $0.family == .official && $0.type == type }) {
-            return configured
-        }
-
-        return ProviderDescriptor(
-            id: "\(type.rawValue)-official",
-            name: type.rawValue,
-            family: .official,
-            type: type,
-            enabled: false,
-            pollIntervalSec: 60,
-            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 2, notifyOnAuthError: true),
-            auth: .none,
-            officialConfig: ProviderDescriptor.defaultOfficialConfig(type: type)
-        )
+        SettingsQuotaPresenter.resolvedOfficialMonitoringProvider(type: type, providers: providers)
     }
 
     nonisolated static func quotaMetricPercents(
         for window: UsageQuotaWindow,
         displaysUsedQuota: Bool
     ) -> (displayPercent: Double, healthPercent: Double) {
-        let healthPercent = max(0, min(100, window.remainingPercent))
-        let displayPercent = displaysUsedQuota
-            ? max(0, min(100, window.usedPercent))
-            : healthPercent
-        return (displayPercent, healthPercent)
+        SettingsQuotaPresenter.quotaMetricPercents(for: window, displaysUsedQuota: displaysUsedQuota)
     }
 
     nonisolated static func officialMonitoringHealthStatus(
         snapshot: UsageSnapshot?,
         healthPercents: [Double]
     ) -> OfficialMonitoringHealthStatus {
-        guard let snapshot else {
+        switch SettingsQuotaPresenter.officialMonitoringHealthStatus(
+            snapshot: snapshot,
+            healthPercents: healthPercents
+        ) {
+        case .unknown:
             return .unknown
-        }
-
-        if snapshot.valueFreshness == .empty {
-            switch snapshot.fetchHealth {
-            case .authExpired:
-                return .authError
-            case .endpointMisconfigured:
-                return .configError
-            case .rateLimited:
-                return .rateLimited
-            case .unreachable:
-                return .disconnected
-            case .ok:
-                return .tight
-            }
-        }
-
-        guard let minimum = healthPercents.min() else {
-            return .tight
-        }
-        if minimum > 30 {
+        case .authError:
+            return .authError
+        case .configError:
+            return .configError
+        case .rateLimited:
+            return .rateLimited
+        case .disconnected:
+            return .disconnected
+        case .sufficient:
             return .sufficient
-        }
-        if minimum > 10 {
+        case .tight:
             return .tight
+        case .exhausted:
+            return .exhausted
         }
-        return .exhausted
     }
 
     private struct OfficialDetailedDataRow: Identifiable {
@@ -591,24 +561,26 @@ struct SettingsView: View {
     }
 
     private var settingsMainContent: some View {
-        ZStack {
-            panelBackground
-                .ignoresSafeArea()
+        SettingsShellView {
+            ZStack {
+                panelBackground
+                    .ignoresSafeArea()
 
-            HStack(alignment: .top, spacing: 18) {
-                settingsNavigationSidebar
-                    .frame(width: 220)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                HStack(alignment: .top, spacing: 18) {
+                    settingsNavigationSidebar
+                        .frame(width: 220)
+                        .frame(maxHeight: .infinity, alignment: .top)
 
-                VStack(alignment: .leading, spacing: 18) {
-                    settingsHeaderBar
-                    settingsContentPane
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(alignment: .leading, spacing: 18) {
+                        settingsHeaderBar
+                        settingsContentPane
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .padding(.top, 44)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-            .padding(.top, 44)
         }
     }
 
@@ -638,7 +610,8 @@ struct SettingsView: View {
     }
 
     private var settingsNavigationSidebar: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        SettingsSidebarView {
+            VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 settingsSidebarIdentityIcon
 
@@ -707,6 +680,7 @@ struct SettingsView: View {
                     value: lastRefreshSummaryText
                 )
                 settingsSidebarGitHubLink
+            }
             }
         }
         .padding(18)
@@ -989,37 +963,49 @@ struct SettingsView: View {
         case .overview:
             overviewDashboardContent
         case .general:
-            settingsSingleSectionContent(
-                title: viewModel.localizedText("常规", "General"),
-                subtitle: viewModel.localizedText("设置语言、设置窗口外观、开机启动和基础应用行为。", "Configure language, settings window appearance, launch at login, and basic app behavior.")
-            ) {
-                appBehaviorSection
+            GeneralSettingsView {
+                settingsSingleSectionContent(
+                    title: viewModel.localizedText("常规", "General"),
+                    subtitle: viewModel.localizedText("设置语言、设置窗口外观、开机启动和基础应用行为。", "Configure language, settings window appearance, launch at login, and basic app behavior.")
+                ) {
+                    appBehaviorSection
+                }
             }
         case .menuBar:
-            settingsSingleSectionContent(
-                title: viewModel.localizedText("菜单栏", "Menubar"),
-                subtitle: viewModel.localizedText("控制菜单栏显示哪些服务、如何展示以及信息密度。", "Control which services appear in the menubar, how they render, and information density.")
-            ) {
-                menuBarPreferencesSection
+            MenuBarSettingsView {
+                settingsSingleSectionContent(
+                    title: viewModel.localizedText("菜单栏", "Menubar"),
+                    subtitle: viewModel.localizedText("控制菜单栏显示哪些服务、如何展示以及信息密度。", "Control which services appear in the menubar, how they render, and information density.")
+                ) {
+                    menuBarPreferencesSection
+                }
             }
         case .permissions:
-            settingsSingleSectionContent(
-                title: viewModel.localizedText("权限", "Permissions"),
-                subtitle: viewModel.localizedText("管理通知、钥匙串和全盘访问授权。", "Manage notifications, keychain, and full disk access.")
-            ) {
-                permissionAccessSection
+            PermissionsSettingsView {
+                settingsSingleSectionContent(
+                    title: viewModel.localizedText("权限", "Permissions"),
+                    subtitle: viewModel.localizedText("管理通知、钥匙串和全盘访问授权。", "Manage notifications, keychain, and full disk access.")
+                ) {
+                    permissionAccessSection
+                }
             }
         case .localData:
-            settingsSingleSectionContent(
-                title: viewModel.localizedText("本地数据", "Local Data"),
-                subtitle: viewModel.localizedText("扫描本机账号配置，或重置 AI Plan Monitor 的本地数据。", "Discover local account config or reset AI Plan Monitor's local data.")
-            ) {
-                localDataManagementSection
+            LocalDataSettingsView {
+                settingsSingleSectionContent(
+                    title: viewModel.localizedText("本地数据", "Local Data"),
+                    subtitle: viewModel.localizedText("扫描本机账号配置，或重置 AI Plan Monitor 的本地数据。", "Discover local account config or reset AI Plan Monitor's local data.")
+                ) {
+                    localDataManagementSection
+                }
             }
         case .officialProviders:
-            providerDashboardContent(group: .official)
+            OfficialProviderSettingsView {
+                providerDashboardContent(group: .official)
+            }
         case .customProviders:
-            providerDashboardContent(group: .thirdParty)
+            RelayProviderSettingsView {
+                providerDashboardContent(group: .thirdParty)
+            }
         }
     }
 
@@ -3376,12 +3362,17 @@ struct SettingsView: View {
 
             Slider(
                 value: Binding(
-                    get: { provider.threshold.lowRemaining },
+                    get: { thresholdValue(for: provider) },
                     set: { newValue in
                         setOfficialThresholdValue(newValue, providerID: provider.id)
                     }
                 ),
-                in: 0...100
+                in: 0...100,
+                onEditingChanged: { editing in
+                    if !editing {
+                        commitOfficialThresholdDraft(provider)
+                    }
+                }
             )
             .frame(width: 200)
             .tint(settingsSliderTintColor)
@@ -3391,6 +3382,7 @@ struct SettingsView: View {
         .frame(height: 24)
         .onChange(of: provider.threshold.lowRemaining) { _, newValue in
             if focusedThresholdProviderID != provider.id {
+                thresholdDraftValues[provider.id] = newValue
                 officialThresholdInputs[provider.id] = formattedOfficialThresholdValue(newValue)
             }
         }
@@ -3593,12 +3585,17 @@ struct SettingsView: View {
 
             Slider(
                 value: Binding(
-                    get: { provider.threshold.lowRemaining },
+                    get: { thresholdValue(for: provider) },
                     set: { newValue in
                         setOfficialThresholdValue(newValue, providerID: provider.id)
                     }
                 ),
-                in: 0...100
+                in: 0...100,
+                onEditingChanged: { editing in
+                    if !editing {
+                        commitOfficialThresholdDraft(provider)
+                    }
+                }
             )
             .frame(width: 200)
             .tint(settingsSliderTintColor)
@@ -3608,6 +3605,7 @@ struct SettingsView: View {
         .frame(height: 24)
         .onChange(of: provider.threshold.lowRemaining) { _, newValue in
             if focusedThresholdProviderID != provider.id {
+                thresholdDraftValues[provider.id] = newValue
                 officialThresholdInputs[provider.id] = formattedOfficialThresholdValue(newValue)
             }
         }
@@ -3621,13 +3619,13 @@ struct SettingsView: View {
     private func officialThresholdStepper(_ provider: ProviderDescriptor) -> some View {
         Stepper(
             value: Binding(
-                get: { provider.threshold.lowRemaining },
-                set: { setOfficialThresholdValue($0, providerID: provider.id) }
+                get: { thresholdValue(for: provider) },
+                set: { setOfficialThresholdValue($0, providerID: provider.id, persist: true) }
             ),
             in: 0...100,
             step: 1
         ) {
-            Text(formattedOfficialThresholdValue(provider.threshold.lowRemaining))
+            Text(formattedOfficialThresholdValue(thresholdValue(for: provider)))
                 .font(.system(size: 12, weight: .regular))
                 .monospacedDigit()
                 .foregroundStyle(settingsBodyColor)
@@ -3898,13 +3896,15 @@ struct SettingsView: View {
             scope: scope,
             identityCacheKey: identityContext.cacheIdentity
         )
-        let queryKey = localUsageTrendQueryKey(
+        let query = LocalUsageHistoryQuery(
+            providerType: provider.type,
             providerID: provider.id,
             scope: scope,
-            identityCacheKey: identityCacheKey
+            identityKey: identityCacheKey
         )
 
-        let strictSummary = localUsageTrendSummaries[queryKey]
+        let historyState = viewModel.localUsageHistoryState(for: query)
+        let strictSummary = historyState.summary
         let summary = localUsageTrendDisplaySummary(
             provider: provider,
             scope: scope,
@@ -3915,7 +3915,7 @@ struct SettingsView: View {
             return localUsageTrendSummaryText(summary)
         }
 
-        if localUsageTrendLoadingQueryKeys.contains(queryKey) {
+        if historyState.isLoading {
             return viewModel.localizedText("读取趋势中...", "Loading trend...")
         }
 
@@ -4122,7 +4122,7 @@ struct SettingsView: View {
             OfficialDetailedDataRow(
                 id: "quota-windows.\(window.id).\(index)",
                 key: "window[\(index)]",
-                value: "id=\(window.id) | title=\(window.title) | kind=\(window.kind.rawValue) | remainingPercent=\(String(format: "%.2f", window.remainingPercent)) | usedPercent=\(String(format: "%.2f", window.usedPercent)) | resetAt=\(window.resetAt.map(isoDateText) ?? "-")"
+                value: "id=\(window.id) | title=\(window.title) | kind=\(window.kind.rawValue) | remainingPercent=\(String(format: "%.2f", window.remainingPercent)) | usedPercent=\(String(format: "%.2f", window.usedPercent)) | resetAt=\(window.resetAt.map(isoDateText) ?? "-") | resetSource=\(window.resetSource.rawValue) | confidence=\(window.confidence.rawValue) | observedAt=\(window.observedAt.map(isoDateText) ?? "-") | windowIdentity=\(window.windowIdentity ?? "-")"
             )
         }
     }
@@ -4178,14 +4178,17 @@ struct SettingsView: View {
             scope: scope,
             identityCacheKey: identityContext.cacheIdentity
         )
-        let queryKey = localUsageTrendQueryKey(
+        let query = LocalUsageHistoryQuery(
+            providerType: provider.type,
             providerID: provider.id,
             scope: scope,
-            identityCacheKey: identityCacheKey
+            identityKey: identityCacheKey
         )
-        let loading = localUsageTrendLoadingQueryKeys.contains(queryKey)
-        let error = localUsageTrendErrors[queryKey]
-        let strictSummary = localUsageTrendSummaries[queryKey]
+        let historyState = viewModel.localUsageHistoryState(for: query)
+        let chartError = historyState.isStaleFallback && historyState.summary != nil
+            ? nil
+            : historyState.error
+        let strictSummary = historyState.summary
         let summary = localUsageTrendDisplaySummary(
             provider: provider,
             scope: scope,
@@ -4197,8 +4200,8 @@ struct SettingsView: View {
             provider: provider,
             scope: scope,
             summary: summary,
-            loading: loading,
-            error: error,
+            loading: historyState.isLoading,
+            error: chartError,
             hasData: hasTrendData
         )
         let displaySummary = hasTrendData ? summary : nil
@@ -4226,6 +4229,24 @@ struct SettingsView: View {
                 localUsageTrendSummaryCapsule(displaySummary)
                     .padding(.top, 16)
 
+                if let fallbackText = localUsageTrendStaleFallbackText(historyState) {
+                    Text(fallbackText)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(hex: 0xD87E3E))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
+
+                if let cacheStatusText = localUsageTrendCacheStatusText(historyState, summary: summary) {
+                    Text(cacheStatusText)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(settingsHintColor)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }
+
                 VStack(alignment: .leading, spacing: 24) {
                     localUsageHourlyTrendSection(
                         points: displaySummary?.hourly24 ?? [],
@@ -4249,22 +4270,19 @@ struct SettingsView: View {
         .onChange(of: scope) { _, _ in
             refreshLocalUsageTrendIfNeeded(
                 provider: provider,
-                snapshot: snapshot,
-                force: true
+                snapshot: snapshot
             )
         }
         .onChange(of: selectedAccountKey) { _, _ in
             refreshLocalUsageTrendIfNeeded(
                 provider: provider,
-                snapshot: snapshot,
-                force: true
+                snapshot: snapshot
             )
         }
         .onChange(of: identityCacheKey) { _, _ in
             refreshLocalUsageTrendIfNeeded(
                 provider: provider,
-                snapshot: snapshot,
-                force: true
+                snapshot: snapshot
             )
         }
     }
@@ -4713,6 +4731,44 @@ struct SettingsView: View {
                 color: settingsMutedHintColor
             )
         }
+        return nil
+    }
+
+    private func localUsageTrendStaleFallbackText(_ state: LocalUsageHistoryState) -> String? {
+        guard state.isStaleFallback,
+              state.summary != nil,
+              let error = localUsageTrendTrimmed(state.error) else {
+            return nil
+        }
+        return viewModel.localizedText(
+            "刷新失败，显示旧缓存：\(error)",
+            "Refresh failed, showing cached data: \(error)"
+        )
+    }
+
+    private func localUsageTrendCacheStatusText(
+        _ state: LocalUsageHistoryState,
+        summary: LocalUsageSummary?
+    ) -> String? {
+        guard let summary else { return nil }
+
+        let generatedText = localUsageTrendDiagnosticTimeText(summary.generatedAt)
+        if let checkedAt = state.lastFingerprintCheckedAt {
+            let checkedText = localUsageTrendDiagnosticTimeText(checkedAt)
+            return viewModel.localizedText(
+                "缓存已校验 \(checkedText) · 图表生成 \(generatedText)",
+                "Cache checked \(checkedText) · Chart generated \(generatedText)"
+            )
+        }
+
+        if let refreshedAt = state.lastRefreshedAt {
+            let refreshedText = localUsageTrendDiagnosticTimeText(refreshedAt)
+            return viewModel.localizedText(
+                "缓存生成 \(refreshedText) · 图表生成 \(generatedText)",
+                "Cache generated \(refreshedText) · Chart generated \(generatedText)"
+            )
+        }
+
         return nil
     }
 
@@ -5316,29 +5372,6 @@ struct SettingsView: View {
         return !FileManager.default.fileExists(atPath: projectsPath)
     }
 
-    private func pruneLocalUsageTrendCaches(now: Date = Date()) {
-        _ = RuntimeBoundedState.pruneLocalUsageTrendCaches(
-            summaries: &localUsageTrendSummaries,
-            errors: &localUsageTrendErrors,
-            queryLastRefreshedAt: &localUsageTrendQueryLastRefreshedAt,
-            loadingQueryKeys: &localUsageTrendLoadingQueryKeys,
-            now: now
-        )
-    }
-
-    private func storeLocalUsageTrendSummary(_ summary: LocalUsageSummary, for queryKey: String, refreshedAt: Date = Date()) {
-        localUsageTrendSummaries[queryKey] = RuntimeBoundedState.slimmedLocalUsageSummaryForCache(summary)
-        localUsageTrendErrors.removeValue(forKey: queryKey)
-        localUsageTrendQueryLastRefreshedAt[queryKey] = refreshedAt
-        pruneLocalUsageTrendCaches(now: refreshedAt)
-    }
-
-    private func storeLocalUsageTrendError(_ message: String, for queryKey: String, refreshedAt: Date = Date()) {
-        localUsageTrendErrors[queryKey] = message
-        localUsageTrendQueryLastRefreshedAt[queryKey] = refreshedAt
-        pruneLocalUsageTrendCaches(now: refreshedAt)
-    }
-
     private func refreshLocalUsageTrendIfNeeded(
         provider: ProviderDescriptor,
         snapshot: UsageSnapshot?,
@@ -5360,79 +5393,21 @@ struct SettingsView: View {
             scope: scope,
             identityCacheKey: identityContext.cacheIdentity
         )
-        let queryKey = localUsageTrendQueryKey(
+        let query = LocalUsageHistoryQuery(
+            providerType: provider.type,
             providerID: provider.id,
             scope: scope,
-            identityCacheKey: identityCacheKey
+            identityKey: identityCacheKey
         )
 
         guard provider.type != .gemini else { return }
-        pruneLocalUsageTrendCaches()
-        guard !localUsageTrendLoadingQueryKeys.contains(queryKey) else { return }
-
-        let now = Date()
-        if !force,
-           let lastRefreshedAt = localUsageTrendQueryLastRefreshedAt[queryKey],
-           now.timeIntervalSince(lastRefreshedAt) < localUsageTrendRefreshTTL {
-            return
-        }
-
-        localUsageTrendLoadingQueryKeys.insert(queryKey)
-        localUsageTrendErrors.removeValue(forKey: queryKey)
-
-        Task { @MainActor in
-            let providerType = provider.type
-            let scopeForRequest = scope
-            let codexIdentityForRequest = identityContext.codexIdentity
-            let claudeCurrentConfigDirForRequest = identityContext.claudeCurrentConfigDir
-            let claudeAllConfigDirsForRequest = identityContext.claudeAllConfigDirs
-
-            let result = await Task.detached(priority: .utility) {
-                Result<LocalUsageSummary, Error> {
-                    switch providerType {
-                    case .codex:
-                        let codexScope: CodexTrendScope = scopeForRequest == .currentAccount
-                            ? .currentAccount
-                            : .allAccounts
-                        let codexSummary = try CodexLocalUsageService().fetchSummary(
-                            scope: codexScope,
-                            currentIdentity: codexIdentityForRequest
-                        )
-                        return LocalUsageSummary(codex: codexSummary)
-                    case .claude:
-                        return try ClaudeLocalUsageService().fetchSummary(
-                            scope: scopeForRequest,
-                            currentConfigDir: claudeCurrentConfigDirForRequest,
-                            allConfigDirs: claudeAllConfigDirsForRequest
-                        )
-                    case .kimi:
-                        return try KimiLocalUsageService().fetchSummary(scope: .allAccounts)
-                    default:
-                        throw LocalUsageTrendError.unsupportedProvider(providerType.rawValue)
-                    }
-                }
-            }.value
-
-            localUsageTrendLoadingQueryKeys.remove(queryKey)
-            let refreshedAt = Date()
-            switch result {
-            case .success(let summary):
-                storeLocalUsageTrendSummary(summary, for: queryKey, refreshedAt: refreshedAt)
-            case .failure(let error):
-                storeLocalUsageTrendError(error.localizedDescription, for: queryKey, refreshedAt: refreshedAt)
-            }
-        }
-    }
-
-    private enum LocalUsageTrendError: LocalizedError {
-        case unsupportedProvider(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .unsupportedProvider(let provider):
-                return "Unsupported local trend provider: \(provider)"
-            }
-        }
+        viewModel.refreshLocalUsageHistoryIfNeeded(
+            query: query,
+            codexIdentity: identityContext.codexIdentity,
+            claudeCurrentConfigDir: identityContext.claudeCurrentConfigDir,
+            claudeAllConfigDirs: identityContext.claudeAllConfigDirs,
+            force: force
+        )
     }
 
     private func isoDateText(_ date: Date) -> String {
@@ -5544,10 +5519,11 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func officialConfigSection(_ provider: ProviderDescriptor) -> some View {
-        let supportedSourceModes = provider.supportedOfficialSourceModes
-        let supportedWebModes = provider.supportedOfficialWebModes
-        let supportsManualInput = provider.supportsOfficialManualCookieInput
-        let supportsBearerCredentialInput = supportsOfficialBearerCredentialInput(provider)
+        let settingsSpec = ProviderSettingsSpec.resolve(for: provider)
+        let supportedSourceModes = settingsSpec.supportedSourceModes
+        let supportedWebModes = settingsSpec.supportedWebModes
+        let supportsManualInput = settingsSpec.credentialFields.contains { $0.kind == .manualCookie }
+        let supportsBearerCredentialInput = settingsSpec.credentialFields.contains { $0.kind == .bearerToken }
         let quotaDisplayBinding: Binding<OfficialQuotaDisplayMode> = Binding(
             get: {
                 officialQuotaDisplayModeInputs[provider.id]
@@ -5646,7 +5622,6 @@ struct SettingsView: View {
                                     quotaDisplayMode: quotaDisplayBinding.wrappedValue
                                 )
                                 officialWorkspaceInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -5686,7 +5661,6 @@ struct SettingsView: View {
                                     quotaDisplayMode: quotaDisplayBinding.wrappedValue
                                 )
                                 officialCookieInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -5730,7 +5704,6 @@ struct SettingsView: View {
                                     traeValueDisplayMode: traeValueDisplayBinding.wrappedValue
                                 )
                                 officialCookieInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -5796,7 +5769,6 @@ struct SettingsView: View {
                                 quotaDisplayMode: quotaDisplayBinding.wrappedValue
                             )
                             officialCookieInputs[provider.id] = ""
-                            viewModel.restartPolling()
                         }
                         .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(2)
@@ -5885,7 +5857,6 @@ struct SettingsView: View {
                                     quotaDisplayMode: quotaDisplayBinding.wrappedValue
                                 )
                                 officialCookieInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -6052,12 +6023,25 @@ struct SettingsView: View {
         String(format: "%.2f", value)
     }
 
-    private func setOfficialThresholdValue(_ value: Double, providerID: String) {
+    private func thresholdValue(for provider: ProviderDescriptor) -> Double {
+        thresholdDraftValues[provider.id] ?? provider.threshold.lowRemaining
+    }
+
+    private func setOfficialThresholdValue(_ value: Double, providerID: String, persist: Bool = false) {
         let clamped = min(max(value, 0), 100)
-        viewModel.setLowThreshold(clamped, providerID: providerID)
+        thresholdDraftValues[providerID] = clamped
         if focusedThresholdProviderID != providerID {
             officialThresholdInputs[providerID] = formattedOfficialThresholdValue(clamped)
         }
+        if persist {
+            viewModel.commitProviderThreshold(clamped, providerID: providerID)
+        }
+    }
+
+    private func commitOfficialThresholdDraft(_ provider: ProviderDescriptor) {
+        let value = thresholdDraftValues[provider.id] ?? provider.threshold.lowRemaining
+        viewModel.commitProviderThreshold(value, providerID: provider.id)
+        thresholdDraftValues[provider.id] = value
     }
 
     private func applyOfficialThresholdInput(_ provider: ProviderDescriptor) {
@@ -6076,7 +6060,8 @@ struct SettingsView: View {
         }
 
         let clamped = min(max(parsedValue, 0), 100)
-        viewModel.setLowThreshold(clamped, providerID: key)
+        thresholdDraftValues[key] = clamped
+        viewModel.commitProviderThreshold(clamped, providerID: key)
         officialThresholdInputs[key] = formattedOfficialThresholdValue(clamped)
     }
 
@@ -7262,7 +7247,7 @@ struct SettingsView: View {
                     snapshot: snapshot,
                     displayPercent: percents.displayPercent
                 ),
-                resetText: codexResetCountdownText(to: window.resetAt),
+                resetText: codexResetCountdownText(for: window, snapshot: snapshot),
                 percent: percents.displayPercent,
                 barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
                 healthPercent: percents.healthPercent
@@ -7392,7 +7377,7 @@ struct SettingsView: View {
                 snapshot: snapshot,
                 displayPercent: percents.displayPercent
             ),
-            resetText: codexResetCountdownText(to: window.resetAt),
+            resetText: codexResetCountdownText(for: window, snapshot: snapshot),
             percent: percents.displayPercent,
             barColor: codexQuotaBarColor(remainingPercent: percents.healthPercent),
             isAvailable: true,
@@ -7544,8 +7529,18 @@ struct SettingsView: View {
         Self.codexCountdownText(to: target, now: settingsNow, language: viewModel.language)
     }
 
+    private func codexResetCountdownText(for window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> String {
+        CountdownFormatter.textWithTrustLabel(
+            for: window,
+            snapshotFreshness: snapshot?.valueFreshness,
+            now: settingsNow,
+            placeholder: "--:--:--",
+            language: viewModel.language
+        )
+    }
+
     static func codexCountdownText(to target: Date?, now: Date, language: AppLanguage) -> String {
-        CountdownFormatter.text(to: target, now: now, placeholder: "--:--:--", language: language)
+        SettingsCountdownPresenter.codexCountdownText(to: target, now: now, language: language)
     }
 
     private var codexEditButtonTitle: String {
@@ -7727,7 +7722,6 @@ struct SettingsView: View {
     private func openRelayConfigSection(_ provider: ProviderDescriptor) -> some View {
         let relayViewConfig = provider.relayViewConfig
         let accountAuth = relayViewConfig?.accountBalance?.auth
-        let simpleMode = true
         let providerAdapterID = provider.relayConfig?.adapterID
             ?? provider.relayManifest?.id
             ?? "generic-newapi"
@@ -7753,7 +7747,7 @@ struct SettingsView: View {
         let currentBaseURL = baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
         let usesGenericTemplate = (selectedRelayTemplateInputs[provider.id] ?? providerAdapterID) == "generic-newapi"
         let showNameField = true
-        let showBaseURLField = usesGenericTemplate || !simpleMode || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
+        let showBaseURLField = usesGenericTemplate || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
         let tokenSaveButtonTitle = viewModel.language == .zhHans ? "保存" : "Save"
         let quotaCredentialTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
         let balanceAuthHeader = authHeaderInputs[provider.id]
@@ -7799,7 +7793,7 @@ struct SettingsView: View {
         )
         let contentLeading = thirdPartyConfigLabelWidth + thirdPartyConfigLabelSpacing
         let persistRelaySettings: () -> Void = {
-            viewModel.updateOpenProviderSettings(
+            let draft = RelaySettingsDraft(
                 providerID: provider.id,
                 name: resolvedRelayNameInput(
                     typedName: providerNameInputs[provider.id] ?? provider.name,
@@ -7829,6 +7823,7 @@ struct SettingsView: View {
                     ?? provider.relayConfig?.quotaDisplayMode
                     ?? .remaining
             )
+            viewModel.saveRelayDraft(draft)
         }
 
         VStack(alignment: .leading, spacing: 24) {
@@ -7856,7 +7851,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if simpleMode, !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
+                if !showBaseURLField, let suggestedBaseURL = suggestedBaseURL(for: selectedTemplate) {
                     thirdPartyHintText("Base URL: \(suggestedBaseURL)")
                 }
             }
@@ -7941,9 +7936,8 @@ struct SettingsView: View {
                                 guard let accountAuth else { return }
                                 let token = systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
-                                _ = viewModel.saveToken(token, auth: accountAuth)
+                                _ = viewModel.saveTokenAndRestart(token, auth: accountAuth)
                                 systemTokenInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -7973,9 +7967,8 @@ struct SettingsView: View {
                             settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
                                 let token = tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
-                                _ = viewModel.saveToken(token, for: provider)
+                                _ = viewModel.saveTokenAndRestart(token, for: provider)
                                 tokenInputs[provider.id] = ""
-                                viewModel.restartPolling()
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(2)
@@ -8008,7 +8001,7 @@ struct SettingsView: View {
 
                 settingsCapsuleButton(viewModel.text(.testConnection)) {
                     Task {
-                        guard let previewDescriptor = viewModel.relayDescriptorForPreview(
+                        let draft = RelaySettingsDraft(
                             providerID: provider.id,
                             name: resolvedRelayNameInput(
                                 typedName: providerNameInputs[provider.id] ?? provider.name,
@@ -8037,18 +8030,8 @@ struct SettingsView: View {
                             quotaDisplayMode: thirdPartyQuotaDisplayModeInputs[provider.id]
                                 ?? provider.relayConfig?.quotaDisplayMode
                                 ?? .remaining
-                        ) else {
-                            relayTestResult[provider.id] = RelayDiagnosticResult(
-                                success: false,
-                                fetchHealth: .endpointMisconfigured,
-                                resolvedAdapterID: selectedTemplateID,
-                                resolvedAuthSource: nil,
-                                message: viewModel.text(.error),
-                                snapshotPreview: nil
-                            )
-                            return
-                        }
-                        relayTestResult[provider.id] = await viewModel.testRelayConnection(descriptor: previewDescriptor)
+                        )
+                        relayTestResult[provider.id] = await viewModel.testRelayDraft(draft)
                     }
                 }
 
@@ -8605,120 +8588,14 @@ struct SettingsView: View {
     }
 
     private func sidebarDisplayName(for provider: ProviderDescriptor) -> String {
-        switch provider.type {
-        case .codex:
-            return "Codex"
-        case .claude:
-            return "Claude"
-        case .gemini:
-            return "Gemini"
-        case .copilot:
-            return "GitHub Copilot"
-        case .microsoftCopilot:
-            return "Microsoft Copilot"
-        case .zai:
-            return "Z.ai"
-        case .amp:
-            return "Amp"
-        case .cursor:
-            return "Cursor"
-        case .jetbrains:
-            return "JetBrains"
-        case .kiro:
-            return "Kiro"
-        case .windsurf:
-            return "Windsurf"
-        case .kimi:
+        if provider.type == .kimi {
             return provider.family == .official ? "Kimi Coding" : "Kimi"
-        case .trae:
-            return "Trae SOLO"
-        case .openrouterCredits:
-            return "OpenRouter Credits"
-        case .openrouterAPI:
-            return "OpenRouter API"
-        case .ollamaCloud:
-            return "Ollama Cloud"
-        case .opencodeGo:
-            return "OpenCode Go"
-        case .relay, .open, .dragon:
-            return provider.name
         }
+        return ProviderPresentationRegistry.displayName(for: provider)
     }
 
     private func iconName(for provider: ProviderDescriptor) -> String {
-        switch provider.type {
-        case .codex:
-            return "menu_codex_icon"
-        case .claude:
-            return "menu_claude_icon"
-        case .gemini:
-            return "menu_gemini_icon"
-        case .copilot:
-            return "menu_github_copilot_icon"
-        case .microsoftCopilot:
-            return "menu_microsoft_copilot_icon"
-        case .zai:
-            return "menu_zai_icon"
-        case .amp:
-            return "menu_amp_icon"
-        case .cursor:
-            return "menu_cursor_icon"
-        case .jetbrains:
-            return "menu_jetbrains_icon"
-        case .kiro:
-            return "menu_kiro_icon"
-        case .windsurf:
-            return "menu_windsurf_icon"
-        case .kimi:
-            return "menu_kimi_icon"
-        case .trae:
-            return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI:
-            return "menu_openrouter_icon"
-        case .ollamaCloud:
-            return "menu_ollama_icon"
-        case .opencodeGo:
-            return "menu_relay_icon"
-        case .relay, .open, .dragon:
-            if let override = relayModelIconOverrideName(for: provider) {
-                return override
-            }
-            return "menu_relay_icon"
-        }
-    }
-
-    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
-        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
-            return nil
-        }
-        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
-        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
-        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
-        let providerName = provider.name.lowercased()
-        let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
-            return "menu_kimi_icon"
-        }
-        if relaySignals.contains("deepseek") {
-            return firstExistingRelayIconName([
-                "menu_deepseek_icon",
-                "menu_deep_seek_icon"
-            ])
-        }
-        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
-            return firstExistingRelayIconName([
-                "menu_mimo_icon",
-                "menu_xiaomimimo_icon",
-                "menu_xiaomi_mimo_icon"
-            ])
-        }
-        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
-            return firstExistingRelayIconName([
-                "menu_minimax_icon",
-                "menu_minimaxi_icon"
-            ])
-        }
-        return nil
+        ProviderPresentationRegistry.iconName(for: provider)
     }
 
     private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
@@ -8726,32 +8603,7 @@ struct SettingsView: View {
     }
 
     private func fallbackIcon(for provider: ProviderDescriptor) -> String {
-        switch provider.type {
-        case .codex:
-            return "terminal.fill"
-        case .kimi:
-            return "moon.stars.fill"
-        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo, .relay, .open, .dragon:
-            return "link"
-        case .claude, .gemini:
-            return "sparkles"
-        case .copilot:
-            return "chevron.left.forwardslash.chevron.right"
-        case .microsoftCopilot:
-            return "building.2.crop.circle"
-        case .zai:
-            return "z.square.fill"
-        case .amp:
-            return "bolt.fill"
-        case .cursor:
-            return "cursorarrow.rays"
-        case .jetbrains:
-            return "brain.head.profile"
-        case .kiro:
-            return "wand.and.stars.inverse"
-        case .windsurf:
-            return "wind"
-        }
+        ProviderPresentationRegistry.fallbackIcon(for: provider)
     }
 
     @ViewBuilder
@@ -8858,6 +8710,15 @@ struct SettingsView: View {
             }
         }
 
+        for provider in viewModel.config.providers {
+            if thresholdDraftValues[provider.id] == nil {
+                thresholdDraftValues[provider.id] = provider.threshold.lowRemaining
+            }
+            if officialThresholdInputs[provider.id] == nil {
+                officialThresholdInputs[provider.id] = formattedOfficialThresholdValue(provider.threshold.lowRemaining)
+            }
+        }
+
         for provider in viewModel.config.providers where provider.family == .official {
             if officialSourceModeInputs[provider.id] == nil {
                 officialSourceModeInputs[provider.id] = provider.officialConfig?.sourceMode ?? .auto
@@ -8873,9 +8734,6 @@ struct SettingsView: View {
                 officialTraeValueDisplayModeInputs[provider.id] = provider.officialConfig?.traeValueDisplayMode
                     ?? ProviderDescriptor.defaultOfficialConfig(type: provider.type).traeValueDisplayMode
                     ?? .percent
-            }
-            if officialThresholdInputs[provider.id] == nil {
-                officialThresholdInputs[provider.id] = formattedOfficialThresholdValue(provider.threshold.lowRemaining)
             }
         }
 
@@ -9373,7 +9231,7 @@ struct SettingsView: View {
                 id: window.id,
                 title: codexQuotaDisplayTitle(window, provider: provider),
                 valueText: valueText,
-                resetText: codexResetCountdownText(to: window.resetAt),
+                resetText: codexResetCountdownText(for: window, snapshot: snapshot),
                 percent: displayPercent > 0 ? displayPercent : 0,
                 barColor: codexQuotaBarColor(remainingPercent: healthPercent),
                 isAvailable: snapshot != nil
@@ -9399,119 +9257,44 @@ struct SettingsView: View {
         snapshot: UsageSnapshot?,
         hasError: Bool
     ) -> (text: String, color: Color) {
-        if let snapshot, snapshot.valueFreshness == .cachedFallback {
-            return relayCachedRelayStatus(fetchHealth: snapshot.fetchHealth)
-        }
-
-        if let snapshot, snapshot.valueFreshness == .empty {
-            switch snapshot.fetchHealth {
-            case .authExpired:
-                return (viewModel.language == .zhHans ? "认证失效" : "Auth expired", Color(hex: 0xD05757))
-            case .endpointMisconfigured:
-                return (viewModel.language == .zhHans ? "配置异常" : "Config issue", Color(hex: 0xD05757))
-            case .rateLimited:
-                return (viewModel.language == .zhHans ? "接口限流" : "Rate limited", Color(hex: 0xE88B2D))
-            case .unreachable:
-                return (viewModel.text(.statusDisconnected), Color(hex: 0xD05757))
-            case .ok:
-                break
-            }
-        }
-
-        if hasError {
-            return (viewModel.text(.statusDisconnected), Color(hex: 0xD05757))
-        }
-
-        guard let remaining = snapshot?.remaining else {
-            return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
-        }
-
-        if remaining > 50 {
-            return (viewModel.text(.statusSufficient), Color(hex: 0x69BD64))
-        }
-        if remaining > 0 {
-            return (viewModel.text(.statusTight), Color(hex: 0xE88B2D))
-        }
-        return (viewModel.text(.statusExhausted), Color(hex: 0xD05757))
+        let status = RelayStatusPresenter.providerSummaryStatus(
+            snapshot: snapshot,
+            hasError: hasError,
+            language: viewModel.language
+        )
+        return (status.text, status.color)
     }
 
     private func relayCachedRelayStatus(fetchHealth: FetchHealth) -> (text: String, color: Color) {
-        switch fetchHealth {
-        case .authExpired:
-            return (viewModel.language == .zhHans ? "认证失效(缓存)" : "Auth expired (cached)", Color(hex: 0xD05757))
-        case .endpointMisconfigured:
-            return (viewModel.language == .zhHans ? "配置异常(缓存)" : "Config issue (cached)", Color(hex: 0xD05757))
-        case .rateLimited:
-            return (viewModel.language == .zhHans ? "限流回退" : "Rate limited (cached)", Color(hex: 0xE88B2D))
-        case .unreachable, .ok:
-            return (viewModel.language == .zhHans ? "缓存回退" : "Cached fallback", Color(hex: 0xE88B2D))
-        }
+        let status = RelayStatusPresenter.cachedRelayStatus(
+            fetchHealth: fetchHealth,
+            language: viewModel.language
+        )
+        return (status.text, status.color)
     }
 
     private func relayFetchHealthDisplayStatus(
         health: FetchHealth?,
         hasError: Bool
     ) -> (text: String, color: Color) {
-        if let health {
-            return (relayFetchHealthLabel(health), relayFetchHealthColor(health))
-        }
-        if hasError {
-            return (relayFetchHealthLabel(.unreachable), relayFetchHealthColor(.unreachable))
-        }
-        return (relayFetchHealthLabel(.ok), relayFetchHealthColor(.ok))
+        let status = RelayStatusPresenter.fetchHealthDisplayStatus(
+            health: health,
+            hasError: hasError,
+            language: viewModel.language
+        )
+        return (status.text, status.color)
     }
 
     private func relayFetchHealthLabel(_ health: FetchHealth) -> String {
-        switch (viewModel.language, health) {
-        case (.zhHans, .ok):
-            return "接口正常"
-        case (.zhHans, .authExpired):
-            return "认证失效"
-        case (.zhHans, .rateLimited):
-            return "接口限流"
-        case (.zhHans, .endpointMisconfigured):
-            return "接口配置异常"
-        case (.zhHans, .unreachable):
-            return "站点不可达"
-        case (.en, .ok):
-            return "Live"
-        case (.en, .authExpired):
-            return "Auth expired"
-        case (.en, .rateLimited):
-            return "Rate limited"
-        case (.en, .endpointMisconfigured):
-            return "Config issue"
-        case (.en, .unreachable):
-            return "Unreachable"
-        }
+        RelayStatusPresenter.fetchHealthLabel(health, language: viewModel.language)
     }
 
     private func relayFetchHealthColor(_ health: FetchHealth) -> Color {
-        switch health {
-        case .ok:
-            return .green
-        case .rateLimited:
-            return Color(hex: 0xD87E3E)
-        case .authExpired, .endpointMisconfigured, .unreachable:
-            return Color(hex: 0xD83E3E)
-        }
+        RelayStatusPresenter.fetchHealthColor(health)
     }
 
     private func relayValueFreshnessLabel(_ freshness: ValueFreshness) -> String {
-        switch (viewModel.language, freshness) {
-        case (.zhHans, .live):
-            return "实时值"
-        case (.zhHans, .cachedFallback):
-            return "缓存回退"
-        case (.zhHans, .empty):
-            return "暂无可用值"
-        case (.en, .live):
-            return "Live"
-        case (.en, .cachedFallback):
-            return "Cached fallback"
-        case (.en, .empty):
-            return "No usable value"
-        }
+        RelayStatusPresenter.valueFreshnessLabel(freshness, language: viewModel.language)
     }
 
     private func relayRuntimeStatusTitle() -> String {
@@ -9650,15 +9433,6 @@ private struct DialogSmoothRoundedRectangle: InsettableShape {
             smoothing: smoothing,
             insetAmount: insetAmount + amount
         )
-    }
-}
-
-private extension Color {
-    init(hex: UInt32) {
-        let r = Double((hex >> 16) & 0xFF) / 255
-        let g = Double((hex >> 8) & 0xFF) / 255
-        let b = Double(hex & 0xFF) / 255
-        self = Color(red: r, green: g, blue: b)
     }
 }
 

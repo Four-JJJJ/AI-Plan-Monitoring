@@ -5,7 +5,7 @@ enum ProviderFamily: String, Codable, CaseIterable {
     case thirdParty
 }
 
-enum ProviderType: String, Codable, CaseIterable {
+enum ProviderType: String, Codable, CaseIterable, Sendable {
     case codex
     case claude
     case gemini
@@ -305,6 +305,21 @@ enum UsageQuotaKind: String, Codable, Equatable {
     case custom
 }
 
+enum UsageQuotaResetSource: String, Codable, Equatable {
+    case official
+    case webObserved
+    case localEstimate
+    case userCalibrated
+    case unknown
+}
+
+enum UsageQuotaResetConfidence: String, Codable, Equatable {
+    case confirmed
+    case estimated
+    case stale
+    case unknown
+}
+
 struct UsageQuotaWindow: Codable, Equatable, Identifiable {
     var id: String
     var title: String
@@ -312,6 +327,11 @@ struct UsageQuotaWindow: Codable, Equatable, Identifiable {
     var usedPercent: Double
     var resetAt: Date?
     var kind: UsageQuotaKind
+    var resetSource: UsageQuotaResetSource
+    var observedAt: Date?
+    var serverClockSkew: TimeInterval?
+    var confidence: UsageQuotaResetConfidence
+    var windowIdentity: String?
 
     init(
         id: String,
@@ -319,7 +339,12 @@ struct UsageQuotaWindow: Codable, Equatable, Identifiable {
         remainingPercent: Double,
         usedPercent: Double,
         resetAt: Date? = nil,
-        kind: UsageQuotaKind
+        kind: UsageQuotaKind,
+        resetSource: UsageQuotaResetSource = .unknown,
+        observedAt: Date? = nil,
+        serverClockSkew: TimeInterval? = nil,
+        confidence: UsageQuotaResetConfidence = .unknown,
+        windowIdentity: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -327,6 +352,40 @@ struct UsageQuotaWindow: Codable, Equatable, Identifiable {
         self.usedPercent = usedPercent
         self.resetAt = resetAt
         self.kind = kind
+        self.resetSource = resetSource
+        self.observedAt = observedAt
+        self.serverClockSkew = serverClockSkew
+        self.confidence = confidence
+        self.windowIdentity = windowIdentity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case remainingPercent
+        case usedPercent
+        case resetAt
+        case kind
+        case resetSource
+        case observedAt
+        case serverClockSkew
+        case confidence
+        case windowIdentity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        remainingPercent = try container.decode(Double.self, forKey: .remainingPercent)
+        usedPercent = try container.decode(Double.self, forKey: .usedPercent)
+        resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
+        kind = try container.decode(UsageQuotaKind.self, forKey: .kind)
+        resetSource = try container.decodeIfPresent(UsageQuotaResetSource.self, forKey: .resetSource) ?? .unknown
+        observedAt = try container.decodeIfPresent(Date.self, forKey: .observedAt)
+        serverClockSkew = try container.decodeIfPresent(TimeInterval.self, forKey: .serverClockSkew)
+        confidence = try container.decodeIfPresent(UsageQuotaResetConfidence.self, forKey: .confidence) ?? .unknown
+        windowIdentity = try container.decodeIfPresent(String.self, forKey: .windowIdentity)
     }
 }
 
@@ -379,7 +438,13 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
         self.unit = unit
         self.updatedAt = updatedAt
         self.note = note
-        self.quotaWindows = quotaWindows
+        self.quotaWindows = Self.quotaWindowsWithDefaultResetMetadata(
+            quotaWindows,
+            source: source,
+            sourceLabel: sourceLabel,
+            valueFreshness: valueFreshness,
+            updatedAt: updatedAt
+        )
         self.sourceLabel = sourceLabel
         self.accountLabel = accountLabel
         self.authSourceLabel = authSourceLabel
@@ -420,13 +485,113 @@ struct UsageSnapshot: Codable, Identifiable, Equatable {
         unit = try container.decode(String.self, forKey: .unit)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         note = try container.decode(String.self, forKey: .note)
-        quotaWindows = try container.decodeIfPresent([UsageQuotaWindow].self, forKey: .quotaWindows) ?? []
         sourceLabel = try container.decodeIfPresent(String.self, forKey: .sourceLabel) ?? ""
         accountLabel = try container.decodeIfPresent(String.self, forKey: .accountLabel)
         authSourceLabel = try container.decodeIfPresent(String.self, forKey: .authSourceLabel)
         diagnosticCode = try container.decodeIfPresent(String.self, forKey: .diagnosticCode)
         extras = try container.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
         rawMeta = try container.decodeIfPresent([String: String].self, forKey: .rawMeta) ?? [:]
+        quotaWindows = Self.quotaWindowsWithDefaultResetMetadata(
+            try container.decodeIfPresent([UsageQuotaWindow].self, forKey: .quotaWindows) ?? [],
+            source: source,
+            sourceLabel: sourceLabel,
+            valueFreshness: valueFreshness,
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func quotaWindowsWithDefaultResetMetadata(
+        _ windows: [UsageQuotaWindow],
+        source: String,
+        sourceLabel: String,
+        valueFreshness: ValueFreshness,
+        updatedAt: Date
+    ) -> [UsageQuotaWindow] {
+        windows.map {
+            $0.withDefaultResetMetadata(
+                snapshotSource: source,
+                sourceLabel: sourceLabel,
+                valueFreshness: valueFreshness,
+                observedAt: updatedAt
+            )
+        }
+    }
+}
+
+extension UsageQuotaWindow {
+    func withDefaultResetMetadata(
+        snapshotSource: String,
+        sourceLabel: String,
+        valueFreshness: ValueFreshness,
+        observedAt fallbackObservedAt: Date
+    ) -> UsageQuotaWindow {
+        var copy = self
+        if copy.observedAt == nil {
+            copy.observedAt = fallbackObservedAt
+        }
+        if copy.windowIdentity == nil {
+            copy.windowIdentity = Self.defaultWindowIdentity(for: copy)
+        }
+        if copy.resetSource == .unknown {
+            copy.resetSource = Self.inferredResetSource(
+                snapshotSource: snapshotSource,
+                sourceLabel: sourceLabel,
+                resetAt: copy.resetAt
+            )
+        }
+        if copy.confidence == .unknown {
+            copy.confidence = Self.inferredResetConfidence(
+                resetAt: copy.resetAt,
+                resetSource: copy.resetSource,
+                valueFreshness: valueFreshness
+            )
+        }
+        return copy
+    }
+
+    static func defaultWindowIdentity(for window: UsageQuotaWindow) -> String? {
+        guard let resetAt = window.resetAt else { return nil }
+        return "\(window.kind.rawValue):\(Int(resetAt.timeIntervalSince1970))"
+    }
+
+    private static func inferredResetSource(
+        snapshotSource: String,
+        sourceLabel: String,
+        resetAt: Date?
+    ) -> UsageQuotaResetSource {
+        guard resetAt != nil else { return .unknown }
+        let source = snapshotSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let label = sourceLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if label == "api" || source.contains("official") {
+            return .official
+        }
+        if label.contains("web") || label.contains("browser") {
+            return .webObserved
+        }
+        if label.contains("cli") || label.contains("local") {
+            return .localEstimate
+        }
+        return .webObserved
+    }
+
+    private static func inferredResetConfidence(
+        resetAt: Date?,
+        resetSource: UsageQuotaResetSource,
+        valueFreshness: ValueFreshness
+    ) -> UsageQuotaResetConfidence {
+        guard resetAt != nil, valueFreshness == .live else {
+            return .stale
+        }
+
+        switch resetSource {
+        case .official, .userCalibrated:
+            return .confirmed
+        case .webObserved, .localEstimate:
+            return .estimated
+        case .unknown:
+            return .stale
+        }
     }
 }
 
@@ -559,7 +724,7 @@ struct AppConfig: Codable, Equatable {
         let resolvedStatusProviderID = statusBarProviderID ?? Self.defaultStatusBarProviderID(from: normalizedProviders)
         self.language = language
         self.launchAtLoginEnabled = launchAtLoginEnabled
-        self.simplifiedRelayConfig = simplifiedRelayConfig
+        self.simplifiedRelayConfig = true
         self.showOfficialAccountEmailInMenuBar = showOfficialAccountEmailInMenuBar
         self.claudeStatusBarDisplaySlotID = claudeStatusBarDisplaySlotID
         self.statusBarProviderID = resolvedStatusProviderID
@@ -675,7 +840,8 @@ struct AppConfig: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
         self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
-        self.simplifiedRelayConfig = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig) ?? true
+        _ = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig)
+        self.simplifiedRelayConfig = true
         self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
         self.claudeStatusBarDisplaySlotID = try container.decodeIfPresent(CodexSlotID.self, forKey: .claudeStatusBarDisplaySlotID)
         let decodedProviders = try container.decodeIfPresent(LossyProviderDescriptorArray.self, forKey: .providers)?.values

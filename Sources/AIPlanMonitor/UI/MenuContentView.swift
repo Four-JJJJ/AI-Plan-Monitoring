@@ -385,7 +385,7 @@ struct MenuContentView: View {
         let error = viewModel.errors[provider.id]
 
         // menubar 模型卡入口：官方模型和 quotaPercent relay 走百分比卡，其余第三方走余额卡。
-        if provider.family == .official || provider.type == .kimi || provider.relayDisplayMode == .quotaPercent {
+        if ProviderCapabilities.capabilities(for: provider).usesPercentageMenuCard {
             let metrics = quotaMetrics(provider: provider, snapshot: snapshot)
             let visibleMetrics = visibleQuotaMetrics(provider: provider, metrics: metrics)
             let stale = snapshot?.valueFreshness == .cachedFallback
@@ -588,7 +588,7 @@ struct MenuContentView: View {
     }
 
     private func preferredMetricCount(for provider: ProviderDescriptor) -> Int {
-        provider.type == .claude ? 4 : 2
+        QuotaMetricDisplayFactory.preferredMetricCount(for: provider)
     }
 
     private func buildPercentageMetricDisplays(
@@ -621,7 +621,12 @@ struct MenuContentView: View {
             } else if !metric.isAvailable {
                 resetLabel = "-"
             } else {
-                resetLabel = Self.countdownText(to: metric.resetAt, now: now, language: viewModel.language)
+                let countdown = Self.countdownText(to: metric.resetAt, now: now, language: viewModel.language)
+                if let resetTrustLabel = metric.resetTrustLabel {
+                    resetLabel = "\(countdown) · \(resetTrustLabel)"
+                } else {
+                    resetLabel = countdown
+                }
             }
             return PercentageMetricDisplay(
                 id: metric.id,
@@ -922,151 +927,15 @@ struct MenuContentView: View {
 
     private func displayName(for provider: ProviderDescriptor?) -> String {
         guard let provider else { return viewModel.text(.thirdPartyRelay) }
-        switch provider.type {
-        case .codex:
-            return "Codex"
-        case .claude:
-            return "Claude"
-        case .gemini:
-            return "Gemini"
-        case .copilot:
-            return "GitHub Copilot"
-        case .microsoftCopilot:
-            return "Microsoft Copilot"
-        case .zai:
-            return "Z.ai"
-        case .amp:
-            return "Amp"
-        case .cursor:
-            return "Cursor"
-        case .jetbrains:
-            return "JetBrains"
-        case .kiro:
-            return "Kiro"
-        case .windsurf:
-            return "Windsurf"
-        case .kimi:
-            return provider.family == .official ? "Kimi Coding" : "KIMI"
-        case .trae:
-            return "Trae SOLO"
-        case .openrouterCredits:
-            return "OpenRouter Credits"
-        case .openrouterAPI:
-            return "OpenRouter API"
-        case .ollamaCloud:
-            return "Ollama Cloud"
-        case .opencodeGo:
-            return "OpenCode Go"
-        case .relay, .open, .dragon:
-            return provider.name
-        }
+        return ProviderPresentationRegistry.displayName(for: provider)
     }
 
     private func iconName(for provider: ProviderDescriptor?) -> String {
-        guard let provider else { return "menu_relay_icon" }
-        switch provider.type {
-        case .codex:
-            return "menu_codex_icon"
-        case .claude:
-            return "menu_claude_icon"
-        case .gemini:
-            return "menu_gemini_icon"
-        case .copilot:
-            return "menu_github_copilot_icon"
-        case .microsoftCopilot:
-            return "menu_microsoft_copilot_icon"
-        case .zai:
-            return "menu_zai_icon"
-        case .amp:
-            return "menu_amp_icon"
-        case .cursor:
-            return "menu_cursor_icon"
-        case .jetbrains:
-            return "menu_jetbrains_icon"
-        case .kiro:
-            return "menu_kiro_icon"
-        case .windsurf:
-            return "menu_windsurf_icon"
-        case .kimi:
-            return "menu_kimi_icon"
-        case .trae:
-            return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI:
-            return "menu_openrouter_icon"
-        case .ollamaCloud:
-            return "menu_ollama_icon"
-        case .opencodeGo:
-            return "menu_relay_icon"
-        case .relay, .open, .dragon:
-            if let override = relayModelIconOverrideName(for: provider) {
-                return override
-            }
-            return "menu_relay_icon"
-        }
-    }
-
-    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
-        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
-            return nil
-        }
-        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
-        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
-        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
-        let providerName = provider.name.lowercased()
-        let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
-            return "menu_kimi_icon"
-        }
-        if relaySignals.contains("deepseek") {
-            return firstExistingRelayIconName(["menu_deepseek_icon", "menu_deep_seek_icon"])
-        }
-        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
-            return firstExistingRelayIconName(["menu_mimo_icon", "menu_xiaomimimo_icon", "menu_xiaomi_mimo_icon"])
-        }
-        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
-            return firstExistingRelayIconName(["menu_minimax_icon", "menu_minimaxi_icon"])
-        }
-        return nil
-    }
-
-    private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
-        for name in candidates {
-            if Bundle.module.url(forResource: name, withExtension: "png") != nil ||
-                Bundle.module.url(forResource: name, withExtension: "svg") != nil {
-                return name
-            }
-        }
-        return nil
+        ProviderPresentationRegistry.iconName(for: provider)
     }
 
     private func fallbackIcon(for provider: ProviderDescriptor?) -> String {
-        guard let provider else { return "link" }
-        switch provider.type {
-        case .codex:
-            return "terminal.fill"
-        case .kimi:
-            return "moon.stars.fill"
-        case .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo, .relay, .open, .dragon:
-            return "link"
-        case .claude, .gemini:
-            return "sparkles"
-        case .copilot:
-            return "chevron.left.forwardslash.chevron.right"
-        case .microsoftCopilot:
-            return "building.2.crop.circle"
-        case .zai:
-            return "z.square.fill"
-        case .amp:
-            return "bolt.fill"
-        case .cursor:
-            return "cursorarrow.rays"
-        case .jetbrains:
-            return "brain.head.profile"
-        case .kiro:
-            return "wand.and.stars.inverse"
-        case .windsurf:
-            return "wind"
-        }
+        ProviderPresentationRegistry.fallbackIcon(for: provider)
     }
 
     private func quotaMetrics(provider: ProviderDescriptor, snapshot: UsageSnapshot?) -> [QuotaMetric] {
@@ -1087,7 +956,8 @@ struct MenuContentView: View {
                         title: metricTitle(for: $0, provider: provider),
                         displayPercent: displayPercent,
                         healthPercent: clamp($0.remainingPercent),
-                        resetAt: $0.resetAt
+                        resetAt: $0.resetAt,
+                        resetTrustLabel: resetTrustLabel(for: $0, snapshot: snapshot)
                     )
                 }
         }
@@ -1105,6 +975,7 @@ struct MenuContentView: View {
                     displayPercent: displayPercent,
                     healthPercent: clamp(window.remainingPercent),
                     resetAt: window.resetAt,
+                    resetTrustLabel: resetTrustLabel(for: window, snapshot: snapshot),
                     valueTextOverride: snapshot.rawMeta["quotaValueText.\(window.id)"]
                 )
             }
@@ -1290,25 +1161,29 @@ struct MenuContentView: View {
                 provider: provider,
                 id: "\(provider.id)-session",
                 title: viewModel.text(.quotaFiveHour),
-                window: windows.first(where: { $0.kind == .session })
+                window: windows.first(where: { $0.kind == .session }),
+                snapshot: snapshot
             ),
             claudeMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-all",
                 title: viewModel.localizedText("全部模型", "All models"),
-                window: windows.first(where: { $0.kind == .weekly })
+                window: windows.first(where: { $0.kind == .weekly }),
+                snapshot: snapshot
             ),
             claudeMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-sonnet",
                 title: viewModel.localizedText("Sonnet 专用", "Sonnet only"),
-                window: windows.first(where: isClaudeSonnetWindow(_:))
+                window: windows.first(where: isClaudeSonnetWindow(_:)),
+                snapshot: snapshot
             ),
             claudeMetric(
                 provider: provider,
                 id: "\(provider.id)-weekly-design",
                 title: viewModel.localizedText("Claude Design", "Claude Design"),
-                window: windows.first(where: isClaudeDesignWindow(_:))
+                window: windows.first(where: isClaudeDesignWindow(_:)),
+                snapshot: snapshot
             )
         ]
     }
@@ -1317,7 +1192,8 @@ struct MenuContentView: View {
         provider: ProviderDescriptor,
         id: String,
         title: String,
-        window: UsageQuotaWindow?
+        window: UsageQuotaWindow?,
+        snapshot: UsageSnapshot
     ) -> QuotaMetric {
         let displayTitle = placeholderMetricTitle(title, provider: provider)
         guard let window else {
@@ -1340,7 +1216,16 @@ struct MenuContentView: View {
             title: displayTitle,
             displayPercent: displayPercent,
             healthPercent: clamp(window.remainingPercent),
-            resetAt: window.resetAt
+            resetAt: window.resetAt,
+            resetTrustLabel: resetTrustLabel(for: window, snapshot: snapshot)
+        )
+    }
+
+    private func resetTrustLabel(for window: UsageQuotaWindow, snapshot: UsageSnapshot?) -> String {
+        CountdownFormatter.resetTrustLabel(
+            for: window,
+            snapshotFreshness: snapshot?.valueFreshness,
+            language: viewModel.language
         )
     }
 
@@ -2031,6 +1916,7 @@ private struct QuotaMetric: Identifiable {
     let displayPercent: Double
     let healthPercent: Double?
     let resetAt: Date?
+    let resetTrustLabel: String?
     let isAvailable: Bool
     let valueTextOverride: String?
 
@@ -2040,6 +1926,7 @@ private struct QuotaMetric: Identifiable {
         displayPercent: Double,
         healthPercent: Double?,
         resetAt: Date?,
+        resetTrustLabel: String? = nil,
         isAvailable: Bool = true,
         valueTextOverride: String? = nil
     ) {
@@ -2048,16 +1935,8 @@ private struct QuotaMetric: Identifiable {
         self.displayPercent = displayPercent
         self.healthPercent = healthPercent
         self.resetAt = resetAt
+        self.resetTrustLabel = resetTrustLabel
         self.isAvailable = isAvailable
         self.valueTextOverride = valueTextOverride
-    }
-}
-
-private extension Color {
-    init(hex: UInt32) {
-        let r = Double((hex >> 16) & 0xFF) / 255
-        let g = Double((hex >> 8) & 0xFF) / 255
-        let b = Double(hex & 0xFF) / 255
-        self = Color(red: r, green: g, blue: b)
     }
 }

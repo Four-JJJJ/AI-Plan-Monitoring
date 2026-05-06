@@ -3,8 +3,22 @@ import Foundation
 final class RelayAdapterRegistry: @unchecked Sendable {
     static let shared = RelayAdapterRegistry()
 
+    private struct LocalManifestDirectoryFingerprint: Equatable {
+        var paths: [String]
+        var fileCount: Int
+        var totalSize: UInt64
+        var latestModificationTime: Date?
+    }
+
+    private struct LocalManifestCache {
+        var fingerprint: LocalManifestDirectoryFingerprint
+        var manifests: [RelayAdapterManifest]
+    }
+
     private let fileManager: FileManager
     private let bundledManifests: [RelayAdapterManifest]
+    private let cacheLock = NSLock()
+    private var localManifestCache: LocalManifestCache?
 
     init(
         fileManager: FileManager = .default,
@@ -58,6 +72,12 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             .filter { !Self.isLegacyRelayExampleManifest($0) }
             .sorted { $0.id < $1.id }
             .map(decorate)
+    }
+
+    func invalidateLocalManifestCache() {
+        cacheLock.lock()
+        localManifestCache = nil
+        cacheLock.unlock()
     }
 
     private func decorate(_ manifest: RelayAdapterManifest) -> RelayAdapterManifest {
@@ -121,20 +141,94 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         let directory = appSupport
             .appendingPathComponent("AIPlanMonitor", isDirectory: true)
             .appendingPathComponent("relay-adapters", isDirectory: true)
-        guard let enumerator = fileManager.enumerator(at: directory, includingPropertiesForKeys: nil) else {
-            return []
+
+        let manifestFiles = localManifestFiles(in: directory)
+        let fingerprint = localManifestFingerprint(for: manifestFiles)
+        if let cached = cachedLocalManifests(matching: fingerprint) {
+            return cached
         }
 
         let decoder = JSONDecoder()
         var manifests: [RelayAdapterManifest] = []
-        for case let url as URL in enumerator where url.pathExtension.lowercased() == "json" {
+        for url in manifestFiles {
             guard let data = try? Data(contentsOf: url),
                   let manifest = try? decoder.decode(RelayAdapterManifest.self, from: data) else {
                 continue
             }
             manifests.append(manifest)
         }
+        manifests.sort { $0.id < $1.id }
+        storeLocalManifests(manifests, fingerprint: fingerprint)
         return manifests
+    }
+
+    private func localManifestFiles(in directory: URL) -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var files: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "json" {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            files.append(url.standardizedFileURL)
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private func localManifestFingerprint(for files: [URL]) -> LocalManifestDirectoryFingerprint {
+        var totalSize: UInt64 = 0
+        var latestModificationTime: Date?
+
+        for url in files {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+                continue
+            }
+            if let fileSize = values.fileSize, fileSize > 0 {
+                totalSize += UInt64(fileSize)
+            }
+            if let modifiedAt = values.contentModificationDate,
+               latestModificationTime == nil || modifiedAt > (latestModificationTime ?? .distantPast) {
+                latestModificationTime = modifiedAt
+            }
+        }
+
+        return LocalManifestDirectoryFingerprint(
+            paths: files.map(\.path),
+            fileCount: files.count,
+            totalSize: totalSize,
+            latestModificationTime: latestModificationTime
+        )
+    }
+
+    private func cachedLocalManifests(
+        matching fingerprint: LocalManifestDirectoryFingerprint
+    ) -> [RelayAdapterManifest]? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let localManifestCache,
+              localManifestCache.fingerprint == fingerprint else {
+            return nil
+        }
+        return localManifestCache.manifests
+    }
+
+    private func storeLocalManifests(
+        _ manifests: [RelayAdapterManifest],
+        fingerprint: LocalManifestDirectoryFingerprint
+    ) {
+        cacheLock.lock()
+        localManifestCache = LocalManifestCache(
+            fingerprint: fingerprint,
+            manifests: manifests
+        )
+        cacheLock.unlock()
     }
 
     private static func loadBundledManifests() -> [RelayAdapterManifest] {

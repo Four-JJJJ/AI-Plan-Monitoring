@@ -8,7 +8,6 @@ final class StatusBarController: NSObject {
     private var menuPanel: NSPanel?
     private var menuHostingController: NSHostingController<MenuContentView>?
     private var refreshTimer: Timer?
-    private var wallpaperProbeTimer: Timer?
     private var wallpaperFollowUpWorkItems: [DispatchWorkItem] = []
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
@@ -19,7 +18,6 @@ final class StatusBarController: NSObject {
     private let popoverWidth: CGFloat = 316
     private let popoverMinHeight: CGFloat = 60
     private let popoverGapBelowStatusIcon: CGFloat = 1
-    private let wallpaperProbeInterval: TimeInterval = 0.5
     private let wallpaperLuminanceCacheLimit = 12
     private let protectedOutsideClickBundleIDs: Set<String> = [
         "com.apple.securityagent",
@@ -350,7 +348,6 @@ final class StatusBarController: NSObject {
         workspaceNotificationObservers.removeAll()
         defaultNotificationObservers.removeAll()
         distributedNotificationObservers.removeAll()
-        stopWallpaperProbeTimer()
         cancelWallpaperFollowUpRefreshes()
     }
 
@@ -692,28 +689,11 @@ final class StatusBarController: NSObject {
 
     private func refreshWallpaperProbeState() {
         if viewModel.statusBarAppearanceMode == .followWallpaper {
-            startWallpaperProbeTimer()
+            refreshWallpaperAppearanceIfNeeded()
         } else {
-            stopWallpaperProbeTimer()
             cancelWallpaperFollowUpRefreshes()
             clearWallpaperLuminanceCache()
         }
-    }
-
-    private func startWallpaperProbeTimer() {
-        guard wallpaperProbeTimer == nil else { return }
-        let timer = Timer(timeInterval: wallpaperProbeInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshWallpaperAppearanceIfNeeded()
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        wallpaperProbeTimer = timer
-    }
-
-    private func stopWallpaperProbeTimer() {
-        wallpaperProbeTimer?.invalidate()
-        wallpaperProbeTimer = nil
     }
 
     private func refreshWallpaperAppearanceIfNeeded() {
@@ -829,79 +809,7 @@ final class StatusBarController: NSObject {
     }
 
     private func menuIconName(for provider: ProviderDescriptor) -> String {
-        switch provider.type {
-        case .codex:
-            return "menu_codex_icon"
-        case .claude:
-            return "menu_claude_icon"
-        case .gemini:
-            return "menu_gemini_icon"
-        case .copilot:
-            return "menu_github_copilot_icon"
-        case .microsoftCopilot:
-            return "menu_microsoft_copilot_icon"
-        case .zai:
-            return "menu_zai_icon"
-        case .amp:
-            return "menu_amp_icon"
-        case .cursor:
-            return "menu_cursor_icon"
-        case .jetbrains:
-            return "menu_jetbrains_icon"
-        case .kiro:
-            return "menu_kiro_icon"
-        case .windsurf:
-            return "menu_windsurf_icon"
-        case .kimi:
-            return "menu_kimi_icon"
-        case .trae:
-            return "menu_relay_icon"
-        case .openrouterCredits, .openrouterAPI:
-            return "menu_openrouter_icon"
-        case .ollamaCloud:
-            return "menu_ollama_icon"
-        case .opencodeGo:
-            return "menu_relay_icon"
-        case .relay, .open, .dragon:
-            if let override = relayModelIconOverrideName(for: provider) {
-                return override
-            }
-            return "menu_relay_icon"
-        }
-    }
-
-    private func relayModelIconOverrideName(for provider: ProviderDescriptor) -> String? {
-        guard provider.type == .relay || provider.type == .open || provider.type == .dragon else {
-            return nil
-        }
-        let relayID = (provider.relayConfig?.adapterID ?? provider.relayManifest?.id ?? "").lowercased()
-        let relayBaseURL = provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
-        let host = URL(string: relayBaseURL)?.host?.lowercased() ?? ""
-        let providerName = provider.name.lowercased()
-        let relaySignals = "\(relayID)|\(host)|\(providerName)"
-        if relaySignals.contains("moonshot") || relaySignals.contains("moonsho") || relaySignals.contains("kimi") {
-            return "menu_kimi_icon"
-        }
-        if relaySignals.contains("deepseek") {
-            return firstExistingRelayIconName(["menu_deepseek_icon", "menu_deep_seek_icon"])
-        }
-        if relaySignals.contains("xiaomimimo") || relaySignals.contains("mimo") {
-            return firstExistingRelayIconName(["menu_mimo_icon", "menu_xiaomimimo_icon", "menu_xiaomi_mimo_icon"])
-        }
-        if relaySignals.contains("minimax") || relaySignals.contains("minimaxi") {
-            return firstExistingRelayIconName(["menu_minimax_icon", "menu_minimaxi_icon"])
-        }
-        return nil
-    }
-
-    private func firstExistingRelayIconName(_ candidates: [String]) -> String? {
-        for name in candidates {
-            if Bundle.module.url(forResource: name, withExtension: "png") != nil ||
-                Bundle.module.url(forResource: name, withExtension: "svg") != nil {
-                return name
-            }
-        }
-        return nil
+        ProviderPresentationRegistry.iconName(for: provider)
     }
 
     private func bundledImage(named name: String, ext: String) -> NSImage? {

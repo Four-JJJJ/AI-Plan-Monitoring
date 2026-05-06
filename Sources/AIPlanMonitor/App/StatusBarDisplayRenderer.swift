@@ -293,7 +293,26 @@ enum StatusBarDisplayRenderer {
             width: drawSize.width,
             height: drawSize.height
         )
-        icon.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1.0)
+        guard
+            let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil),
+            let context = NSGraphicsContext.current?.cgContext
+        else {
+            icon.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1.0)
+            return
+        }
+
+        context.saveGState()
+        context.translateBy(x: drawRect.minX, y: drawRect.minY + drawRect.height)
+        context.scaleBy(
+            x: drawRect.width / CGFloat(cgImage.width),
+            y: -drawRect.height / CGFloat(cgImage.height)
+        )
+        context.interpolationQuality = .none
+        context.draw(
+            cgImage,
+            in: CGRect(x: 0, y: 0, width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
+        )
+        context.restoreGState()
     }
 
     private static func drawText(

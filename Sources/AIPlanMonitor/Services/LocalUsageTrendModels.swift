@@ -1,19 +1,19 @@
 import Foundation
 
-enum LocalUsageTrendScope: String, CaseIterable, Identifiable, Sendable {
+enum LocalUsageTrendScope: String, CaseIterable, Identifiable, Codable, Sendable {
     case currentAccount
     case allAccounts
 
     var id: String { rawValue }
 }
 
-enum LocalUsageTrendDiagnosticsSource: String, Sendable {
+enum LocalUsageTrendDiagnosticsSource: String, Codable, Sendable {
     case strict
     case sessions
     case approximate
 }
 
-struct LocalUsageTrendDiagnostics: Equatable, Sendable {
+struct LocalUsageTrendDiagnostics: Codable, Equatable, Sendable {
     var matchedRows: Int
     var parsedEvents: Int
     var attributableEvents: Int
@@ -25,21 +25,21 @@ struct LocalUsageTrendDiagnostics: Equatable, Sendable {
     var source: LocalUsageTrendDiagnosticsSource
 }
 
-struct LocalUsageTrendPoint: Equatable, Identifiable, Sendable {
+struct LocalUsageTrendPoint: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var startAt: Date
     var totalTokens: Int
     var responses: Int
 }
 
-struct LocalUsageModelBreakdown: Equatable, Identifiable, Sendable {
+struct LocalUsageModelBreakdown: Codable, Equatable, Identifiable, Sendable {
     var id: String { modelID }
     var modelID: String
     var totalTokens: Int
     var responses: Int
 }
 
-struct LocalUsagePeriodSummary: Equatable, Sendable {
+struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     var totalTokens: Int
     var responses: Int
     var byModel: [LocalUsageModelBreakdown]
@@ -47,7 +47,7 @@ struct LocalUsagePeriodSummary: Equatable, Sendable {
     static let empty = LocalUsagePeriodSummary(totalTokens: 0, responses: 0, byModel: [])
 }
 
-struct LocalUsageSummary: Equatable, Sendable {
+struct LocalUsageSummary: Codable, Equatable, Sendable {
     var today: LocalUsagePeriodSummary
     var yesterday: LocalUsagePeriodSummary
     var last30Days: LocalUsagePeriodSummary

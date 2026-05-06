@@ -8,8 +8,9 @@ import UserNotifications
 final class AppViewModel {
     static let statusBarDisplayConfigDidChangeNotification = Notification.Name("AIPlanMonitor.StatusBarDisplayConfigDidChange")
 
-    private let configStore = ConfigStore()
     private let keychain = KeychainService()
+    private let configurationRepository: AppConfigurationRepository
+    @ObservationIgnored private let credentialAccessService: CredentialAccessService
     private let thirdPartyBalanceBaselineStore = ThirdPartyBalanceBaselineStore()
     private let appUpdateService: any AppUpdateServicing
     private let codexSlotStore: CodexAccountSlotStore
@@ -28,6 +29,10 @@ final class AppViewModel {
     @ObservationIgnored private let localSessionSignalMonitor = LocalSessionCompletionSignalMonitor()
     private let providerFactory: any ProviderFactorying
     @ObservationIgnored private let localSessionRefreshCoordinator: LocalSessionRefreshCoordinator
+    @ObservationIgnored private let localUsageHistoryRepository: LocalUsageHistoryRepository
+    @ObservationIgnored private var refreshScheduler: ProviderRefreshScheduler?
+    @ObservationIgnored private let codexSwitchCoordinator = AccountSwitchTransactionCoordinator<CodexSlotID>()
+    @ObservationIgnored private let claudeSwitchCoordinator = AccountSwitchTransactionCoordinator<CodexSlotID>()
 
     private(set) var config: AppConfig
     private(set) var snapshots: [String: UsageSnapshot] = [:]
@@ -57,15 +62,13 @@ final class AppViewModel {
     private(set) var updateInstallationInFlight = false
     private(set) var updatePreparedVersion: String?
     private(set) var updateInstallErrorMessage: String?
+    private(set) var localUsageHistoryVersion = 0
 
-    private var pollTasks: [String: Task<Void, Never>] = [:]
     private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
-    private var codexSwitchingSlots: Set<CodexSlotID> = []
     private var codexOAuthImportTask: Task<Void, Never>?
     private var codexPrefetchInFlightSlots: Set<CodexSlotID> = []
     private var codexPrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var claudeFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
-    private var claudeSwitchingSlots: Set<CodexSlotID> = []
     private var claudeOAuthImportTask: Task<Void, Never>?
     private var claudePrefetchInFlightSlots: Set<CodexSlotID> = []
     private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
@@ -89,12 +92,10 @@ final class AppViewModel {
     private let updateInstallBufferDelaySeconds: TimeInterval
     private var updateCheckStatusClearTask: Task<Void, Never>?
     private let updateCheckStatusClearDelaySeconds: TimeInterval
-    @ObservationIgnored private var localSessionMonitorTask: Task<Void, Never>?
-    @ObservationIgnored private var credentialLookupInFlight: Set<String> = []
-    @ObservationIgnored private var credentialLookupMissingKeys: Set<String> = []
     private(set) var credentialLookupVersion: Int = 0
 
     init(
+        configurationRepository: AppConfigurationRepository = AppConfigurationRepository(),
         appUpdateService: any AppUpdateServicing = AppUpdateService(),
         postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
         codexSlotStore: CodexAccountSlotStore = CodexAccountSlotStore(),
@@ -103,9 +104,12 @@ final class AppViewModel {
         codexDesktopAppService: CodexDesktopAppService = CodexDesktopAppService(),
         notificationService: NotificationService = NotificationService(),
         providerFactory: (any ProviderFactorying)? = nil,
+        localUsageHistoryRepository: LocalUsageHistoryRepository = LocalUsageHistoryRepository(),
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
+        self.configurationRepository = configurationRepository
+        self.credentialAccessService = CredentialAccessService(keychain: keychain)
         self.appUpdateService = appUpdateService
         self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
         self.codexSlotStore = codexSlotStore
@@ -118,24 +122,20 @@ final class AppViewModel {
         let shouldPersistConfigDuringBootstrap: Bool
         var loadedConfig: AppConfig
         do {
-            loadedConfig = try configStore.load()
+            loadedConfig = try configurationRepository.load()
             shouldPersistConfigDuringBootstrap = true
         } catch {
             loadedConfig = .default
             shouldPersistConfigDuringBootstrap = false
         }
-        if loadedConfig.simplifiedRelayConfig == false {
-            loadedConfig.simplifiedRelayConfig = true
-            if shouldPersistConfigDuringBootstrap {
-                try? configStore.save(loadedConfig)
-            }
-        }
         self.config = loadedConfig
         self.currentAppVersion = Self.detectCurrentAppVersion()
         self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
+        self.localUsageHistoryRepository = localUsageHistoryRepository
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
             signalSource: localSessionSignalMonitor
         )
+        self.refreshScheduler = makeRefreshScheduler()
         self.codexSlots = codexSlotStore.visibleSlots()
         self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
@@ -145,13 +145,13 @@ final class AppViewModel {
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
         if shouldPersistConfigDuringBootstrap && self.config != preNormalizedConfig {
-            try? configStore.save(self.config)
+            try? configurationRepository.save(self.config)
         }
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
             if shouldPersistConfigDuringBootstrap {
-                try? configStore.save(self.config)
+                try? configurationRepository.save(self.config)
             }
         }
         syncCodexProfilesCurrentState()
@@ -164,6 +164,7 @@ final class AppViewModel {
     init(
         testingConfig: AppConfig = .default,
         testingCurrentAppVersion: String = "0.0.0",
+        configurationRepository: AppConfigurationRepository = AppConfigurationRepository(),
         appUpdateService: any AppUpdateServicing,
         postUpdateReleaseNotesStore: any PostUpdateReleaseNotesStoring = PostUpdateReleaseNotesStore(),
         codexSlotStore: CodexAccountSlotStore = CodexAccountSlotStore(),
@@ -172,9 +173,12 @@ final class AppViewModel {
         codexDesktopAppService: CodexDesktopAppService = CodexDesktopAppService(),
         notificationService: NotificationService = NotificationService(),
         providerFactory: (any ProviderFactorying)? = nil,
+        localUsageHistoryRepository: LocalUsageHistoryRepository = LocalUsageHistoryRepository(),
         updateInstallBufferDelaySeconds: TimeInterval = 5,
         updateCheckStatusClearDelaySeconds: TimeInterval = 10
     ) {
+        self.configurationRepository = configurationRepository
+        self.credentialAccessService = CredentialAccessService(keychain: keychain)
         self.appUpdateService = appUpdateService
         self.postUpdateReleaseNotesStore = postUpdateReleaseNotesStore
         self.codexSlotStore = codexSlotStore
@@ -187,9 +191,11 @@ final class AppViewModel {
         self.config = testingConfig.migratedWithSiteDefaults()
         self.currentAppVersion = testingCurrentAppVersion
         self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
+        self.localUsageHistoryRepository = localUsageHistoryRepository
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
             signalSource: localSessionSignalMonitor
         )
+        self.refreshScheduler = makeRefreshScheduler()
         self.codexSlots = codexSlotStore.visibleSlots()
         self.claudeSlots = claudeSlotStore.visibleSlots()
         self.codexProfiles = []
@@ -202,6 +208,27 @@ final class AppViewModel {
     }
 #endif
 
+    private func makeRefreshScheduler() -> ProviderRefreshScheduler {
+        ProviderRefreshScheduler(
+            descriptorProvider: { [weak self] providerID in
+                self?.descriptor(for: providerID)
+            },
+            providersProvider: { [weak self] in
+                self?.config.providers ?? []
+            },
+            activeProviderIDsProvider: { [weak self] in
+                Set(self?.statusBarProvidersForDisplay().map(\.id) ?? [])
+            },
+            failureCountProvider: { [weak self] providerID in
+                self?.consecutiveFailures[providerID, default: 0] ?? 0
+            },
+            refreshAction: { [weak self] descriptor, forceRefresh in
+                await self?.refreshProvider(descriptor, forceRefresh: forceRefresh)
+            },
+            localSessionRefreshCoordinator: localSessionRefreshCoordinator
+        )
+    }
+
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
@@ -210,28 +237,11 @@ final class AppViewModel {
     }
 
     func restartPolling() {
-        pollTasks.values.forEach { $0.cancel() }
-        pollTasks.removeAll()
-
-        for provider in config.providers where provider.enabled {
-            pollTasks[provider.id] = Task { [weak self] in
-                await self?.pollLoop(providerID: provider.id)
-            }
-        }
-
-        restartLocalSessionSignalMonitor()
+        refreshScheduler?.restart(providers: config.providers)
     }
 
     func refreshNow() {
-        let enabled = config.providers.filter(\.enabled)
-        guard !enabled.isEmpty else { return }
-
-        Task { [weak self] in
-            guard let self else { return }
-            for descriptor in enabled {
-                await self.refreshProvider(descriptor, forceRefresh: true)
-            }
-        }
+        refreshScheduler?.refreshNow(providers: config.providers)
     }
 
     func checkForAppUpdate(force: Bool = false) {
@@ -306,10 +316,6 @@ final class AppViewModel {
         config.language
     }
 
-    var simplifiedRelayConfig: Bool {
-        config.simplifiedRelayConfig
-    }
-
     var launchAtLoginEnabled: Bool {
         config.launchAtLoginEnabled
     }
@@ -374,13 +380,7 @@ final class AppViewModel {
     func setLanguage(_ language: AppLanguage) {
         guard config.language != language else { return }
         config.language = language
-        try? configStore.save(config)
-    }
-
-    func setSimplifiedRelayConfig(_ enabled: Bool) {
-        guard config.simplifiedRelayConfig != enabled else { return }
-        config.simplifiedRelayConfig = enabled
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
@@ -388,7 +388,7 @@ final class AppViewModel {
         do {
             try launchAtLoginService.setEnabled(enabled)
             config.launchAtLoginEnabled = enabled
-            try? configStore.save(config)
+            try? configurationRepository.save(config)
         } catch {
             errors["launch-at-login"] = error.localizedDescription
         }
@@ -410,21 +410,21 @@ final class AppViewModel {
             config.statusBarMultiProviderIDs = [selected]
         }
         normalizeStatusBarSelections()
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
     func setStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
         guard config.statusBarDisplayStyle != style else { return }
         config.statusBarDisplayStyle = style
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
     func setStatusBarAppearanceMode(_ mode: StatusBarAppearanceMode) {
         guard config.statusBarAppearanceMode != mode else { return }
         config.statusBarAppearanceMode = mode
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
@@ -447,7 +447,7 @@ final class AppViewModel {
                 }
             }
             normalizeStatusBarSelections()
-            try? configStore.save(config)
+            try? configurationRepository.save(config)
             notifyStatusBarDisplayConfigChanged()
             return
         }
@@ -467,20 +467,20 @@ final class AppViewModel {
         guard config.statusBarProviderID != normalized else {
             if normalized != nil {
                 normalizeStatusBarSelections()
-                try? configStore.save(config)
+                try? configurationRepository.save(config)
             }
             return
         }
         config.statusBarProviderID = normalized
         normalizeStatusBarSelections()
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
     func setShowOfficialAccountEmailInMenuBar(_ enabled: Bool) {
         guard config.showOfficialAccountEmailInMenuBar != enabled else { return }
         config.showOfficialAccountEmailInMenuBar = enabled
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
@@ -507,7 +507,7 @@ final class AppViewModel {
         official.showPlanTypeInMenuBar = enabled
         provider.officialConfig = official
         config.providers[idx] = provider
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         notifyStatusBarDisplayConfigChanged()
     }
 
@@ -529,7 +529,7 @@ final class AppViewModel {
         }
         config.claudeStatusBarDisplaySlotID = normalized
         normalizeStatusBarSelections()
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         triggerClaudeStatusBarDisplayPrefetchIfNeeded(slotID: resolvedClaudeStatusBarDisplaySlotID())
         if previousResolvedSlotID != resolvedClaudeStatusBarDisplaySlotID()
             || previousConfiguredSlotID != config.claudeStatusBarDisplaySlotID {
@@ -584,7 +584,7 @@ final class AppViewModel {
             codexPrefetchInFlightCount: codexPrefetchInFlightSlots.count,
             claudePrefetchAttemptedIdentityCount: claudePrefetchAttemptedIdentity.count,
             claudePrefetchInFlightCount: claudePrefetchInFlightSlots.count,
-            pollTaskCount: pollTasks.count
+            pollTaskCount: refreshScheduler?.pollTaskCount ?? 0
         )
     }
 
@@ -1174,6 +1174,93 @@ final class AppViewModel {
         syncClaudeProfilesCurrentState(triggerPrefetchOnChange: false)
     }
 
+    func localUsageHistoryState(for query: LocalUsageHistoryQuery) -> LocalUsageHistoryState {
+        _ = localUsageHistoryVersion
+        return localUsageHistoryRepository.snapshot(for: query)
+    }
+
+    func refreshLocalUsageHistoryIfNeeded(
+        query: LocalUsageHistoryQuery,
+        codexIdentity: CodexTrendIdentityContext? = nil,
+        claudeCurrentConfigDir: String? = nil,
+        claudeAllConfigDirs: [String] = [],
+        force: Bool = false
+    ) {
+        guard query.providerType != .gemini else { return }
+
+        let providerType = query.providerType
+        let scope = query.scope
+        let codexIdentityForRequest = codexIdentity
+        let claudeCurrentConfigDirForRequest = claudeCurrentConfigDir
+        let claudeAllConfigDirsForRequest = claudeAllConfigDirs
+
+        let fingerprintProvider: LocalUsageHistoryRepository.FingerprintProvider = {
+            switch providerType {
+            case .codex:
+                return LocalUsageSourceFingerprintBuilder.codexFingerprint(scope: scope)
+            case .claude:
+                return LocalUsageSourceFingerprintBuilder.claudeFingerprint(
+                    scope: scope,
+                    currentConfigDir: claudeCurrentConfigDirForRequest,
+                    allConfigDirs: claudeAllConfigDirsForRequest
+                )
+            case .kimi:
+                return LocalUsageSourceFingerprintBuilder.kimiFingerprint()
+            default:
+                return LocalUsageSourceFingerprint(
+                    roots: [],
+                    fileCount: 0,
+                    totalSize: 0,
+                    latestModificationTime: nil
+                )
+            }
+        }
+
+        let loader: LocalUsageHistoryRepository.Loader = { sourceFingerprint in
+            switch providerType {
+            case .codex:
+                let codexScope: CodexTrendScope = scope == .currentAccount
+                    ? .currentAccount
+                    : .allAccounts
+                let codexSummary = try CodexLocalUsageService().fetchSummary(
+                    scope: codexScope,
+                    currentIdentity: codexIdentityForRequest
+                )
+                return LocalUsageHistoryLoadResult(
+                    summary: LocalUsageSummary(codex: codexSummary),
+                    sourceFingerprint: sourceFingerprint
+                )
+            case .claude:
+                let summary = try ClaudeLocalUsageService().fetchSummary(
+                    scope: scope,
+                    currentConfigDir: claudeCurrentConfigDirForRequest,
+                    allConfigDirs: claudeAllConfigDirsForRequest
+                )
+                return LocalUsageHistoryLoadResult(
+                    summary: summary,
+                    sourceFingerprint: sourceFingerprint
+                )
+            case .kimi:
+                let summary = try KimiLocalUsageService().fetchSummary(scope: .allAccounts)
+                return LocalUsageHistoryLoadResult(
+                    summary: summary,
+                    sourceFingerprint: sourceFingerprint
+                )
+            default:
+                throw LocalUsageHistoryError.unsupportedProvider(providerType.rawValue)
+            }
+        }
+
+        localUsageHistoryRepository.refreshIfNeeded(
+            query: query,
+            force: force,
+            fingerprintProvider: fingerprintProvider,
+            loader: loader
+        ) { [weak self] in
+            self?.localUsageHistoryVersion += 1
+        }
+    }
+
     private func codexSlotViewModels(
         refreshFromStore: Bool,
         triggerPrefetch: Bool
@@ -1210,7 +1297,7 @@ final class AppViewModel {
                     lastSeenAt: slot.lastSeenAt,
                     displayName: profile?.displayName ?? slot.displayName,
                     note: profile?.note,
-                    isSwitching: codexSwitchingSlots.contains(slot.slotID),
+                    isSwitching: codexSwitchCoordinator.isRunning(slotID: slot.slotID),
                     canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
                     isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
                     profileDisplayName: profile?.displayName,
@@ -1259,7 +1346,7 @@ final class AppViewModel {
                     displayName: profile?.displayName ?? slot.displayName,
                     note: profile?.note,
                     source: profile?.source,
-                    isSwitching: claudeSwitchingSlots.contains(slot.slotID),
+                    isSwitching: claudeSwitchCoordinator.isRunning(slotID: slot.slotID),
                     canSwitch: profile != nil && !(profile?.isCurrentSystemAccount ?? false),
                     isCurrentSystemAccount: profile?.isCurrentSystemAccount ?? false,
                     profileDisplayName: profile?.displayName,
@@ -1326,7 +1413,7 @@ final class AppViewModel {
         setClaudeSwitchFeedback(nil, for: slotID)
         normalizeStatusBarSelections()
         if config.claudeStatusBarDisplaySlotID != previousConfiguredDisplaySlotID {
-            try? configStore.save(config)
+            try? configurationRepository.save(config)
         }
         let resolvedDisplaySlotID = resolvedClaudeStatusBarDisplaySlotID()
         if resolvedDisplaySlotID != previousResolvedDisplaySlotID {
@@ -1425,8 +1512,7 @@ final class AppViewModel {
     func resetLocalAppData() {
         notificationPermissionPollingTask?.cancel()
         notificationPermissionPollingTask = nil
-        pollTasks.values.forEach { $0.cancel() }
-        pollTasks.removeAll()
+        refreshScheduler?.stop()
         codexFeedbackTasks.values.forEach { $0.cancel() }
         codexFeedbackTasks.removeAll()
         codexOAuthImportTask?.cancel()
@@ -1437,14 +1523,14 @@ final class AppViewModel {
         claudeOAuthImportTask?.cancel()
         claudeOAuthImportTask = nil
         Task { await oauthImportOrchestrator.cancelImport(provider: .claude) }
-        codexSwitchingSlots.removeAll()
+        codexSwitchCoordinator.reset()
         codexPrefetchInFlightSlots.removeAll()
         codexPrefetchAttemptedIdentity.removeAll()
         codexInactiveRefreshCursor = 0
         codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
         codexSwitchFeedback.removeAll()
         codexOAuthImportState = nil
-        claudeSwitchingSlots.removeAll()
+        claudeSwitchCoordinator.reset()
         claudePrefetchInFlightSlots.removeAll()
         claudePrefetchAttemptedIdentity.removeAll()
         claudeInactiveRefreshCursor = 0
@@ -1462,12 +1548,12 @@ final class AppViewModel {
         lastUpdatedAt = nil
 
         launchAtLoginService.reset()
-        keychain.resetAllStoredCredentials()
+        credentialAccessService.resetAllStoredCredentials()
         codexProfileStore.reset()
         codexSlotStore.reset()
         claudeProfileStore.reset()
         claudeSlotStore.reset()
-        try? configStore.reset()
+        try? configurationRepository.reset()
 
         config = .default
         codexSlots = []
@@ -1532,51 +1618,50 @@ final class AppViewModel {
             return text(.localDiscoveryNothingFound)
         }
 
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         restartPolling()
         return Localizer.localDiscoveryFoundBody(providerNames: discoveredNames, language: config.language)
     }
 
     func switchCodexProfile(slotID: CodexSlotID) async {
-        guard !codexSwitchingSlots.contains(slotID) else { return }
         syncCodexProfilesCurrentState()
-        codexSwitchingSlots.insert(slotID)
         setCodexSwitchFeedback(nil, for: slotID)
-        defer { codexSwitchingSlots.remove(slotID) }
+        var verificationDescriptor: ProviderDescriptor?
+        var verifiedSnapshot: UsageSnapshot?
 
-        guard let profile = codexProfiles.first(where: { $0.slotID == slotID }) else {
-            setCodexSwitchFeedback(
-                CodexSwitchFeedback(message: text(.codexProfileMissing), isError: true),
-                for: slotID
-            )
-            return
-        }
-
-        do {
-            try codexDesktopAuthService.applyProfile(profile)
-            let restartResult = await codexDesktopAppService.restartIfRunning()
-            syncCodexProfilesCurrentState()
-
-            guard let descriptor = config.providers.first(where: { $0.type == .codex && $0.family == .official }) else {
-                setCodexSwitchFeedback(
-                    CodexSwitchFeedback(
-                        message: codexSwitchMessage(for: restartResult, successKey: .codexSwitchSuccess),
-                        isError: false
-                    ),
-                    for: slotID
-                )
-                return
-            }
-
-            let provider = providerFactory.makeProvider(for: descriptor)
-            do {
+        await codexSwitchCoordinator.run(
+            slotID: slotID,
+            prepare: {
+                guard let profile = codexProfiles.first(where: { $0.slotID == slotID }) else {
+                    throw AccountSwitchTransactionUserMessageError(message: text(.codexProfileMissing))
+                }
+                return profile
+            },
+            apply: { profile in
+                try codexDesktopAuthService.applyProfile(profile)
+            },
+            restart: { _ in
+                await codexDesktopAppService.restartIfRunning()
+            },
+            verify: { _, _ in
+                syncCodexProfilesCurrentState()
+                guard let descriptor = config.providers.first(where: { $0.type == .codex && $0.family == .official }) else {
+                    return
+                }
+                verificationDescriptor = descriptor
+                let provider = providerFactory.makeProvider(for: descriptor)
                 let fetched = try await provider.fetch(forceRefresh: true)
-                let snapshot = markCodexSnapshotActive(fetched, preferredSlotID: slotID)
-                codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
-                snapshots[descriptor.id] = boundedSnapshot(snapshot)
-                errors.removeValue(forKey: descriptor.id)
-                consecutiveFailures[descriptor.id] = 0
-                lastUpdatedAt = Date()
+                verifiedSnapshot = markCodexSnapshotActive(fetched, preferredSlotID: slotID)
+            },
+            finalize: { _, restartResult in
+                if let descriptor = verificationDescriptor,
+                   let snapshot = verifiedSnapshot {
+                    codexSlots = codexSlotStore.upsertActive(snapshot: snapshot)
+                    snapshots[descriptor.id] = boundedSnapshot(snapshot)
+                    errors.removeValue(forKey: descriptor.id)
+                    consecutiveFailures[descriptor.id] = 0
+                    lastUpdatedAt = Date()
+                }
                 let successMessage = codexSwitchMessage(
                     for: restartResult,
                     successKey: .codexSwitchSuccess
@@ -1585,75 +1670,91 @@ final class AppViewModel {
                     CodexSwitchFeedback(message: successMessage, isError: false),
                     for: slotID
                 )
-                notifications.notify(
-                    title: "Codex",
-                    body: successMessage,
-                    identifier: "codex-switch-\(slotID.rawValue.lowercased())"
-                )
-            } catch {
-                errors[descriptor.id] = error.localizedDescription
-                setCodexSwitchFeedback(
-                    CodexSwitchFeedback(
-                        message: "\(text(.codexSwitchNeedsVerification)): \(error.localizedDescription)",
-                        isError: true
-                    ),
-                    for: slotID
-                )
-                notifications.notify(
-                    title: "Codex",
-                    body: "\(text(.codexSwitchNeedsVerification)): \(error.localizedDescription)",
-                    identifier: "codex-switch-\(slotID.rawValue.lowercased())"
-                )
+                if verificationDescriptor != nil {
+                    notifications.notify(
+                        title: "Codex",
+                        body: successMessage,
+                        identifier: "codex-switch-\(slotID.rawValue.lowercased())"
+                    )
+                }
+            },
+            fail: { failure in
+                switch failure {
+                case .prepare(let error):
+                    setCodexSwitchFeedback(
+                        CodexSwitchFeedback(message: error.localizedDescription, isError: true),
+                        for: slotID
+                    )
+                case .apply(let error), .restart(let error):
+                    setCodexSwitchFeedback(
+                        CodexSwitchFeedback(
+                            message: "\(text(.codexSwitchFailed)): \(error.localizedDescription)",
+                            isError: true
+                        ),
+                        for: slotID
+                    )
+                case .verify(let error):
+                    if let descriptor = verificationDescriptor {
+                        errors[descriptor.id] = error.localizedDescription
+                    }
+                    let message = "\(text(.codexSwitchNeedsVerification)): \(error.localizedDescription)"
+                    setCodexSwitchFeedback(
+                        CodexSwitchFeedback(message: message, isError: true),
+                        for: slotID
+                    )
+                    notifications.notify(
+                        title: "Codex",
+                        body: message,
+                        identifier: "codex-switch-\(slotID.rawValue.lowercased())"
+                    )
+                }
             }
-        } catch {
-            setCodexSwitchFeedback(
-                CodexSwitchFeedback(
-                    message: "\(text(.codexSwitchFailed)): \(error.localizedDescription)",
-                    isError: true
-                ),
-                for: slotID
-            )
-        }
+        )
     }
 
     func switchClaudeProfile(slotID: CodexSlotID) async {
-        guard !claudeSwitchingSlots.contains(slotID) else { return }
         syncClaudeProfilesCurrentState()
-        claudeSwitchingSlots.insert(slotID)
         setClaudeSwitchFeedback(nil, for: slotID)
-        defer { claudeSwitchingSlots.remove(slotID) }
+        var verificationDescriptor: ProviderDescriptor?
+        var verifiedSnapshot: UsageSnapshot?
 
-        guard let profile = claudeProfiles.first(where: { $0.slotID == slotID }) else {
-            setClaudeSwitchFeedback(
-                ClaudeSwitchFeedback(
-                    message: localizedText("该槽位还没有导入可切换的 Claude 账号", "No imported Claude profile is available for this slot"),
-                    isError: true
-                ),
-                for: slotID
-            )
-            return
-        }
-
-        do {
-            let credentialsJSON = try claudeProfileStore.resolvedCredentialsJSON(for: profile)
-            try claudeDesktopAuthService.applyCredentialsJSON(credentialsJSON)
-            syncClaudeProfilesCurrentState()
-
-            guard let descriptor = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
-                setClaudeSwitchFeedback(
-                    ClaudeSwitchFeedback(
-                        message: localizedText("已写入本机 Claude 登录", "Local Claude credentials updated"),
-                        isError: false
-                    ),
-                    for: slotID
-                )
-                return
-            }
-
-            let provider = providerFactory.makeProvider(for: descriptor)
-            do {
+        await claudeSwitchCoordinator.run(
+            slotID: slotID,
+            prepare: {
+                guard let profile = claudeProfiles.first(where: { $0.slotID == slotID }) else {
+                    throw AccountSwitchTransactionUserMessageError(
+                        message: localizedText("该槽位还没有导入可切换的 Claude 账号", "No imported Claude profile is available for this slot")
+                    )
+                }
+                return profile
+            },
+            apply: { profile in
+                let credentialsJSON = try claudeProfileStore.resolvedCredentialsJSON(for: profile)
+                try claudeDesktopAuthService.applyCredentialsJSON(credentialsJSON)
+            },
+            restart: { _ in () },
+            verify: { _, _ in
+                syncClaudeProfilesCurrentState()
+                guard let descriptor = config.providers.first(where: { $0.type == .claude && $0.family == .official }) else {
+                    return
+                }
+                verificationDescriptor = descriptor
+                let provider = providerFactory.makeProvider(for: descriptor)
                 let fetched = try await provider.fetch(forceRefresh: true)
-                let snapshot = markClaudeSnapshotActive(fetched, preferredSlotID: slotID)
+                verifiedSnapshot = markClaudeSnapshotActive(fetched, preferredSlotID: slotID)
+            },
+            finalize: { _, _ in
+                guard let descriptor = verificationDescriptor,
+                      let snapshot = verifiedSnapshot else {
+                    setClaudeSwitchFeedback(
+                        ClaudeSwitchFeedback(
+                            message: localizedText("已写入本机 Claude 登录", "Local Claude credentials updated"),
+                            isError: false
+                        ),
+                        for: slotID
+                    )
+                    return
+                }
                 claudeSlots = claudeSlotStore.upsertActive(snapshot: snapshot)
                 snapshots[descriptor.id] = boundedSnapshot(snapshot)
                 errors.removeValue(forKey: descriptor.id)
@@ -1669,28 +1770,39 @@ final class AppViewModel {
                     body: successMessage,
                     identifier: "claude-switch-\(slotID.rawValue.lowercased())"
                 )
-            } catch {
-                errors[descriptor.id] = error.localizedDescription
-                let message = "\(localizedText("已切换到该账号，但需要重新验证", "Switched to this account, but re-verification is required")): \(error.localizedDescription)"
-                setClaudeSwitchFeedback(
-                    ClaudeSwitchFeedback(message: message, isError: true),
-                    for: slotID
-                )
-                notifications.notify(
-                    title: "Claude",
-                    body: message,
-                    identifier: "claude-switch-\(slotID.rawValue.lowercased())"
-                )
+            },
+            fail: { failure in
+                switch failure {
+                case .prepare(let error):
+                    setClaudeSwitchFeedback(
+                        ClaudeSwitchFeedback(message: error.localizedDescription, isError: true),
+                        for: slotID
+                    )
+                case .apply(let error), .restart(let error):
+                    setClaudeSwitchFeedback(
+                        ClaudeSwitchFeedback(
+                            message: "\(localizedText("切换失败", "Switch failed")): \(error.localizedDescription)",
+                            isError: true
+                        ),
+                        for: slotID
+                    )
+                case .verify(let error):
+                    if let descriptor = verificationDescriptor {
+                        errors[descriptor.id] = error.localizedDescription
+                    }
+                    let message = "\(localizedText("已切换到该账号，但需要重新验证", "Switched to this account, but re-verification is required")): \(error.localizedDescription)"
+                    setClaudeSwitchFeedback(
+                        ClaudeSwitchFeedback(message: message, isError: true),
+                        for: slotID
+                    )
+                    notifications.notify(
+                        title: "Claude",
+                        body: message,
+                        identifier: "claude-switch-\(slotID.rawValue.lowercased())"
+                    )
+                }
             }
-        } catch {
-            setClaudeSwitchFeedback(
-                ClaudeSwitchFeedback(
-                    message: "\(localizedText("切换失败", "Switch failed")): \(error.localizedDescription)",
-                    isError: true
-                ),
-                for: slotID
-            )
-        }
+        )
     }
 
     private func refreshPermissionStatuses(force: Bool) {
@@ -1848,8 +1960,14 @@ final class AppViewModel {
     }
 
     func setLowThreshold(_ value: Double, providerID: String) {
+        commitProviderThreshold(value, providerID: providerID)
+    }
+
+    func commitProviderThreshold(_ value: Double, providerID: String) {
         guard let idx = config.providers.firstIndex(where: { $0.id == providerID }) else { return }
-        config.providers[idx].threshold.lowRemaining = value
+        let clamped = min(max(value, 0), 100)
+        guard config.providers[idx].threshold.lowRemaining != clamped else { return }
+        config.providers[idx].threshold.lowRemaining = clamped
         persistAndRestart()
     }
 
@@ -1890,9 +2008,18 @@ final class AppViewModel {
         }
         let normalized = normalizedCredential(token, kind: descriptor.auth.kind)
         guard !normalized.isEmpty else { return false }
-        let ok = keychain.saveToken(normalized, service: service, account: account)
+        let ok = credentialAccessService.saveCredential(normalized, service: service, account: account)
         if ok {
             markCredentialLookupCached(service: service, account: account)
+        }
+        return ok
+    }
+
+    @discardableResult
+    func saveTokenAndRestart(_ token: String, for descriptor: ProviderDescriptor) -> Bool {
+        let ok = saveToken(token, for: descriptor)
+        if ok {
+            restartPolling()
         }
         return ok
     }
@@ -1904,9 +2031,18 @@ final class AppViewModel {
         }
         let normalized = normalizedCredential(token, kind: auth.kind)
         guard !normalized.isEmpty else { return false }
-        let ok = keychain.saveToken(normalized, service: service, account: account)
+        let ok = credentialAccessService.saveCredential(normalized, service: service, account: account)
         if ok {
             markCredentialLookupCached(service: service, account: account)
+        }
+        return ok
+    }
+
+    @discardableResult
+    func saveTokenAndRestart(_ token: String, auth: AuthConfig) -> Bool {
+        let ok = saveToken(token, auth: auth)
+        if ok {
+            restartPolling()
         }
         return ok
     }
@@ -1935,77 +2071,49 @@ final class AppViewModel {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        let ok = keychain.saveToken(trimmed, service: KeychainService.defaultServiceName, account: account)
+        let ok = credentialAccessService.saveCredential(trimmed, service: KeychainService.defaultServiceName, account: account)
         if ok {
             markCredentialLookupCached(service: KeychainService.defaultServiceName, account: account)
         }
         return ok
     }
 
+    @discardableResult
+    func saveOfficialManualCookieAndRestart(_ value: String, providerID: String) -> Bool {
+        let ok = saveOfficialManualCookie(value, providerID: providerID)
+        if ok {
+            restartPolling()
+        }
+        return ok
+    }
+
     private func savedCredentialLength(service: String?, account: String?) -> Int? {
         _ = credentialLookupVersion
-        guard let service,
-              let account,
-              !service.isEmpty,
-              !account.isEmpty else {
-            return nil
+        return credentialAccessService.savedCredentialLength(
+            service: service,
+            account: account,
+            secureStorageReady: secureStorageReady
+        ) { [weak self] in
+            self?.credentialLookupVersion &+= 1
         }
-        guard let token = keychain.cachedToken(service: service, account: account),
-              !token.isEmpty else {
-            guard secureStorageReady else {
-                return nil
-            }
-            scheduleCredentialLookup(service: service, account: account)
-            return nil
-        }
-        return token.count
     }
 
     private func cachedCredentialExists(service: String?, account: String?) -> Bool {
-        savedCredentialLength(service: service, account: account) != nil
-    }
-
-    private func scheduleCredentialLookup(service: String, account: String) {
-        let key = credentialLookupCacheKey(service: service, account: account)
-        guard !credentialLookupInFlight.contains(key),
-              !credentialLookupMissingKeys.contains(key) else {
-            return
+        credentialAccessService.credentialExists(
+            service: service,
+            account: account,
+            secureStorageReady: secureStorageReady
+        ) { [weak self] in
+            self?.credentialLookupVersion &+= 1
         }
-        credentialLookupInFlight.insert(key)
-
-        let keychain = self.keychain
-        Task { [weak self, keychain, service, account, key] in
-            let token = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
-                    let token = keychain.readToken(service: service, account: account)
-                    continuation.resume(returning: token)
-                }
-            }
-            guard let self, !Task.isCancelled else { return }
-            self.credentialLookupInFlight.remove(key)
-            if let token, !token.isEmpty {
-                self.credentialLookupMissingKeys.remove(key)
-                self.credentialLookupVersion &+= 1
-            } else {
-                self.credentialLookupMissingKeys.insert(key)
-            }
-        }
-    }
-
-    private func credentialLookupCacheKey(service: String, account: String) -> String {
-        "\(service)::\(account)"
     }
 
     private func markCredentialLookupCached(service: String, account: String) {
-        let key = credentialLookupCacheKey(service: service, account: account)
-        credentialLookupInFlight.remove(key)
-        credentialLookupMissingKeys.remove(key)
         credentialLookupVersion &+= 1
     }
 
     private func invalidateCredentialLookupCache() {
-        credentialLookupInFlight.removeAll()
-        credentialLookupMissingKeys.removeAll()
+        credentialAccessService.invalidateLookupCache()
         credentialLookupVersion &+= 1
     }
 
@@ -2091,6 +2199,29 @@ final class AppViewModel {
         }
     }
 
+    func saveRelayDraft(_ draft: RelaySettingsDraft) {
+        updateOpenProviderSettings(
+            providerID: draft.providerID,
+            name: draft.name,
+            baseURL: draft.baseURL,
+            preferredAdapterID: draft.preferredAdapterID,
+            balanceCredentialMode: draft.balanceCredentialMode,
+            tokenUsageEnabled: draft.tokenUsageEnabled,
+            accountEnabled: draft.accountEnabled,
+            authHeader: draft.authHeader,
+            authScheme: draft.authScheme,
+            userID: draft.userID,
+            userIDHeader: draft.userIDHeader,
+            endpointPath: draft.endpointPath,
+            remainingJSONPath: draft.remainingJSONPath,
+            usedJSONPath: draft.usedJSONPath,
+            limitJSONPath: draft.limitJSONPath,
+            successJSONPath: draft.successJSONPath,
+            unit: draft.unit,
+            quotaDisplayMode: draft.quotaDisplayMode
+        )
+    }
+
     func relayDescriptorForPreview(
         providerID: String,
         name: String,
@@ -2122,7 +2253,6 @@ final class AppViewModel {
         provider.baseURL = normalizedBaseURL
 
         let normalizedProvider = provider.normalized()
-        let currentRelayView = normalizedProvider.relayViewConfig?.accountBalance
         let matchedManifest = RelayAdapterRegistry.shared.manifest(
             for: normalizedBaseURL,
             preferredID: trimmedOrNil(preferredAdapterID ?? "")
@@ -2143,44 +2273,18 @@ final class AppViewModel {
 
         let templateRequest = matchedManifest.balanceRequest
         let templateExtract = matchedManifest.extract
-        let useTemplateDefaults = config.simplifiedRelayConfig
-
-        let resolvedAuthHeader = useTemplateDefaults
-            ? (templateRequest.authHeader ?? "Authorization")
-            : nonEmptyOrDefault(authHeader, fallback: "Authorization")
-        let resolvedAuthScheme = useTemplateDefaults
-            ? (templateRequest.authScheme ?? "Bearer")
-            : authScheme.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedUserID = useTemplateDefaults
-            ? (trimmedOrNil(userID) ?? templateRequest.userID)
-            : trimmedOrNil(userID)
-        let resolvedUserIDHeader = useTemplateDefaults
-            ? (templateRequest.userIDHeader ?? "New-Api-User")
-            : nonEmptyOrDefault(userIDHeader, fallback: "New-Api-User")
-        let resolvedRequestMethod = useTemplateDefaults
-            ? templateRequest.method
-            : (currentRelayView?.requestMethod ?? relayConfig.manualOverrides?.requestMethod)
-        let resolvedRequestBody = useTemplateDefaults
-            ? templateRequest.bodyJSON
-            : (currentRelayView?.requestBodyJSON ?? relayConfig.manualOverrides?.requestBodyJSON)
-        let resolvedEndpointPath = useTemplateDefaults
-            ? templateRequest.path
-            : nonEmptyOrDefault(endpointPath, fallback: "/api/user/self")
-        let resolvedRemaining = useTemplateDefaults
-            ? templateExtract.remaining
-            : nonEmptyOrDefault(remainingJSONPath, fallback: "data.quota")
-        let resolvedUsed = useTemplateDefaults
-            ? templateExtract.used
-            : trimmedOrNil(usedJSONPath)
-        let resolvedLimit = useTemplateDefaults
-            ? templateExtract.limit
-            : trimmedOrNil(limitJSONPath)
-        let resolvedSuccess = useTemplateDefaults
-            ? templateExtract.success
-            : trimmedOrNil(successJSONPath)
-        let resolvedUnit = useTemplateDefaults
-            ? (templateExtract.unit ?? "USD")
-            : nonEmptyOrDefault(unit, fallback: "USD")
+        let resolvedAuthHeader = templateRequest.authHeader ?? "Authorization"
+        let resolvedAuthScheme = templateRequest.authScheme ?? "Bearer"
+        let resolvedUserID = trimmedOrNil(userID) ?? templateRequest.userID
+        let resolvedUserIDHeader = templateRequest.userIDHeader ?? "New-Api-User"
+        let resolvedRequestMethod = templateRequest.method
+        let resolvedRequestBody = templateRequest.bodyJSON
+        let resolvedEndpointPath = templateRequest.path
+        let resolvedRemaining = templateExtract.remaining
+        let resolvedUsed = templateExtract.used
+        let resolvedLimit = templateExtract.limit
+        let resolvedSuccess = templateExtract.success
+        let resolvedUnit = templateExtract.unit ?? "USD"
 
         relayConfig.manualOverrides = RelayManualOverride(
             authHeader: resolvedAuthHeader,
@@ -2196,13 +2300,48 @@ final class AppViewModel {
             successExpression: resolvedSuccess,
             unitExpression: resolvedUnit,
             accountLabelExpression: relayConfig.manualOverrides?.accountLabelExpression,
-            staticHeaders: useTemplateDefaults
-                ? templateRequest.headers
-                : relayConfig.manualOverrides?.staticHeaders
+            staticHeaders: templateRequest.headers
         )
         provider.relayConfig = relayConfig
         provider.openConfig = nil
         return provider.normalized()
+    }
+
+    func relayDescriptorForPreview(draft: RelaySettingsDraft) -> ProviderDescriptor? {
+        relayDescriptorForPreview(
+            providerID: draft.providerID,
+            name: draft.name,
+            baseURL: draft.baseURL,
+            preferredAdapterID: draft.preferredAdapterID,
+            balanceCredentialMode: draft.balanceCredentialMode,
+            tokenUsageEnabled: draft.tokenUsageEnabled,
+            accountEnabled: draft.accountEnabled,
+            authHeader: draft.authHeader,
+            authScheme: draft.authScheme,
+            userID: draft.userID,
+            userIDHeader: draft.userIDHeader,
+            endpointPath: draft.endpointPath,
+            remainingJSONPath: draft.remainingJSONPath,
+            usedJSONPath: draft.usedJSONPath,
+            limitJSONPath: draft.limitJSONPath,
+            successJSONPath: draft.successJSONPath,
+            unit: draft.unit,
+            quotaDisplayMode: draft.quotaDisplayMode
+        )
+    }
+
+    func testRelayDraft(_ draft: RelaySettingsDraft) async -> RelayDiagnosticResult {
+        guard let descriptor = relayDescriptorForPreview(draft: draft) else {
+            return RelayDiagnosticResult(
+                success: false,
+                fetchHealth: .endpointMisconfigured,
+                resolvedAdapterID: draft.preferredAdapterID,
+                resolvedAuthSource: nil,
+                message: text(.error),
+                snapshotPreview: nil
+            )
+        }
+        return await testRelayConnection(descriptor: descriptor)
     }
 
     func updateThirdPartyQuotaDisplayMode(
@@ -2327,6 +2466,44 @@ final class AppViewModel {
         }
     }
 
+    func saveOfficialDraft(_ draft: OfficialSettingsDraft) {
+        updateOfficialProviderSettings(
+            providerID: draft.providerID,
+            sourceMode: draft.sourceMode,
+            webMode: draft.webMode,
+            quotaDisplayMode: draft.quotaDisplayMode,
+            traeValueDisplayMode: draft.traeValueDisplayMode
+        )
+    }
+
+    @discardableResult
+    func saveOfficialCredentialAndSettings(
+        providerID: String,
+        credentialInput: String?,
+        manualCookieInput: String?,
+        sourceMode: OfficialSourceMode,
+        webMode: OfficialWebMode,
+        quotaDisplayMode: OfficialQuotaDisplayMode,
+        traeValueDisplayMode: OfficialTraeValueDisplayMode? = nil
+    ) -> Bool {
+        var savedCredential = false
+        if let provider = config.providers.first(where: { $0.id == providerID }),
+           let credentialInput {
+            savedCredential = saveToken(credentialInput, for: provider) || savedCredential
+        }
+        if let manualCookieInput {
+            savedCredential = saveOfficialManualCookie(manualCookieInput, providerID: providerID) || savedCredential
+        }
+        updateOfficialProviderSettings(
+            providerID: providerID,
+            sourceMode: sourceMode,
+            webMode: webMode,
+            quotaDisplayMode: quotaDisplayMode,
+            traeValueDisplayMode: traeValueDisplayMode
+        )
+        return savedCredential
+    }
+
     var aggregateStatus: AggregateStatus {
         let enabled = config.providers.filter(\.enabled)
         if enabled.isEmpty {
@@ -2348,7 +2525,7 @@ final class AppViewModel {
     private func persistAndRestart() {
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
-        try? configStore.save(config)
+        try? configurationRepository.save(config)
         restartPolling()
         syncClaudeProfilesCurrentState()
         triggerClaudeProfileSnapshotPrefetchIfNeeded()
@@ -2451,88 +2628,6 @@ final class AppViewModel {
 
     private func descriptor(for id: String) -> ProviderDescriptor? {
         config.providers.first(where: { $0.id == id })
-    }
-
-    private func pollLoop(providerID: String) async {
-        let startupJitterSeconds = Double.random(in: 0...20)
-        if startupJitterSeconds > 0 {
-            do {
-                try await Task.sleep(for: .seconds(startupJitterSeconds))
-            } catch {
-                return
-            }
-        }
-
-        while !Task.isCancelled {
-            guard let descriptor = descriptor(for: providerID), descriptor.enabled else {
-                return
-            }
-
-            await refreshProvider(descriptor, forceRefresh: false)
-
-            let failureCount = consecutiveFailures[providerID, default: 0]
-            let delay = BackoffPolicy.delaySeconds(baseInterval: descriptor.pollIntervalSec, consecutiveFailures: failureCount)
-
-            do {
-                try await Task.sleep(for: .seconds(delay))
-            } catch {
-                return
-            }
-        }
-    }
-
-    private func restartLocalSessionSignalMonitor() {
-        localSessionMonitorTask?.cancel()
-        localSessionMonitorTask = nil
-        let hasWatchTargets = config.providers.contains {
-            $0.enabled && $0.family == .official && ($0.type == .codex || $0.type == .claude)
-        }
-        guard hasWatchTargets else {
-            return
-        }
-        localSessionMonitorTask = Task { [weak self] in
-            await self?.localSessionSignalLoop()
-        }
-    }
-
-    private func localSessionSignalLoop() async {
-        var idleCycles = 0
-        while !Task.isCancelled {
-            let watchTargets = config.providers.filter {
-                $0.enabled && $0.family == .official && ($0.type == .codex || $0.type == .claude)
-            }
-            if watchTargets.isEmpty {
-                return
-            }
-
-            var didTriggerRefresh = false
-            if !watchTargets.isEmpty {
-                let refreshTargets = localSessionRefreshCoordinator.refreshCandidates(from: watchTargets)
-                for descriptor in refreshTargets {
-                    didTriggerRefresh = true
-                    await refreshProvider(descriptor, forceRefresh: false)
-                }
-            }
-
-            if didTriggerRefresh {
-                idleCycles = 0
-            } else {
-                idleCycles += 1
-            }
-
-            let sleepSeconds: TimeInterval
-            if idleCycles <= 2 {
-                sleepSeconds = 10
-            } else {
-                sleepSeconds = 30
-            }
-
-            do {
-                try await Task.sleep(for: .seconds(sleepSeconds))
-            } catch {
-                return
-            }
-        }
     }
 
     private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
@@ -3655,7 +3750,7 @@ final class AppViewModel {
         normalizeClaudeStatusBarDisplaySelection()
 
         if config.claudeStatusBarDisplaySlotID != previousConfiguredDisplaySlotID {
-            try? configStore.save(config)
+            try? configurationRepository.save(config)
         }
 
         if triggerPrefetchOnChange,
@@ -3927,6 +4022,17 @@ final class AppViewModel {
             return nil
         }
         return claudeProfiles[index]
+    }
+}
+
+private enum LocalUsageHistoryError: LocalizedError {
+    case unsupportedProvider(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedProvider(let provider):
+            return "Unsupported local trend provider: \(provider)"
+        }
     }
 }
 

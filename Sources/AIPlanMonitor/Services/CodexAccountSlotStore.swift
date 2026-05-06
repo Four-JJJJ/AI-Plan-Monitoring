@@ -427,6 +427,11 @@ final class CodexAccountSlotStore {
         stabilized.quotaWindows[incomingSessionIndex].remainingPercent = previousSession.remainingPercent
         stabilized.quotaWindows[incomingSessionIndex].usedPercent = previousSession.usedPercent
         stabilized.quotaWindows[incomingSessionIndex].resetAt = previousResetAt
+        stabilized.quotaWindows[incomingSessionIndex].resetSource = .localEstimate
+        stabilized.quotaWindows[incomingSessionIndex].confidence = .estimated
+        stabilized.quotaWindows[incomingSessionIndex].observedAt = now
+        stabilized.quotaWindows[incomingSessionIndex].windowIdentity = previousSession.windowIdentity
+            ?? UsageQuotaWindow.defaultWindowIdentity(for: stabilized.quotaWindows[incomingSessionIndex])
         stabilized.remaining = stabilized.quotaWindows.map(\.remainingPercent).min()
         if let sessionWindow = stabilized.quotaWindows.first(where: { $0.kind == .session }) {
             stabilized.used = sessionWindow.usedPercent
