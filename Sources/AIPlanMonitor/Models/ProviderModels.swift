@@ -694,6 +694,21 @@ struct ClaudeSwitchFeedback: Equatable {
     var isError: Bool
 }
 
+struct AppConfigDecodeDiagnostics: Equatable {
+    var droppedProviderEntryCount: Int = 0
+
+    var hadLossyProviderDecoding: Bool {
+        droppedProviderEntryCount > 0
+    }
+
+    static let none = AppConfigDecodeDiagnostics()
+}
+
+struct AppConfigDecodeResult {
+    var config: AppConfig
+    var diagnostics: AppConfigDecodeDiagnostics
+}
+
 struct AppConfig: Codable, Equatable {
     var language: AppLanguage
     var launchAtLoginEnabled: Bool
@@ -779,10 +794,12 @@ struct AppConfig: Codable, Equatable {
 
     private struct LossyProviderDescriptorArray: Decodable {
         let values: [ProviderDescriptor]
+        let droppedEntryCount: Int
 
         init(from decoder: Decoder) throws {
             var container = try decoder.unkeyedContainer()
             var decoded: [ProviderDescriptor] = []
+            var droppedEntryCount = 0
             while !container.isAtEnd {
                 let startIndex = container.currentIndex
                 if let provider = try? container.decode(ProviderDescriptor.self) {
@@ -796,8 +813,10 @@ struct AppConfig: Codable, Equatable {
                         debugDescription: "Unable to skip invalid provider entry at index \(startIndex)"
                     )
                 }
+                droppedEntryCount += 1
             }
             values = decoded
+            self.droppedEntryCount = droppedEntryCount
         }
     }
 
@@ -837,30 +856,51 @@ struct AppConfig: Codable, Equatable {
     }
 
     init(from decoder: Decoder) throws {
+        self = try Self.decodePayload(from: decoder).config
+    }
+
+    static func decodeWithDiagnostics(from data: Data) throws -> AppConfigDecodeResult {
+        let decoder = JSONDecoder()
+        return try decoder.decode(AppConfigDiagnosticEnvelope.self, from: data).result
+    }
+
+    fileprivate static func decodePayload(from decoder: Decoder) throws -> AppConfigDecodeResult {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
-        self.launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
+        let language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zhHans
+        let launchAtLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchAtLoginEnabled) ?? false
         _ = try container.decodeIfPresent(Bool.self, forKey: .simplifiedRelayConfig)
-        self.simplifiedRelayConfig = true
-        self.showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
-        self.claudeStatusBarDisplaySlotID = try container.decodeIfPresent(CodexSlotID.self, forKey: .claudeStatusBarDisplaySlotID)
-        let decodedProviders = try container.decodeIfPresent(LossyProviderDescriptorArray.self, forKey: .providers)?.values
-            ?? AppConfig.default.providers
-        self.providers = decodedProviders.map { $0.normalized() }
-        let resolvedStatusProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)
-            ?? Self.defaultStatusBarProviderID(from: providers)
-        self.statusBarProviderID = resolvedStatusProviderID
-        self.statusBarMultiUsageEnabled = try container.decodeIfPresent(Bool.self, forKey: .statusBarMultiUsageEnabled) ?? false
+        let showOfficialAccountEmailInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showOfficialAccountEmailInMenuBar) ?? false
+        let claudeStatusBarDisplaySlotID = try container.decodeIfPresent(CodexSlotID.self, forKey: .claudeStatusBarDisplaySlotID)
+        let providerPayload = try container.decodeIfPresent(LossyProviderDescriptorArray.self, forKey: .providers)
+        let decodedProviders = providerPayload?.values ?? AppConfig.default.providers
+        let statusBarProviderID = try container.decodeIfPresent(String.self, forKey: .statusBarProviderID)
+        let statusBarMultiUsageEnabled = try container.decodeIfPresent(Bool.self, forKey: .statusBarMultiUsageEnabled) ?? false
         let decodedMultiProviderIDs = try container.decodeIfPresent([String].self, forKey: .statusBarMultiProviderIDs)
-            ?? (resolvedStatusProviderID.map { [$0] } ?? [])
-        self.statusBarMultiProviderIDs = Self.normalizedStatusBarMultiProviderIDs(
-            decodedMultiProviderIDs,
-            providers: providers
-        )
-        self.statusBarAppearanceMode = try container.decodeIfPresent(StatusBarAppearanceMode.self, forKey: .statusBarAppearanceMode)
+        let statusBarAppearanceMode = try container.decodeIfPresent(StatusBarAppearanceMode.self, forKey: .statusBarAppearanceMode)
             ?? .followWallpaper
-        self.statusBarDisplayStyle = try container.decodeIfPresent(StatusBarDisplayStyle.self, forKey: .statusBarDisplayStyle)
+        let statusBarDisplayStyle = try container.decodeIfPresent(StatusBarDisplayStyle.self, forKey: .statusBarDisplayStyle)
             ?? .iconPercent
+
+        let config = AppConfig(
+            language: language,
+            launchAtLoginEnabled: launchAtLoginEnabled,
+            simplifiedRelayConfig: true,
+            showOfficialAccountEmailInMenuBar: showOfficialAccountEmailInMenuBar,
+            claudeStatusBarDisplaySlotID: claudeStatusBarDisplaySlotID,
+            statusBarProviderID: statusBarProviderID,
+            statusBarMultiUsageEnabled: statusBarMultiUsageEnabled,
+            statusBarMultiProviderIDs: decodedMultiProviderIDs,
+            statusBarAppearanceMode: statusBarAppearanceMode,
+            statusBarDisplayStyle: statusBarDisplayStyle,
+            providers: decodedProviders
+        )
+
+        return AppConfigDecodeResult(
+            config: config,
+            diagnostics: AppConfigDecodeDiagnostics(
+                droppedProviderEntryCount: providerPayload?.droppedEntryCount ?? 0
+            )
+        )
     }
 
     static func defaultStatusBarProviderID(from providers: [ProviderDescriptor]) -> String? {
@@ -879,6 +919,14 @@ struct AppConfig: Codable, Equatable {
             normalizedIDs.append(id)
         }
         return normalizedIDs
+    }
+}
+
+fileprivate struct AppConfigDiagnosticEnvelope: Decodable {
+    let result: AppConfigDecodeResult
+
+    init(from decoder: Decoder) throws {
+        self.result = try AppConfig.decodePayload(from: decoder)
     }
 }
 
@@ -2105,7 +2153,11 @@ extension AppConfig {
             provider.relayConfig?.baseURL ?? provider.baseURL ?? ""
         )
         let host = URL(string: normalizedBaseURL)?.host?.lowercased()
-        if let host, host == "relay.example.com" || host.hasSuffix(".relay.example.com") {
+        if let host,
+           host == "relay.example.com"
+            || host.hasSuffix(".relay.example.com")
+            || host == "relay-fixture.dev"
+            || host.hasSuffix(".relay-fixture.dev") {
             return true
         }
 
@@ -2128,6 +2180,7 @@ extension AppConfig {
 
         return (usesGenericRelayTemplate && normalizedName.contains("relay example"))
             || normalizedID.hasPrefix("open-relay-example")
+            || normalizedID.hasPrefix("open-relay-fixture")
     }
 }
 

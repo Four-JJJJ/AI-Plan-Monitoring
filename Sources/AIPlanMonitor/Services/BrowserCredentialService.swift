@@ -38,7 +38,10 @@ final class BrowserCredentialService {
         self.cacheTTL = max(0, cacheTTL)
     }
 
-    func detectBearerTokenCandidates(host: String) -> [BrowserDetectedCredential] {
+    func detectBearerTokenCandidates(
+        host: String,
+        accessIntent: BrowserCredentialAccessIntent = .interactiveImport
+    ) -> [BrowserDetectedCredential] {
         let normalizedHost = normalizedHost(host)
         guard !normalizedHost.isEmpty else { return [] }
 
@@ -46,6 +49,7 @@ final class BrowserCredentialService {
         if let cached = cachedBearerCandidates(for: normalizedHost, now: now) {
             return cached
         }
+        guard accessIntent.allowsLiveLookup else { return [] }
 
         let resolved: [BrowserDetectedCredential]
         if let bearerCandidatesOverride {
@@ -59,7 +63,10 @@ final class BrowserCredentialService {
         return resolved
     }
 
-    func detectCookieHeader(host: String) -> BrowserDetectedCredential? {
+    func detectCookieHeader(
+        host: String,
+        accessIntent: BrowserCredentialAccessIntent = .interactiveImport
+    ) -> BrowserDetectedCredential? {
         let normalizedHost = normalizedHost(host)
         guard !normalizedHost.isEmpty else { return nil }
 
@@ -67,6 +74,7 @@ final class BrowserCredentialService {
         if let cached = cachedCookieHeader(for: normalizedHost, now: now) {
             return cached
         }
+        guard accessIntent.allowsLiveLookup else { return nil }
 
         let resolved: BrowserDetectedCredential?
         if let cookieHeaderOverride {
@@ -81,7 +89,11 @@ final class BrowserCredentialService {
         } else {
             var candidate: BrowserDetectedCredential?
             for candidateHost in hostCandidates(for: normalizedHost) {
-                if let detected = cookieService.detectCookieHeader(hostContains: candidateHost) {
+                if let detected = cookieService.detectCookieHeader(
+                    hostContains: candidateHost,
+                    order: nil,
+                    accessIntent: accessIntent
+                ) {
                     candidate = BrowserDetectedCredential(value: detected.header, source: detected.source)
                     break
                 }
@@ -101,7 +113,11 @@ final class BrowserCredentialService {
         return resolved
     }
 
-    func detectNamedCookie(name: String, host: String) -> BrowserDetectedCredential? {
+    func detectNamedCookie(
+        name: String,
+        host: String,
+        accessIntent: BrowserCredentialAccessIntent = .interactiveImport
+    ) -> BrowserDetectedCredential? {
         let normalizedHost = normalizedHost(host)
         let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty, !normalizedName.isEmpty else { return nil }
@@ -111,6 +127,7 @@ final class BrowserCredentialService {
         if let cached = cachedNamedCookie(for: cacheKey, now: now) {
             return cached
         }
+        guard accessIntent.allowsLiveLookup else { return nil }
 
         let resolved: BrowserDetectedCredential?
         if let namedCookieOverride {
@@ -125,7 +142,12 @@ final class BrowserCredentialService {
         } else {
             var candidate: BrowserDetectedCredential?
             for candidateHost in hostCandidates(for: normalizedHost) {
-                if let detected = cookieService.detectNamedCookie(name: normalizedName, hostContains: candidateHost) {
+                if let detected = cookieService.detectNamedCookie(
+                    name: normalizedName,
+                    hostContains: candidateHost,
+                    order: nil,
+                    accessIntent: accessIntent
+                ) {
                     candidate = BrowserDetectedCredential(value: detected.header, source: detected.source)
                     break
                 }

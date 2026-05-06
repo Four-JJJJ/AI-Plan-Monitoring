@@ -77,6 +77,48 @@ final class StatusBarDisplayRendererTests: XCTestCase {
         )
     }
 
+    func testIconPercentStyleKeepsAsymmetricTopRightDetailInTopHalf() {
+        let entries = [
+            StatusBarDisplayEntry(icon: asymmetricIconWithTopRightDot(), name: "Kimi", valueText: "100%", percent: 100)
+        ]
+
+        let attributed = StatusBarDisplayRenderer.attributedString(entries: entries, style: .iconPercent)
+        let attachments = collectAttachments(from: attributed)
+        guard let image = attachments.first?.image else {
+            XCTFail("Expected icon attachment image")
+            return
+        }
+
+        XCTAssertFalse(
+            hasOpaquePixel(in: image, region: NSRect(x: 12, y: 0, width: 4, height: 4)),
+            "The asymmetric dot should not be vertically flipped into the bottom-right quadrant."
+        )
+    }
+
+    func testIconPercentStyleCentersVisibleIconContentWhenSourceHasUnevenPadding() {
+        let entries = [
+            StatusBarDisplayEntry(icon: leftPaddedNarrowIcon(), name: "Codex", valueText: "57%", percent: 57)
+        ]
+
+        let attributed = StatusBarDisplayRenderer.attributedString(entries: entries, style: .iconPercent)
+        let attachments = collectAttachments(from: attributed)
+        guard
+            let image = attachments.first?.image
+        else {
+            XCTFail("Expected rendered attachment image")
+            return
+        }
+
+        XCTAssertFalse(
+            hasOpaquePixel(in: image, region: NSRect(x: 0, y: 0, width: 6, height: 16)),
+            "Visible icon content should not hug the left edge after centering."
+        )
+        XCTAssertTrue(
+            hasOpaquePixel(in: image, region: NSRect(x: 9, y: 0, width: 5, height: 16)),
+            "Visible icon content should move into the center/right portion of the icon slot."
+        )
+    }
+
     func testDarkForegroundStyleColorMapping() {
         let full = rgba(from: StatusBarForegroundStyle.dark.color())
         XCTAssertLessThan(full.red, 0.01)
@@ -136,6 +178,18 @@ final class StatusBarDisplayRendererTests: XCTestCase {
         return image
     }
 
+    private func leftPaddedNarrowIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+        defer { image.unlockFocus() }
+        NSColor.clear.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 16, height: 16)).fill()
+
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 2, width: 5, height: 12)).fill()
+        return image
+    }
+
     private func hasOpaquePixel(in image: NSImage, region: NSRect) -> Bool {
         guard
             let tiff = image.tiffRepresentation,
@@ -149,10 +203,12 @@ final class StatusBarDisplayRendererTests: XCTestCase {
         let height = bitmap.pixelsHigh
         let samplesPerPixel = bitmap.samplesPerPixel
         let bytesPerRow = bitmap.bytesPerRow
-        let minX = max(0, Int(floor(region.minX)))
-        let maxX = min(width - 1, Int(ceil(region.maxX)) - 1)
-        let minY = max(0, Int(floor(region.minY)))
-        let maxY = min(height - 1, Int(ceil(region.maxY)) - 1)
+        let scaleX = CGFloat(width) / max(image.size.width, 1)
+        let scaleY = CGFloat(height) / max(image.size.height, 1)
+        let minX = max(0, Int(floor(region.minX * scaleX)))
+        let maxX = min(width - 1, Int(ceil(region.maxX * scaleX)) - 1)
+        let minY = max(0, Int(floor(region.minY * scaleY)))
+        let maxY = min(height - 1, Int(ceil(region.maxY * scaleY)) - 1)
         guard minX <= maxX, minY <= maxY else { return false }
 
         for y in minY...maxY {

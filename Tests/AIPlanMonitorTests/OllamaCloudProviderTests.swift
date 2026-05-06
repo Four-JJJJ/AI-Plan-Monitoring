@@ -188,17 +188,28 @@ private final class OllamaMockBrowserCookieService: BrowserCookieDetecting {
     private(set) var namedLookupCount: Int = 0
     private(set) var headerLookupCount: Int = 0
 
-    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
         _ = hostContains
         _ = order
+        _ = accessIntent
         headerLookupCount += 1
         return headerResult
     }
 
-    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
         _ = name
         _ = hostContains
         _ = order
+        _ = accessIntent
         namedLookupCount += 1
         return namedResult
     }

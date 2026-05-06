@@ -1,11 +1,14 @@
 import Foundation
 
 final class RelayProvider: UsageProvider, @unchecked Sendable {
+    private static let browserRecoveryBackoff = BrowserRecoveryBackoff()
+
     let descriptor: ProviderDescriptor
     private let session: URLSession
     private let keychain: KeychainService
     private let browserCredentialService: BrowserCredentialService
     private let registry: RelayAdapterRegistry
+    private let browserRecoveryBackoffInterval: TimeInterval = 10 * 60
 
     init(
         descriptor: ProviderDescriptor,
@@ -22,6 +25,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     }
 
     func fetch() async throws -> UsageSnapshot {
+        try await fetch(forceRefresh: false)
+    }
+
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
         let normalized = descriptor.normalized()
         guard let relayConfig = normalized.relayConfig else {
             throw ProviderError.unavailable("Missing relay config for \(descriptor.name)")
@@ -40,7 +47,9 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 tokenChannel = try await fetchTokenUsageChannel(
                     baseURL: baseURL,
                     relayConfig: relayConfig,
-                    tokenRequest: manifest.tokenRequest!
+                    tokenRequest: manifest.tokenRequest!,
+                    manifest: manifest,
+                    forceRefresh: forceRefresh
                 )
             } catch {
                 firstError = firstError ?? error
@@ -52,7 +61,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 balanceChannel = try await fetchBalanceChannel(
                     baseURL: baseURL,
                     relayConfig: relayConfig,
-                    manifest: manifest
+                    manifest: manifest,
+                    forceRefresh: forceRefresh
                 )
             } catch {
                 firstError = firstError ?? error
@@ -105,6 +115,22 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             extras["planType"] = resolvedPlanType
             rawMeta["planType"] = resolvedPlanType
         }
+        if let recoveryMeta = balanceChannel?.recoveryMeta ?? tokenChannel?.recoveryMeta {
+            for (key, value) in recoveryMeta {
+                rawMeta["relay.recovery.\(key)"] = value
+            }
+            if let source = recoveryMeta["source"] {
+                extras["relayRecoverySource"] = source
+            }
+            if let at = recoveryMeta["at"] {
+                extras["relayRecoveryAt"] = at
+            }
+        }
+        if let savedCredentialSource = balanceChannel?.rawMeta["savedCredentialSource"]
+            ?? tokenChannel?.rawMeta["savedCredentialSource"] {
+            rawMeta["relay.savedCredentialSource"] = savedCredentialSource
+            extras["relaySavedCredentialSource"] = savedCredentialSource
+        }
 
         return UsageSnapshot(
             source: normalized.id,
@@ -130,28 +156,44 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     private func fetchTokenUsageChannel(
         baseURL: URL,
         relayConfig: RelayProviderConfig,
-        tokenRequest: RelayTokenRequestManifest
+        tokenRequest: RelayTokenRequestManifest,
+        manifest: RelayAdapterManifest,
+        forceRefresh: Bool
     ) async throws -> TokenChannelResult {
         let host = baseURL.host?.lowercased() ?? ""
         let credentialMode = relayConfig.balanceCredentialMode ?? .manualPreferred
+        let primaryBrowserAccessIntent: BrowserCredentialAccessIntent =
+            credentialMode == .browserOnly ? .interactiveImport : browserAccessIntent(for: forceRefresh)
         let primaryCandidates: [RelayRawTokenCandidate]
         switch credentialMode {
         case .manualPreferred:
             primaryCandidates = resolveTokenCandidates(
                 host: host,
                 includeSavedCredentials: true,
-                includeBrowserCredentials: false
+                includeBrowserCredentials: false,
+                browserAccessIntent: primaryBrowserAccessIntent
             )
-        case .browserPreferred, .browserOnly:
+        case .browserPreferred:
+            primaryCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: !forceRefresh,
+                includeBrowserCredentials: forceRefresh,
+                browserAccessIntent: primaryBrowserAccessIntent
+            )
+        case .browserOnly:
             primaryCandidates = resolveTokenCandidates(
                 host: host,
                 includeSavedCredentials: false,
-                includeBrowserCredentials: true
+                includeBrowserCredentials: true,
+                browserAccessIntent: primaryBrowserAccessIntent
             )
         }
 
         var lastError: ProviderError = .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
-        func attempt(_ candidates: [RelayRawTokenCandidate]) async throws -> TokenChannelResult? {
+        func attempt(
+            _ candidates: [RelayRawTokenCandidate],
+            recoveryTrigger: String? = nil
+        ) async throws -> TokenChannelResult? {
             guard !candidates.isEmpty else { return nil }
             for candidate in candidates {
                 do {
@@ -199,11 +241,15 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                         "unlimitedQuota": String(unlimited),
                         "softLimitUsd": String(softLimit),
                         "hardLimitUsd": String(hardLimit),
-                        "authSource": candidate.source
+                        "authSource": candidate.source,
+                        "savedCredentialSource": candidate.source
                     ]
                     if let usage {
                         meta["billingTotalUsage"] = String(usage.totalUsage)
                     }
+                    let recoveryMeta = recoveryTrigger.map {
+                        makeRecoveryMetadata(trigger: $0, source: candidate.source)
+                    } ?? [:]
 
                     return TokenChannelResult(
                         remaining: remaining,
@@ -211,7 +257,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                         limit: limit,
                         unit: "quota",
                         note: note,
-                        rawMeta: meta
+                        rawMeta: meta,
+                        recoveryMeta: recoveryMeta
                     )
                 } catch let error as ProviderError {
                     switch error {
@@ -230,33 +277,60 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             return result
         }
 
-        let fallbackCandidates: [RelayRawTokenCandidate]
+        let standardFallbackCandidates: [RelayRawTokenCandidate]
         switch credentialMode {
         case .manualPreferred:
-            fallbackCandidates = resolveTokenCandidates(
-                host: host,
-                includeSavedCredentials: false,
-                includeBrowserCredentials: true
-            )
+            standardFallbackCandidates = []
         case .browserPreferred:
-            fallbackCandidates = resolveTokenCandidates(
-                host: host,
-                includeSavedCredentials: true,
-                includeBrowserCredentials: false
-            )
+            standardFallbackCandidates = forceRefresh
+                ? resolveTokenCandidates(
+                    host: host,
+                    includeSavedCredentials: true,
+                    includeBrowserCredentials: false,
+                    browserAccessIntent: .background
+                )
+                : []
         case .browserOnly:
-            fallbackCandidates = []
+            standardFallbackCandidates = []
         }
-        let fallbackDeduped = fallbackCandidates.filter { fallback in
+        let fallbackDeduped = standardFallbackCandidates.filter { fallback in
             !primaryCandidates.contains(where: { $0.token == fallback.token })
-        }
-
-        guard !(primaryCandidates.isEmpty && fallbackDeduped.isEmpty) else {
-            throw relayTokenPreflightError(baseURL: baseURL, credentialMode: credentialMode)
         }
 
         if let result = try await attempt(fallbackDeduped) {
             return result
+        }
+
+        if let trigger = recoveryTrigger(for: lastError),
+           relaySupportsBrowserRecovery(manifest: manifest, channel: .token),
+           await canAttemptBrowserRecovery(
+            host: host,
+            channel: .token,
+            forceRefresh: forceRefresh
+           ) {
+            let recoveryCandidates = resolveTokenCandidates(
+                host: host,
+                includeSavedCredentials: false,
+                includeBrowserCredentials: true,
+                browserAccessIntent: .authRecovery
+            ).filter { fallback in
+                !primaryCandidates.contains(where: { $0.token == fallback.token }) &&
+                !fallbackDeduped.contains(where: { $0.token == fallback.token })
+            }
+
+            if let result = try await attempt(recoveryCandidates, recoveryTrigger: trigger) {
+                await clearBrowserRecoveryFailure(host: host, channel: .token)
+                return result
+            }
+            await markBrowserRecoveryFailure(host: host, channel: .token)
+        }
+
+        guard !(primaryCandidates.isEmpty && fallbackDeduped.isEmpty) else {
+            throw relayTokenPreflightError(
+                baseURL: baseURL,
+                credentialMode: credentialMode,
+                manifest: manifest
+            )
         }
 
         throw relayFriendlyTokenError(lastError, baseURL: baseURL)
@@ -267,7 +341,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         requests: [ResolvedRelayRequest],
         baseURL: URL,
         relayConfig: RelayProviderConfig,
-        manifest: RelayAdapterManifest
+        manifest: RelayAdapterManifest,
+        recoveryTrigger: String? = nil
     ) async throws -> AccountChannelResult {
         guard !candidates.isEmpty else {
             throw ProviderError.missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
@@ -278,7 +353,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 candidates: candidates,
                 baseURL: baseURL,
                 relayConfig: relayConfig,
-                request: requests.first ?? resolveBalanceRequest(manifest: manifest, relayConfig: relayConfig)
+                request: requests.first ?? resolveBalanceRequest(manifest: manifest, relayConfig: relayConfig),
+                recoveryTrigger: recoveryTrigger
             )
         }
 
@@ -301,7 +377,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                         harvestedPlanType = extractedPlanType
                     }
 
-                    let extracted = try await extractAccountValues(
+                    var extracted = try await extractAccountValues(
                         root: root,
                         baseURL: baseURL,
                         request: request,
@@ -313,6 +389,13 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
                     if let persisted = candidate.persistedCredential {
                         _ = persistTokenCandidate(persisted, auth: relayConfig.balanceAuth)
+                    }
+                    extracted.rawMeta["savedCredentialSource"] = candidate.source
+                    if let recoveryTrigger {
+                        extracted.recoveryMeta = makeRecoveryMetadata(
+                            trigger: recoveryTrigger,
+                            source: candidate.source
+                        )
                     }
 
                     return extracted
@@ -696,7 +779,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         candidates: [RelayCredentialCandidate],
         baseURL: URL,
         relayConfig: RelayProviderConfig,
-        request: ResolvedRelayRequest
+        request: ResolvedRelayRequest,
+        recoveryTrigger: String? = nil
     ) async throws -> AccountChannelResult {
         var lastError: ProviderError = .missingCredential(relayConfig.balanceAuth.keychainAccount ?? "\(descriptor.id)/system-token")
 
@@ -720,7 +804,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                     bodyJSON: nil
                 )
 
-                let extracted = try extractXiaomimimoTokenPlanValues(
+                var extracted = try extractXiaomimimoTokenPlanValues(
                     detailRoot: detailRoot,
                     usageRoot: usageRoot,
                     candidate: candidate
@@ -728,6 +812,13 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
                 if let persisted = candidate.persistedCredential {
                     _ = persistTokenCandidate(persisted, auth: relayConfig.balanceAuth)
+                }
+                extracted.rawMeta["savedCredentialSource"] = candidate.source
+                if let recoveryTrigger {
+                    extracted.recoveryMeta = makeRecoveryMetadata(
+                        trigger: recoveryTrigger,
+                        source: candidate.source
+                    )
                 }
 
                 return extracted
@@ -1055,7 +1146,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     private func resolveTokenCandidates(
         host: String,
         includeSavedCredentials: Bool,
-        includeBrowserCredentials: Bool
+        includeBrowserCredentials: Bool,
+        browserAccessIntent: BrowserCredentialAccessIntent
     ) -> [RelayRawTokenCandidate] {
         var output: [RelayRawTokenCandidate] = []
 
@@ -1077,7 +1169,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         }
 
         if includeBrowserCredentials {
-            for candidate in browserCredentialService.detectBearerTokenCandidates(host: host) {
+            for candidate in browserCredentialService.detectBearerTokenCandidates(
+                host: host,
+                accessIntent: browserAccessIntent
+            ) {
                 append(token: candidate.value, source: candidate.source)
             }
         }
@@ -1093,7 +1188,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         strategies: [RelayAuthStrategy],
         includeSavedCredentials: Bool,
         includeBrowserCredentials: Bool,
-        includeExpiredSentinel: Bool
+        includeExpiredSentinel: Bool,
+        browserAccessIntent: BrowserCredentialAccessIntent
     ) -> [RelayCredentialCandidate] {
         let host = baseURL.host?.lowercased() ?? ""
         var candidates: [RelayCredentialCandidate] = []
@@ -1128,7 +1224,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 })
             case .browserBearer:
                 guard includeBrowserCredentials else { continue }
-                for detected in browserCredentialService.detectBearerTokenCandidates(host: host) {
+                for detected in browserCredentialService.detectBearerTokenCandidates(
+                    host: host,
+                    accessIntent: browserAccessIntent
+                ) {
                     let normalized = normalizeBearerToken(detected.value)
                     guard !normalized.isEmpty, !isExpiredJWT(normalized) else { continue }
                     append(buildHeaderCandidate(
@@ -1162,7 +1261,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 }
             case .browserCookieHeader:
                 guard includeBrowserCredentials else { continue }
-                if let detected = browserCredentialService.detectCookieHeader(host: host) {
+                if let detected = browserCredentialService.detectCookieHeader(
+                    host: host,
+                    accessIntent: browserAccessIntent
+                ) {
                     append(RelayCredentialCandidate(
                         headers: buildHeaders(
                             request: request,
@@ -1177,7 +1279,11 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 guard includeBrowserCredentials else { continue }
                 let name = strategy.cookieName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard !name.isEmpty else { continue }
-                if let detected = browserCredentialService.detectNamedCookie(name: name, host: host) {
+                if let detected = browserCredentialService.detectNamedCookie(
+                    name: name,
+                    host: host,
+                    accessIntent: browserAccessIntent
+                ) {
                     append(RelayCredentialCandidate(
                         headers: buildHeaders(
                             request: request,
@@ -1216,7 +1322,10 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
         if includeBrowserCredentials,
            manifest.id == "deepseek",
-           let cookieDetected = browserCredentialService.detectCookieHeader(host: host) {
+           let cookieDetected = browserCredentialService.detectCookieHeader(
+            host: host,
+            accessIntent: browserAccessIntent
+           ) {
             let bearerCandidates = candidates.filter { candidate in
                 candidate.headers.keys.contains { $0.caseInsensitiveCompare("Authorization") == .orderedSame } &&
                 candidate.headers.keys.contains(where: { $0.caseInsensitiveCompare("Cookie") == .orderedSame }) == false
@@ -1240,11 +1349,14 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
     private func fetchBalanceChannel(
         baseURL: URL,
         relayConfig: RelayProviderConfig,
-        manifest: RelayAdapterManifest
+        manifest: RelayAdapterManifest,
+        forceRefresh: Bool
     ) async throws -> AccountChannelResult {
         let requests = resolveBalanceRequests(manifest: manifest, relayConfig: relayConfig)
         let credentialMode = relayConfig.balanceCredentialMode ?? .manualPreferred
         let requestForCandidates = requests.first ?? resolveBalanceRequest(manifest: manifest, relayConfig: relayConfig)
+        let primaryBrowserAccessIntent: BrowserCredentialAccessIntent =
+            credentialMode == .browserOnly ? .interactiveImport : browserAccessIntent(for: forceRefresh)
 
         if let requiredInputError = relayRequiredInputError(manifest: manifest, request: requestForCandidates) {
             throw requiredInputError
@@ -1261,9 +1373,22 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 strategies: manifest.authStrategies,
                 includeSavedCredentials: true,
                 includeBrowserCredentials: false,
-                includeExpiredSentinel: true
+                includeExpiredSentinel: true,
+                browserAccessIntent: primaryBrowserAccessIntent
             )
-        case .browserPreferred, .browserOnly:
+        case .browserPreferred:
+            primaryCandidates = resolveBalanceCandidates(
+                baseURL: baseURL,
+                manifest: manifest,
+                relayConfig: relayConfig,
+                request: requestForCandidates,
+                strategies: manifest.authStrategies,
+                includeSavedCredentials: !forceRefresh,
+                includeBrowserCredentials: forceRefresh,
+                includeExpiredSentinel: !forceRefresh,
+                browserAccessIntent: primaryBrowserAccessIntent
+            )
+        case .browserOnly:
             primaryCandidates = resolveBalanceCandidates(
                 baseURL: baseURL,
                 manifest: manifest,
@@ -1272,7 +1397,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 strategies: manifest.authStrategies,
                 includeSavedCredentials: false,
                 includeBrowserCredentials: true,
-                includeExpiredSentinel: false
+                includeExpiredSentinel: false,
+                browserAccessIntent: primaryBrowserAccessIntent
             )
         }
 
@@ -1291,34 +1417,28 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             }
         }
 
-        let fallbackCandidates: [RelayCredentialCandidate]
+        let standardFallbackCandidates: [RelayCredentialCandidate]
         switch credentialMode {
         case .manualPreferred:
-            fallbackCandidates = resolveBalanceCandidates(
-                baseURL: baseURL,
-                manifest: manifest,
-                relayConfig: relayConfig,
-                request: requestForCandidates,
-                strategies: manifest.authStrategies,
-                includeSavedCredentials: true,
-                includeBrowserCredentials: true,
-                includeExpiredSentinel: false
-            )
+            standardFallbackCandidates = []
         case .browserPreferred:
-            fallbackCandidates = resolveBalanceCandidates(
-                baseURL: baseURL,
-                manifest: manifest,
-                relayConfig: relayConfig,
-                request: requestForCandidates,
-                strategies: manifest.authStrategies,
-                includeSavedCredentials: true,
-                includeBrowserCredentials: false,
-                includeExpiredSentinel: true
-            )
+            standardFallbackCandidates = forceRefresh
+                ? resolveBalanceCandidates(
+                    baseURL: baseURL,
+                    manifest: manifest,
+                    relayConfig: relayConfig,
+                    request: requestForCandidates,
+                    strategies: manifest.authStrategies,
+                    includeSavedCredentials: true,
+                    includeBrowserCredentials: false,
+                    includeExpiredSentinel: true,
+                    browserAccessIntent: .background
+                )
+                : []
         case .browserOnly:
-            fallbackCandidates = []
+            standardFallbackCandidates = []
         }
-        let fallbackDeduped = fallbackCandidates.filter { fallback in
+        let fallbackDeduped = standardFallbackCandidates.filter { fallback in
             !primaryCandidates.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source })
         }
         if !fallbackDeduped.isEmpty {
@@ -1331,12 +1451,52 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                     manifest: manifest
                 )
             } catch let error as ProviderError {
-                throw relayFriendlyBalanceError(
-                    error,
+                firstFailure = error
+            }
+        }
+
+        if let recordedFailure = firstFailure,
+           let trigger = recoveryTrigger(for: recordedFailure),
+           relaySupportsBrowserRecovery(manifest: manifest, channel: .balance),
+           await canAttemptBrowserRecovery(
+            host: baseURL.host?.lowercased() ?? "",
+            channel: .balance,
+            forceRefresh: forceRefresh
+           ) {
+            let recoveryCandidates = resolveBalanceCandidates(
+                baseURL: baseURL,
+                manifest: manifest,
+                relayConfig: relayConfig,
+                request: requestForCandidates,
+                strategies: manifest.authStrategies,
+                includeSavedCredentials: credentialMode != .browserOnly,
+                includeBrowserCredentials: true,
+                includeExpiredSentinel: false,
+                browserAccessIntent: .authRecovery
+            ).filter { fallback in
+                !primaryCandidates.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source }) &&
+                !fallbackDeduped.contains(where: { $0.headers == fallback.headers || $0.source == fallback.source })
+            }
+
+            do {
+                let recovered = try await attemptBalanceFetch(
+                    candidates: recoveryCandidates,
+                    requests: requests,
                     baseURL: baseURL,
+                    relayConfig: relayConfig,
                     manifest: manifest,
-                    request: requestForCandidates,
-                    credentialMode: credentialMode
+                    recoveryTrigger: trigger
+                )
+                await clearBrowserRecoveryFailure(
+                    host: baseURL.host?.lowercased() ?? "",
+                    channel: .balance
+                )
+                return recovered
+            } catch let error as ProviderError {
+                firstFailure = error
+                await markBrowserRecoveryFailure(
+                    host: baseURL.host?.lowercased() ?? "",
+                    channel: .balance
                 )
             }
         }
@@ -1349,8 +1509,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                 request: requestForCandidates,
                 credentialMode: credentialMode,
                 primaryCandidates: primaryCandidates,
-                fallbackCandidates: fallbackDeduped,
-                inspectBrowserAvailability: credentialMode != .manualPreferred
+                fallbackCandidates: fallbackDeduped
             ) {
                 throw preflightError
             }
@@ -1696,6 +1855,83 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         return KimiJWT.isExpired(token)
     }
 
+    private func browserAccessIntent(for forceRefresh: Bool) -> BrowserCredentialAccessIntent {
+        forceRefresh ? .interactiveImport : .background
+    }
+
+    private func recoveryTrigger(for error: ProviderError) -> String? {
+        switch error {
+        case .unauthorized:
+            return "http401"
+        case .unauthorizedDetail:
+            return "credentialRejected"
+        case .invalidResponse(let detail):
+            let normalized = detail.lowercased()
+            if normalized.contains("json decode failed") || normalized.contains("auth page") {
+                return "nonJsonAuthPage"
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    private func relaySupportsBrowserRecovery(
+        manifest: RelayAdapterManifest,
+        channel: RelayBrowserRecoveryChannel
+    ) -> Bool {
+        switch channel {
+        case .balance:
+            return manifest.authStrategies.contains(where: {
+                switch $0.kind {
+                case .browserBearer, .browserCookieHeader, .namedCookie:
+                    return true
+                default:
+                    return false
+                }
+            })
+        case .token:
+            return manifest.authStrategies.contains(where: { $0.kind == .browserBearer })
+        }
+    }
+
+    private func browserRecoveryKey(host: String, channel: RelayBrowserRecoveryChannel) -> String {
+        "\(descriptor.id)|\(host)|\(channel.rawValue)"
+    }
+
+    private func canAttemptBrowserRecovery(
+        host: String,
+        channel: RelayBrowserRecoveryChannel,
+        forceRefresh: Bool
+    ) async -> Bool {
+        await Self.browserRecoveryBackoff.shouldAttempt(
+            for: browserRecoveryKey(host: host, channel: channel),
+            forceRefresh: forceRefresh
+        )
+    }
+
+    private func clearBrowserRecoveryFailure(host: String, channel: RelayBrowserRecoveryChannel) async {
+        await Self.browserRecoveryBackoff.clearFailure(
+            for: browserRecoveryKey(host: host, channel: channel)
+        )
+    }
+
+    private func markBrowserRecoveryFailure(host: String, channel: RelayBrowserRecoveryChannel) async {
+        await Self.browserRecoveryBackoff.markFailure(
+            for: browserRecoveryKey(host: host, channel: channel),
+            interval: browserRecoveryBackoffInterval
+        )
+    }
+
+    private func makeRecoveryMetadata(trigger: String, source: String) -> [String: String] {
+        [
+            "succeeded": "true",
+            "trigger": trigger,
+            "source": source,
+            "at": ISO8601DateFormatter().string(from: Date())
+        ]
+    }
+
     private func relayRequiredInputError(
         manifest: RelayAdapterManifest,
         request: ResolvedRelayRequest
@@ -1718,11 +1954,9 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         request: ResolvedRelayRequest,
         credentialMode: RelayCredentialMode,
         primaryCandidates: [RelayCredentialCandidate],
-        fallbackCandidates: [RelayCredentialCandidate],
-        inspectBrowserAvailability: Bool
+        fallbackCandidates: [RelayCredentialCandidate]
     ) -> ProviderError? {
         let allCandidates = primaryCandidates + fallbackCandidates
-        let host = baseURL.host?.lowercased() ?? ""
         let savedRaw = readSavedCredential(auth: relayConfig.balanceAuth)
 
         if let inputError = relayRequiredInputError(manifest: manifest, request: request) {
@@ -1733,49 +1967,43 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
             return nil
         }
 
-        let browserCookie: BrowserDetectedCredential?
-        let browserBearers: [BrowserDetectedCredential]
-        if inspectBrowserAvailability {
-            browserCookie = browserCredentialService.detectCookieHeader(host: host)
-            browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
-        } else {
-            browserCookie = nil
-            browserBearers = []
-        }
-
         switch manifest.id {
         case "moonshot":
             if let savedRaw, looksLikeCookieHeader(savedRaw), looksLikeMoonshotNonAuthCookieHeader(savedRaw) {
                 return .unauthorizedDetail("Moonshot cookie looks incomplete. Paste the full Cookie header from an authenticated platform request, or paste Authorization: Bearer ... instead.")
             }
-            if credentialMode != .manualPreferred, browserCookie == nil && browserBearers.isEmpty {
+            if credentialMode != .manualPreferred {
                 return .unauthorizedDetail("No live Moonshot login was found in the browser. Log in to platform.moonshot.cn first, or switch back to Manual First and paste a bearer token.")
             }
             return .unauthorizedDetail("No usable Moonshot credential was found. Paste an Authorization bearer token, or switch to Browser First and make sure platform.moonshot.cn is logged in.")
         case "xiaomimimo":
-            if credentialMode != .manualPreferred, browserCookie == nil {
-                return .unauthorizedDetail("No live XiaomiMIMO login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
-            }
             if let savedRaw, !savedRaw.lowercased().contains("api-platform_servicetoken") {
                 return .unauthorizedDetail("XiaomiMIMO cookie looks incomplete. Paste the full Cookie header and make sure it includes api-platform_serviceToken and userId.")
             }
+            if credentialMode != .manualPreferred {
+                return .unauthorizedDetail("No live XiaomiMIMO login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
+            }
             return .unauthorizedDetail("No usable XiaomiMIMO cookie was found. Paste the full Cookie header, or switch to Browser First and make sure platform.xiaomimimo.com is logged in.")
         case "xiaomimimo-token-plan":
-            if credentialMode != .manualPreferred, browserCookie == nil {
-                return .unauthorizedDetail("No live XiaomiMIMO Token Plan login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
-            }
             if let savedRaw, !savedRaw.lowercased().contains("api-platform_servicetoken") {
                 return .unauthorizedDetail("XiaomiMIMO Token Plan cookie looks incomplete. Paste the full Cookie header and make sure it includes api-platform_serviceToken and userId.")
             }
+            if credentialMode != .manualPreferred {
+                return .unauthorizedDetail("No live XiaomiMIMO Token Plan login was found in the browser. Log in to platform.xiaomimimo.com first, or switch back to Manual First and paste the full Cookie header.")
+            }
             return .unauthorizedDetail("No usable XiaomiMIMO Token Plan cookie was found. Paste the full Cookie header, or switch to Browser First and make sure platform.xiaomimimo.com is logged in.")
         case "minimax":
-            if credentialMode != .manualPreferred, browserCookie == nil {
+            if credentialMode != .manualPreferred {
                 return .unauthorizedDetail("No live MiniMax login was found in the browser. Log in to platform.minimaxi.com first, or switch back to Manual First and paste the full Cookie header.")
             }
             return .unauthorizedDetail("No usable MiniMax cookie was found. Paste the full Cookie header, and make sure GroupId is filled in User ID.")
         case "ailinyu":
             return .unauthorizedDetail("No usable open.ailinyu.de cookie was found. Paste the full Cookie header, and check that User ID matches your site account.")
         default:
+            let host = baseURL.host?.lowercased() ?? descriptor.name
+            if credentialMode == .manualPreferred {
+                return .unauthorizedDetail("No usable credential was found for \(manifest.displayName). Paste the required cookie/token, or switch to Browser First if \(host) supports browser login.")
+            }
             return .unauthorizedDetail("No usable credential was found for \(manifest.displayName). Paste the required cookie/token, or switch to Browser First and make sure the site is logged in.")
         }
     }
@@ -1821,7 +2049,7 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
                     return .invalidResponse("\(manifest.displayName) connected, but the current response does not match the template. Test Connection can help re-check the site, or open Advanced settings if the site response changed.")
                 }
             }
-            if detail.contains("account balance JSON decode failed") {
+            if detail.contains("account balance JSON decode failed") || detail.contains("auth page html response") {
                 return .invalidResponse("\(manifest.displayName) returned a non-JSON page. This usually means the credential is expired, the request was redirected to a login page, or the site is blocking the current auth method.")
             }
             return error
@@ -1832,15 +2060,15 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
 
     private func relayTokenPreflightError(
         baseURL: URL,
-        credentialMode: RelayCredentialMode
+        credentialMode: RelayCredentialMode,
+        manifest: RelayAdapterManifest
     ) -> ProviderError {
         guard credentialMode != .manualPreferred else {
             return .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
         }
         let host = baseURL.host?.lowercased() ?? baseURL.absoluteString
-        let browserBearers = browserCredentialService.detectBearerTokenCandidates(host: host)
-        if browserBearers.isEmpty {
-            return .unauthorizedDetail("No live browser bearer token was found for \(host). Log in in the browser first, or switch back to Manual First and paste a token.")
+        if relaySupportsBrowserRecovery(manifest: manifest, channel: .token) {
+            return .unauthorizedDetail("No usable browser credential was found for \(host). Log in in the browser first, or switch back to Manual First and paste a token.")
         }
         return .missingCredential(descriptor.auth.keychainAccount ?? descriptor.id)
     }
@@ -1849,6 +2077,8 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         switch error {
         case .unauthorized:
             return .unauthorizedDetail("The saved token for \(baseURL.host ?? descriptor.name) is no longer valid. Paste a fresh token or switch to Browser First if the site supports browser auth.")
+        case .invalidResponse(let detail) where detail.contains("account balance JSON decode failed") || detail.contains("auth page html response"):
+            return .invalidResponse("\(baseURL.host ?? descriptor.name) returned a non-JSON page. This usually means the credential is expired, the request was redirected to a login page, or the site is blocking the current auth method.")
         default:
             return error
         }
@@ -1939,8 +2169,30 @@ final class RelayProvider: UsageProvider, @unchecked Sendable {
         do {
             return try JSONSerialization.jsonObject(with: data)
         } catch {
+            if looksLikeAuthenticationHTMLResponse(data) {
+                throw ProviderError.invalidResponse("auth page html response")
+            }
             throw ProviderError.invalidResponse("account balance JSON decode failed")
         }
+    }
+
+    private func looksLikeAuthenticationHTMLResponse(_ data: Data) -> Bool {
+        guard let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !text.isEmpty else {
+            return false
+        }
+
+        if text.hasPrefix("<!doctype html") || text.hasPrefix("<html") {
+            return true
+        }
+
+        return text.contains("<form") ||
+            text.contains("login") ||
+            text.contains("sign in") ||
+            text.contains("signin") ||
+            text.contains("auth")
     }
 
     private func numericValue(for expression: String, in root: Any) -> Double? {
@@ -2102,6 +2354,11 @@ private struct RelayRawTokenCandidate {
     let source: String
 }
 
+private enum RelayBrowserRecoveryChannel: String {
+    case balance
+    case token
+}
+
 private struct RelayCredentialCandidate {
     let headers: [String: String]
     let source: String
@@ -2139,7 +2396,8 @@ private struct TokenChannelResult {
     let limit: Double?
     let unit: String
     let note: String
-    let rawMeta: [String: String]
+    var rawMeta: [String: String]
+    var recoveryMeta: [String: String] = [:]
 }
 
 private struct AccountChannelResult {
@@ -2151,7 +2409,30 @@ private struct AccountChannelResult {
     let planType: String?
     let quotaWindows: [UsageQuotaWindow]
     let note: String
-    let rawMeta: [String: String]
+    var rawMeta: [String: String]
+    var recoveryMeta: [String: String] = [:]
+}
+
+private actor BrowserRecoveryBackoff {
+    private var blockedUntil: [String: Date] = [:]
+
+    func shouldAttempt(for key: String, forceRefresh: Bool, now: Date = Date()) -> Bool {
+        if forceRefresh {
+            return true
+        }
+        guard let deadline = blockedUntil[key] else {
+            return true
+        }
+        return now >= deadline
+    }
+
+    func markFailure(for key: String, interval: TimeInterval, now: Date = Date()) {
+        blockedUntil[key] = now.addingTimeInterval(max(0, interval))
+    }
+
+    func clearFailure(for key: String) {
+        blockedUntil.removeValue(forKey: key)
+    }
 }
 
 struct OpenTokenUsageEnvelope: Decodable {

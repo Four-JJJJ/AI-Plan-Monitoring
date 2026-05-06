@@ -274,17 +274,17 @@ enum StatusBarDisplayRenderer {
     }
 
     private static func drawIconBoundsCentered(_ icon: NSImage, in targetRect: NSRect) {
-        let sourceRect = NSRect(origin: .zero, size: icon.size)
+        let sourceRect = visibleIconContentRect(for: icon) ?? NSRect(origin: .zero, size: icon.size)
         guard sourceRect.width > 0, sourceRect.height > 0 else {
             icon.draw(in: targetRect)
             return
         }
 
-        let scale = min(targetRect.width / sourceRect.width, targetRect.height / sourceRect.height)
+        let scale = min(1, min(targetRect.width / sourceRect.width, targetRect.height / sourceRect.height))
         let drawSize = NSSize(width: sourceRect.width * scale, height: sourceRect.height * scale)
         let drawOrigin = NSPoint(
-            x: targetRect.minX + floor((targetRect.width - drawSize.width) / 2),
-            y: targetRect.minY + floor((targetRect.height - drawSize.height) / 2)
+            x: targetRect.minX + round((targetRect.width - drawSize.width) / 2),
+            y: targetRect.minY + round((targetRect.height - drawSize.height) / 2)
         )
 
         let drawRect = NSRect(
@@ -295,24 +295,124 @@ enum StatusBarDisplayRenderer {
         )
         guard
             let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil),
-            let context = NSGraphicsContext.current?.cgContext
+            let croppedImage = croppedCGImage(cgImage, sourceRect: sourceRect, imageSize: icon.size)
         else {
             icon.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1.0)
             return
         }
 
-        context.saveGState()
-        context.translateBy(x: drawRect.minX, y: drawRect.minY + drawRect.height)
-        context.scaleBy(
-            x: drawRect.width / CGFloat(cgImage.width),
-            y: -drawRect.height / CGFloat(cgImage.height)
+        let iconCanvas = NSImage(size: targetRect.size)
+        iconCanvas.lockFocusFlipped(true)
+        if let canvasContext = NSGraphicsContext.current?.cgContext {
+            canvasContext.interpolationQuality = .none
+            canvasContext.draw(
+                croppedImage,
+                in: CGRect(
+                    x: drawRect.minX - targetRect.minX,
+                    y: drawRect.minY - targetRect.minY,
+                    width: drawRect.width,
+                    height: drawRect.height
+                )
+            )
+        }
+        iconCanvas.unlockFocus()
+        iconCanvas.draw(in: targetRect)
+    }
+
+    private static func visibleIconContentRect(for icon: NSImage) -> NSRect? {
+        guard
+            let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil),
+            let rgbaData = rasterizedRGBAData(from: cgImage)
+        else {
+            return nil
+        }
+
+        let alphaThreshold: UInt8 = 8
+        let width = cgImage.width
+        let height = cgImage.height
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+
+        rgbaData.withUnsafeBytes { rawBuffer in
+            guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = (y * width + x) * 4
+                    let alpha = bytes[offset + 3]
+                    guard alpha > alphaThreshold else { continue }
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+            }
+        }
+
+        guard minX <= maxX, minY <= maxY, icon.size.width > 0, icon.size.height > 0 else {
+            return nil
+        }
+
+        let scaleX = icon.size.width / CGFloat(width)
+        let scaleY = icon.size.height / CGFloat(height)
+        return NSRect(
+            x: CGFloat(minX) * scaleX,
+            y: CGFloat(minY) * scaleY,
+            width: CGFloat(maxX - minX + 1) * scaleX,
+            height: CGFloat(maxY - minY + 1) * scaleY
         )
-        context.interpolationQuality = .none
-        context.draw(
-            cgImage,
-            in: CGRect(x: 0, y: 0, width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
-        )
-        context.restoreGState()
+    }
+
+    private static func rasterizedRGBAData(from cgImage: CGImage) -> Data? {
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var data = Data(count: bytesPerRow * height)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+
+        let rendered = data.withUnsafeMutableBytes { rawBuffer -> Bool in
+            guard let baseAddress = rawBuffer.baseAddress else { return false }
+            guard let context = CGContext(
+                data: baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+
+        return rendered ? data : nil
+    }
+
+    private static func croppedCGImage(_ cgImage: CGImage, sourceRect: NSRect, imageSize: NSSize) -> CGImage? {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return nil
+        }
+
+        let scaleX = CGFloat(cgImage.width) / imageSize.width
+        let scaleY = CGFloat(cgImage.height) / imageSize.height
+        let cropRect = CGRect(
+            x: floor(sourceRect.minX * scaleX),
+            y: floor(sourceRect.minY * scaleY),
+            width: ceil(sourceRect.width * scaleX),
+            height: ceil(sourceRect.height * scaleY)
+        ).integral
+
+        let imageBounds = CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        let boundedCropRect = cropRect.intersection(imageBounds)
+        guard !boundedCropRect.isNull, boundedCropRect.width > 0, boundedCropRect.height > 0 else {
+            return nil
+        }
+        return cgImage.cropping(to: boundedCropRect)
     }
 
     private static func drawText(

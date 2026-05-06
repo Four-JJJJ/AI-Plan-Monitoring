@@ -50,6 +50,44 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.providers.first?.pollIntervalSec, 180)
     }
 
+    func testDecodeWithDiagnosticsReportsDroppedProviderEntries() throws {
+        let json = #"""
+        {
+          "language":"zh-Hans",
+          "providers":[
+            {
+              "id":"legacy-opencode-go",
+              "name":"Legacy OpenCode Go",
+              "family":"official",
+              "type":"openCodeGo",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"bearer"}
+            },
+            {
+              "id":"codex-official",
+              "name":"Official Codex",
+              "family":"official",
+              "type":"codex",
+              "enabled":true,
+              "pollIntervalSec":180,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://chatgpt.com"
+            }
+          ]
+        }
+        """#
+
+        let decoded = try AppConfig.decodeWithDiagnostics(from: Data(json.utf8))
+
+        XCTAssertTrue(decoded.diagnostics.hadLossyProviderDecoding)
+        XCTAssertEqual(decoded.diagnostics.droppedProviderEntryCount, 1)
+        XCTAssertEqual(decoded.config.providers.count, 1)
+        XCTAssertEqual(decoded.config.providers.first?.id, "codex-official")
+    }
+
     func testNormalizeRelayBaseURLStripsPathAndQuery() {
         let normalized = ProviderDescriptor.normalizeRelayBaseURL("platform.deepseek.com/usage?month=4")
         XCTAssertEqual(normalized, "https://platform.deepseek.com")
@@ -529,6 +567,20 @@ final class AppConfigTests: XCTestCase {
             preferredAdapterID: "generic-newapi"
         )
         relay.id = "open-relay-fixture-example-com-1"
+
+        let config = AppConfig(language: .zhHans, providers: [relay])
+        let migrated = config.migratedWithSiteDefaults()
+
+        XCTAssertNil(migrated.providers.first(where: { $0.id == relay.id }))
+    }
+
+    func testMigrationRemovesRelayFixtureDebugProviderOnFixtureHost() {
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Relay Fixture",
+            baseURL: "https://relay-fixture.dev",
+            preferredAdapterID: "generic-newapi"
+        )
+        relay.id = "open-relay-fixture-dev-1"
 
         let config = AppConfig(language: .zhHans, providers: [relay])
         let migrated = config.migratedWithSiteDefaults()

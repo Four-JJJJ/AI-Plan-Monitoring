@@ -18,11 +18,26 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.backup.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.recovery.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.last-known-good.json").path))
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.language, .en)
         XCTAssertEqual(loaded.claudeStatusBarDisplaySlotID, .b)
         XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
+    }
+
+    func testLoadCreatesDefaultConfigWhenNoHistoryExists() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+
+        let loaded = try store.load()
+        let directory = appSupportDirectory(in: root)
+
+        XCTAssertEqual(loaded, AppConfig.default)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.backup.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.recovery.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.last-known-good.json").path))
     }
 
     func testLoadRecoversEnabledOfficialProvidersFromPersistedProfilesWhenConfigMissing() throws {
@@ -101,6 +116,7 @@ final class ConfigStoreTests: XCTestCase {
         let directory = root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
         let primaryURL = directory.appendingPathComponent("config.json")
         let backupURL = directory.appendingPathComponent("config.backup.json")
+        let lastKnownGoodURL = directory.appendingPathComponent("config.last-known-good.json")
         try Data("not-json".utf8).write(to: primaryURL, options: .atomic)
         try Data("still-not-json".utf8).write(to: backupURL, options: .atomic)
 
@@ -116,6 +132,190 @@ final class ConfigStoreTests: XCTestCase {
         let restoredBackup = try Data(contentsOf: backupURL)
         XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredPrimary))
         XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: restoredBackup))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lastKnownGoodURL.path))
+    }
+
+    func testLoadRecoversFromLastKnownGoodWhenPrimaryAndShadowsMissing() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let config = makeConfigWithRelayAndStatusBarState()
+        try store.save(config)
+
+        let directory = appSupportDirectory(in: root)
+        let primaryURL = directory.appendingPathComponent("config.json")
+        let backupURL = directory.appendingPathComponent("config.backup.json")
+        let recoveryURL = directory.appendingPathComponent("config.recovery.json")
+        let lastKnownGoodURL = directory.appendingPathComponent("config.last-known-good.json")
+
+        try FileManager.default.removeItem(at: primaryURL)
+        try FileManager.default.removeItem(at: backupURL)
+        try FileManager.default.removeItem(at: recoveryURL)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.statusBarProviderID, "open-custom-relay-persisted")
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "open-custom-relay-persisted"])
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "open-custom-relay-persisted" && $0.enabled }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: primaryURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lastKnownGoodURL.path))
+    }
+
+    func testLoadPrefersLossyCurrentConfigBeforeRestoringLastKnownGoodSnapshot() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let config = makeConfigWithRelayAndStatusBarState()
+        try store.save(config)
+
+        let directory = appSupportDirectory(in: root)
+        let lossyData = Data(makeLossyConfigJSON().utf8)
+        try lossyData.write(to: directory.appendingPathComponent("config.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.backup.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.recovery.json"), options: .atomic)
+
+        let loaded = try store.load()
+        let restoredData = try Data(contentsOf: directory.appendingPathComponent("config.json"))
+        let restored = try AppConfig.decodeWithDiagnostics(from: restoredData)
+        let preservedURL = directory.appendingPathComponent("config.preserved-fallback-candidate.json")
+
+        XCTAssertTrue(restored.diagnostics.hadLossyProviderDecoding)
+        XCTAssertEqual(loaded.statusBarProviderID, "codex-official")
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official"])
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
+        XCTAssertFalse(loaded.providers.contains(where: { $0.id == "open-custom-relay-persisted" && $0.enabled }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preservedURL.path))
+        XCTAssertEqual(try Data(contentsOf: preservedURL), lossyData)
+    }
+
+    func testBootstrapSaveDoesNotOverwriteLastKnownGoodSnapshot() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let fullConfig = makeConfigWithRelayAndStatusBarState()
+        try store.save(fullConfig)
+
+        var minimal = AppConfig.default
+        if let codexIndex = minimal.providers.firstIndex(where: { $0.id == "codex-official" }) {
+            minimal.providers[codexIndex].enabled = true
+        }
+        minimal.statusBarProviderID = "codex-official"
+        minimal.statusBarMultiUsageEnabled = false
+        minimal.statusBarMultiProviderIDs = ["codex-official"]
+        minimal.launchAtLoginEnabled = true
+
+        try store.saveDuringBootstrap(minimal)
+
+        let directory = appSupportDirectory(in: root)
+        let primary = try AppConfig.decodeWithDiagnostics(
+            from: Data(contentsOf: directory.appendingPathComponent("config.json"))
+        ).config
+        let lastKnownGood = try AppConfig.decodeWithDiagnostics(
+            from: Data(contentsOf: directory.appendingPathComponent("config.last-known-good.json"))
+        ).config
+
+        XCTAssertEqual(primary.statusBarProviderID, "codex-official")
+        XCTAssertFalse(primary.statusBarMultiUsageEnabled)
+        XCTAssertEqual(primary.statusBarMultiProviderIDs, ["codex-official"])
+        XCTAssertEqual(lastKnownGood.statusBarProviderID, "open-custom-relay-persisted")
+        XCTAssertTrue(lastKnownGood.statusBarMultiUsageEnabled)
+        XCTAssertEqual(lastKnownGood.statusBarMultiProviderIDs, ["codex-official", "open-custom-relay-persisted"])
+        XCTAssertTrue(lastKnownGood.providers.contains(where: { $0.id == "open-custom-relay-persisted" && $0.enabled }))
+    }
+
+    func testLoadPersistsPreservedFallbackCandidateWhenLossyConfigLoadsInPlace() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let directory = appSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let lossyData = Data(makeLossyConfigJSON().utf8)
+        try lossyData.write(to: directory.appendingPathComponent("config.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.backup.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.recovery.json"), options: .atomic)
+
+        let codexSlotStore = CodexAccountSlotStore(
+            staleInterval: .greatestFiniteMagnitude,
+            fileURL: directory.appendingPathComponent("codex_slots.json")
+        )
+        _ = codexSlotStore.upsertActive(
+            snapshot: makeSnapshot(
+                source: "codex-official",
+                accountLabel: "codex@example.com",
+                rawMeta: [
+                    "codex.accountKey": "tenant:account:codex|principal:email:codex@example.com",
+                    "codex.slotID": "A"
+                ]
+            ),
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let loaded = try store.load()
+        let preservedURL = directory.appendingPathComponent("config.preserved-fallback-candidate.json")
+
+        XCTAssertEqual(loaded.statusBarProviderID, "codex-official")
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preservedURL.path))
+        XCTAssertEqual(try Data(contentsOf: preservedURL), lossyData)
+    }
+
+    func testLoadPrefersPreservedFallbackCandidateBeforeDerivedPrimaryConfig() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let fullConfig = makeConfigWithRelayAndStatusBarState()
+        let directory = appSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var minimal = AppConfig.default
+        if let codexIndex = minimal.providers.firstIndex(where: { $0.id == "codex-official" }) {
+            minimal.providers[codexIndex].enabled = true
+        }
+        minimal.statusBarProviderID = "codex-official"
+        minimal.statusBarMultiProviderIDs = ["codex-official"]
+        let minimalData = try JSONEncoder.prettySorted.encode(minimal)
+        try minimalData.write(to: directory.appendingPathComponent("config.json"), options: .atomic)
+        try minimalData.write(to: directory.appendingPathComponent("config.backup.json"), options: .atomic)
+        try minimalData.write(to: directory.appendingPathComponent("config.recovery.json"), options: .atomic)
+
+        let fullData = try JSONEncoder.prettySorted.encode(fullConfig)
+        try fullData.write(to: directory.appendingPathComponent("config.preserved-fallback-candidate.json"), options: .atomic)
+
+        let loaded = try store.load()
+        let rewrittenPrimary = try AppConfig.decodeWithDiagnostics(
+            from: Data(contentsOf: directory.appendingPathComponent("config.json"))
+        ).config
+
+        XCTAssertEqual(loaded.statusBarProviderID, "open-custom-relay-persisted")
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "open-custom-relay-persisted"])
+        XCTAssertTrue(rewrittenPrimary.providers.contains(where: { $0.id == "open-custom-relay-persisted" && $0.enabled }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.preserved-fallback-candidate.json").path))
+    }
+
+    func testLoadRecoversFromLastKnownGoodWhenPrimaryBackupAndRecoveryCorrupted() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let config = makeConfigWithRelayAndStatusBarState()
+        try store.save(config)
+
+        let directory = appSupportDirectory(in: root)
+        let primaryURL = directory.appendingPathComponent("config.json")
+        let backupURL = directory.appendingPathComponent("config.backup.json")
+        let recoveryURL = directory.appendingPathComponent("config.recovery.json")
+
+        try Data("not-json".utf8).write(to: primaryURL, options: .atomic)
+        try Data("still-not-json".utf8).write(to: backupURL, options: .atomic)
+        try Data("definitely-not-json".utf8).write(to: recoveryURL, options: .atomic)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.statusBarProviderID, "open-custom-relay-persisted")
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "open-custom-relay-persisted"])
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "open-custom-relay-persisted" && $0.enabled }))
+        XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: Data(contentsOf: primaryURL)))
+        XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: Data(contentsOf: backupURL)))
+        XCTAssertNoThrow(try JSONDecoder().decode(AppConfig.self, from: Data(contentsOf: recoveryURL)))
     }
 
     func testLoadRecoversEnabledOfficialProvidersFromPersistedSlotsWhenPrimaryAndBackupCorrupted() throws {
@@ -177,15 +377,18 @@ final class ConfigStoreTests: XCTestCase {
         let primaryURL = directory.appendingPathComponent("config.json")
         let backupURL = directory.appendingPathComponent("config.backup.json")
         let recoveryURL = directory.appendingPathComponent("config.recovery.json")
+        let lastKnownGoodURL = directory.appendingPathComponent("config.last-known-good.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: primaryURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: recoveryURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lastKnownGoodURL.path))
 
         try store.reset()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: primaryURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lastKnownGoodURL.path))
     }
 
     private func makeTempDirectory() throws -> URL {
@@ -197,6 +400,69 @@ final class ConfigStoreTests: XCTestCase {
 
     private func appSupportDirectory(in root: URL) -> URL {
         root.appendingPathComponent("AIPlanMonitor", isDirectory: true)
+    }
+
+    private func makeConfigWithRelayAndStatusBarState() -> AppConfig {
+        var providers = AppConfig.default.providers
+        if let codexIndex = providers.firstIndex(where: { $0.id == "codex-official" }) {
+            providers[codexIndex].enabled = true
+        }
+
+        var relay = ProviderDescriptor.makeOpenRelay(
+            name: "Persisted Relay",
+            baseURL: "https://relay.persisted.example"
+        )
+        relay.id = "open-custom-relay-persisted"
+        relay.enabled = true
+        providers.insert(relay, at: 1)
+
+        return AppConfig(
+            language: .en,
+            launchAtLoginEnabled: true,
+            showOfficialAccountEmailInMenuBar: true,
+            claudeStatusBarDisplaySlotID: .b,
+            statusBarProviderID: relay.id,
+            statusBarMultiUsageEnabled: true,
+            statusBarMultiProviderIDs: ["codex-official", relay.id],
+            statusBarAppearanceMode: .dark,
+            statusBarDisplayStyle: .barNamePercent,
+            providers: providers
+        )
+    }
+
+    private func makeLossyConfigJSON() -> String {
+        #"""
+        {
+          "language":"en",
+          "launchAtLoginEnabled":true,
+          "statusBarProviderID":"codex-official",
+          "statusBarMultiUsageEnabled":true,
+          "statusBarMultiProviderIDs":["codex-official","open-custom-relay-persisted"],
+          "providers":[
+            {
+              "id":"legacy-opencode-go",
+              "name":"Legacy OpenCode Go",
+              "family":"official",
+              "type":"openCodeGo",
+              "enabled":true,
+              "pollIntervalSec":60,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"bearer"}
+            },
+            {
+              "id":"codex-official",
+              "name":"Official Codex",
+              "family":"official",
+              "type":"codex",
+              "enabled":true,
+              "pollIntervalSec":120,
+              "threshold":{"lowRemaining":20,"maxConsecutiveFailures":2,"notifyOnAuthError":true},
+              "auth":{"kind":"localCodex"},
+              "baseURL":"https://chatgpt.com"
+            }
+          ]
+        }
+        """#
     }
 
     private func makeSnapshot(
@@ -218,5 +484,13 @@ final class ConfigStoreTests: XCTestCase {
             extras: [:],
             rawMeta: rawMeta
         )
+    }
+}
+
+private extension JSONEncoder {
+    static var prettySorted: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
     }
 }

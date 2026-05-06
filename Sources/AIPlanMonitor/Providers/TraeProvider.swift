@@ -96,7 +96,10 @@ final class TraeProvider: UsageProvider, @unchecked Sendable {
         var output: [(jwt: String, source: String)] = []
 
         for host in hosts {
-            for candidate in browserCredentialService.detectBearerTokenCandidates(host: host) {
+            for candidate in browserCredentialService.detectBearerTokenCandidates(
+                host: host,
+                accessIntent: .authRecovery
+            ) {
                 let jwt = Self.normalizeToken(candidate.value)
                 guard Self.looksLikeJWT(jwt), seen.insert(jwt).inserted else { continue }
                 output.append((jwt: jwt, source: "\(candidate.source):\(host)"))

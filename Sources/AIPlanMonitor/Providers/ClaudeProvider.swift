@@ -311,6 +311,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private func resolveClaudeCookieHeader(forceRefresh: Bool) async throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .claude)
         let service = KeychainService.defaultServiceName
+        let browserAccessIntent: BrowserCredentialAccessIntent = forceRefresh ? .interactiveImport : .background
         if let account = official.manualCookieAccount,
            let stored = keychain.readToken(service: service, account: account),
            !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -331,14 +332,23 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential("claude.ai session cookie")
         }
 
-        if let detected = browserCookieService.detectNamedCookie(name: "sessionKey", hostContains: "claude.ai", order: nil) {
+        if let detected = browserCookieService.detectNamedCookie(
+            name: "sessionKey",
+            hostContains: "claude.ai",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
             await webReadBackoff.clearFailure(for: backoffKey)
             return detected
         }
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "claude.ai", order: nil) {
+        if let detected = browserCookieService.detectCookieHeader(
+            hostContains: "claude.ai",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }

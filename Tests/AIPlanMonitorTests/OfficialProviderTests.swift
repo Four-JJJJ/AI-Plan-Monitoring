@@ -1583,12 +1583,21 @@ private final class SpyBrowserCookieDetector: BrowserCookieDetecting {
     var cookieHeaderResult: BrowserCookieHeader?
     var namedCookieResult: BrowserCookieHeader?
 
-    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
         detectCookieHeaderCallCount += 1
         return cookieHeaderResult
     }
 
-    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader? {
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
         detectNamedCookieCallCount += 1
         return namedCookieResult
     }

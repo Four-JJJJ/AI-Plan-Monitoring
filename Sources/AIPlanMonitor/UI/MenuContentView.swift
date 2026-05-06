@@ -16,8 +16,7 @@ struct MenuContentView: View {
     @State private var onboardingDiscoveryIsError = false
     @State private var onboardingDiscoveryInFlight = false
     @State private var cardsContentHeight: CGFloat = 0
-
-    private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var clockTask: Task<Void, Never>?
 
     // MARK: - Menubar 视觉 Token（改这里可全局影响首页样式）
     // menubar 面板外层背景。
@@ -61,11 +60,14 @@ struct MenuContentView: View {
             SmoothRoundedRectangle(cornerRadius: 20, smoothing: 0.6)
         )
         .environment(\.colorScheme, .dark)
-        .onReceive(clock) { value in
-            now = value
-            if viewModel.shouldShowPermissionGuide {
-                viewModel.refreshPermissionStatusesIfNeeded(referenceDate: value)
-            }
+        .onAppear {
+            restartClockIfNeeded()
+        }
+        .onDisappear {
+            stopClock()
+        }
+        .onChange(of: viewModel.menuPanelVisible) { _, _ in
+            restartClockIfNeeded()
         }
     }
 
@@ -1416,6 +1418,31 @@ struct MenuContentView: View {
             if seconds < 3600 { return "\(seconds / 60)m ago" }
             if seconds < 86_400 { return "\(seconds / 3600)h ago" }
             return "\(seconds / 86_400)d ago"
+        }
+    }
+
+    private func restartClockIfNeeded() {
+        stopClock()
+        guard viewModel.menuPanelVisible else { return }
+        tickClock()
+        clockTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(RuntimeDiagnosticsLimits.menuClockIntervalSeconds))
+                guard !Task.isCancelled else { break }
+                tickClock()
+            }
+        }
+    }
+
+    private func stopClock() {
+        clockTask?.cancel()
+        clockTask = nil
+    }
+
+    private func tickClock(referenceDate: Date = Date()) {
+        now = referenceDate
+        if viewModel.shouldShowPermissionGuide {
+            viewModel.refreshPermissionStatusesIfNeeded(referenceDate: referenceDate)
         }
     }
 

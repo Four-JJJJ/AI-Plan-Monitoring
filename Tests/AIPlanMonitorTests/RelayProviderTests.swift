@@ -334,6 +334,11 @@ final class RelayProviderTests: XCTestCase {
         let snapshot = try await provider.fetch()
         XCTAssertEqual(snapshot.remaining ?? -1, 120, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserBearer:browser")
+        XCTAssertEqual(snapshot.rawMeta["relay.recovery.succeeded"], "true")
+        XCTAssertEqual(snapshot.rawMeta["relay.recovery.trigger"], "credentialRejected")
+        XCTAssertEqual(snapshot.rawMeta["relay.recovery.source"], "browserBearer:browser")
+        XCTAssertEqual(snapshot.rawMeta["relay.savedCredentialSource"], "browserBearer:browser")
+        XCTAssertNotNil(snapshot.rawMeta["relay.recovery.at"])
         XCTAssertEqual(snapshot.fetchHealth, .ok)
         XCTAssertEqual(snapshot.valueFreshness, .live)
         XCTAssertEqual(snapshot.authSourceLabel, "browserBearer:browser")
@@ -385,6 +390,95 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.remaining ?? -1, 90, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "savedBearer")
         XCTAssertEqual(browserBearerLookupCount, 0)
+    }
+
+    func testBrowserPreferredBackgroundPollingUsesSavedCredentialWithoutLiveBrowserLookup() async throws {
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("saved-token", service: service, account: "relay.example.com/system-token"))
+
+        var descriptor = genericNewAPIDescriptor(
+            service: service,
+            baseURL: "https://relay.example.com",
+            userID: "user-123"
+        )
+        descriptor.relayConfig?.balanceCredentialMode = .browserPreferred
+
+        var browserBearerLookupCount = 0
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in
+                    browserBearerLookupCount += 1
+                    return [BrowserDetectedCredential(value: "browser-token", source: "browser")]
+                }
+            )
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 90, accuracy: 0.001)
+        XCTAssertEqual(snapshot.rawMeta["account.authSource"], "savedBearer")
+        XCTAssertEqual(browserBearerLookupCount, 0)
+    }
+
+    func testAuthRecoveryFailureBackoffSkipsRepeatedBrowserLookups() async {
+        let service = "AIPlanMonitorTests-\(UUID().uuidString)"
+        let host = "recovery-backoff-\(UUID().uuidString).example"
+        let keychain = KeychainService()
+        XCTAssertTrue(keychain.saveToken("bad-token", service: service, account: "\(host)/system-token"))
+        var browserBearerLookupCount = 0
+
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer bad-token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"error":"expired"}"#.utf8))
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: genericNewAPIDescriptor(
+                service: service,
+                baseURL: "https://\(host)",
+                userID: "user-123"
+            ),
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                bearerCandidatesOverride: { _ in
+                    browserBearerLookupCount += 1
+                    return []
+                }
+            )
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected auth failure")
+        } catch {}
+        XCTAssertEqual(browserBearerLookupCount, 1)
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected auth failure")
+        } catch {}
+        XCTAssertEqual(browserBearerLookupCount, 1)
     }
 
     func testGenericNewAPIFetchConvertsQuotaToUSDBalance() async throws {
@@ -1066,9 +1160,11 @@ final class RelayProviderTests: XCTestCase {
 
         let service = "AIPlanMonitorTests-\(UUID().uuidString)"
         let keychain = KeychainService()
+        var descriptor = makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com")
+        descriptor.relayConfig?.balanceCredentialMode = .browserPreferred
 
         let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            descriptor: descriptor,
             session: session,
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(
@@ -1079,7 +1175,7 @@ final class RelayProviderTests: XCTestCase {
             )
         )
 
-        let snapshot = try await provider.fetch()
+        let snapshot = try await provider.fetch(forceRefresh: true)
         XCTAssertEqual(snapshot.remaining ?? -1, 66.60, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserCookieHeader:browser")
     }
@@ -1113,9 +1209,11 @@ final class RelayProviderTests: XCTestCase {
                 account: "platform.xiaomimimo.com/system-token"
             )
         )
+        var descriptor = makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com")
+        descriptor.relayConfig?.balanceCredentialMode = .browserPreferred
 
         let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
+            descriptor: descriptor,
             session: session,
             keychain: keychain,
             browserCredentialService: BrowserCredentialService(
@@ -1126,7 +1224,7 @@ final class RelayProviderTests: XCTestCase {
             )
         )
 
-        let snapshot = try await provider.fetch()
+        let snapshot = try await provider.fetch(forceRefresh: true)
         XCTAssertEqual(snapshot.remaining ?? -1, 77.70, accuracy: 0.001)
         XCTAssertEqual(snapshot.rawMeta["account.authSource"], "browserCookieHeader:browser")
     }
@@ -1231,29 +1329,39 @@ final class RelayProviderTests: XCTestCase {
 
         let service = "AIPlanMonitorTests-\(UUID().uuidString)"
         let keychain = KeychainService()
-        XCTAssertTrue(
-            keychain.saveToken(
-                "api-platform_serviceToken=staleCookie; userId=10001",
-                service: service,
-                account: "platform.xiaomimimo.com/system-token"
+        var descriptor = makeRelayDescriptor(
+            service: service,
+            adapterID: "xiaomimimo",
+            baseURL: "https://platform.xiaomimimo.com"
+        )
+        descriptor.relayConfig?.balanceCredentialMode = .browserPreferred
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCredentialService: BrowserCredentialService(
+                cookieHeaderOverride: { _ in
+                    return BrowserDetectedCredential(
+                        value: "api-platform_serviceToken=staleCookie; userId=10001",
+                        source: "browser"
+                    )
+                }
             )
         )
 
-        let provider = RelayProvider(
-            descriptor: makeRelayDescriptor(service: service, adapterID: "xiaomimimo", baseURL: "https://platform.xiaomimimo.com"),
-            session: session,
-            keychain: keychain,
-            browserCredentialService: BrowserCredentialService()
-        )
-
         do {
-            _ = try await provider.fetch()
+            _ = try await provider.fetch(forceRefresh: true)
             XCTFail("Expected unauthorizedDetail")
         } catch let error as ProviderError {
-            guard case .unauthorizedDetail(let message) = error else {
+            switch error {
+            case .unauthorizedDetail(let message):
+                XCTAssertTrue(message.contains("xiaomimimo login expired"))
+            case .missingCredential(let account):
+                XCTAssertEqual(account, "platform.xiaomimimo.com/system-token")
+            default:
                 return XCTFail("Expected unauthorizedDetail, got \(error)")
             }
-            XCTAssertTrue(message.contains("xiaomimimo login expired"))
         }
     }
 

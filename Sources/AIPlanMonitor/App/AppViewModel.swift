@@ -63,6 +63,8 @@ final class AppViewModel {
     private(set) var updatePreparedVersion: String?
     private(set) var updateInstallErrorMessage: String?
     private(set) var localUsageHistoryVersion = 0
+    private(set) var menuPanelVisible = false
+    private(set) var settingsWindowVisible = false
 
     private var codexFeedbackTasks: [CodexSlotID: Task<Void, Never>] = [:]
     private var codexOAuthImportTask: Task<Void, Never>?
@@ -123,7 +125,7 @@ final class AppViewModel {
         var loadedConfig: AppConfig
         do {
             loadedConfig = try configurationRepository.load()
-            shouldPersistConfigDuringBootstrap = true
+            shouldPersistConfigDuringBootstrap = !configurationRepository.lastLoadWasLossy
         } catch {
             loadedConfig = .default
             shouldPersistConfigDuringBootstrap = false
@@ -145,13 +147,13 @@ final class AppViewModel {
         normalizeStatusBarSelections()
         pruneThirdPartyBalanceBaselines()
         if shouldPersistConfigDuringBootstrap && self.config != preNormalizedConfig {
-            try? configurationRepository.save(self.config)
+            try? configurationRepository.saveDuringBootstrap(self.config)
         }
         let launchAtLoginEnabled = launchAtLoginService.isEnabled()
         if self.config.launchAtLoginEnabled != launchAtLoginEnabled {
             self.config.launchAtLoginEnabled = launchAtLoginEnabled
             if shouldPersistConfigDuringBootstrap {
-                try? configurationRepository.save(self.config)
+                try? configurationRepository.saveDuringBootstrap(self.config)
             }
         }
         syncCodexProfilesCurrentState()
@@ -242,6 +244,16 @@ final class AppViewModel {
 
     func refreshNow() {
         refreshScheduler?.refreshNow(providers: config.providers)
+    }
+
+    func setMenuPanelVisible(_ visible: Bool) {
+        guard menuPanelVisible != visible else { return }
+        menuPanelVisible = visible
+    }
+
+    func setSettingsWindowVisible(_ visible: Bool) {
+        guard settingsWindowVisible != visible else { return }
+        settingsWindowVisible = visible
     }
 
     func checkForAppUpdate(force: Bool = false) {
@@ -1462,13 +1474,12 @@ final class AppViewModel {
 
     @discardableResult
     func prepareSecureStorageAccess() -> Bool {
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        NSApp.activate(ignoringOtherApps: true)
         SettingsWindowController.shared.show(viewModel: self)
         let ok = keychain.prepareSecureStoreAccess()
         if ok {
             invalidateCredentialLookupCache()
         }
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first(where: { $0.isVisible })?.makeKeyAndOrderFront(nil)
         refreshPermissionStatuses(force: true)
@@ -2364,6 +2375,22 @@ final class AppViewModel {
         return await testRelayConnection(descriptor: descriptor)
     }
 
+    func importRelayDraftFromBrowser(_ draft: RelaySettingsDraft) async -> RelayDiagnosticResult {
+        var importDraft = draft
+        importDraft.balanceCredentialMode = .browserPreferred
+        guard let descriptor = relayDescriptorForPreview(draft: importDraft) else {
+            return RelayDiagnosticResult(
+                success: false,
+                fetchHealth: .endpointMisconfigured,
+                resolvedAdapterID: draft.preferredAdapterID,
+                resolvedAuthSource: nil,
+                message: text(.error),
+                snapshotPreview: nil
+            )
+        }
+        return await testRelayConnection(descriptor: descriptor)
+    }
+
     func updateThirdPartyQuotaDisplayMode(
         providerID: String,
         quotaDisplayMode: OfficialQuotaDisplayMode
@@ -2650,6 +2677,15 @@ final class AppViewModel {
         config.providers.first(where: { $0.id == id })
     }
 
+    private func fetchProviderSnapshot(
+        using provider: any UsageProvider,
+        forceRefresh: Bool
+    ) async throws -> UsageSnapshot {
+        try await Task.detached(priority: .utility) {
+            try await provider.fetch(forceRefresh: forceRefresh)
+        }.value
+    }
+
     private func refreshProvider(_ descriptor: ProviderDescriptor, forceRefresh: Bool = false) async {
         defer { pruneThirdPartyBalanceBaselines() }
         let isClaudeOfficial = descriptor.type == .claude && descriptor.family == .official
@@ -2662,7 +2698,7 @@ final class AppViewModel {
         let provider = providerFactory.makeProvider(for: descriptor)
 
         do {
-            let fetched = try await provider.fetch(forceRefresh: forceRefresh)
+            let fetched = try await fetchProviderSnapshot(using: provider, forceRefresh: forceRefresh)
             let snapshot: UsageSnapshot
             if descriptor.type == .codex, descriptor.family == .official {
                 snapshot = markCodexSnapshotActive(fetched)

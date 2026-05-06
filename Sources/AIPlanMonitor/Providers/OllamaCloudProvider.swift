@@ -112,6 +112,7 @@ final class OllamaCloudProvider: UsageProvider, @unchecked Sendable {
     private func resolveCookieHeader(forceRefresh: Bool) async throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .ollamaCloud)
         let service = KeychainService.defaultServiceName
+        let browserAccessIntent: BrowserCredentialAccessIntent = forceRefresh ? .interactiveImport : .background
 
         if let account = official.manualCookieAccount,
            let stored = keychain.readToken(service: service, account: account),
@@ -132,7 +133,12 @@ final class OllamaCloudProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential("ollama.com __Secure-session")
         }
 
-        if let detected = browserCookieService.detectNamedCookie(name: "__Secure-session", hostContains: "ollama.com", order: nil) {
+        if let detected = browserCookieService.detectNamedCookie(
+            name: "__Secure-session",
+            hostContains: "ollama.com",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }
@@ -140,7 +146,11 @@ final class OllamaCloudProvider: UsageProvider, @unchecked Sendable {
             return detected
         }
 
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "ollama.com", order: nil),
+        if let detected = browserCookieService.detectCookieHeader(
+            hostContains: "ollama.com",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ),
            Self.extractCookieValue(name: "__Secure-session", from: detected.header) != nil {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)

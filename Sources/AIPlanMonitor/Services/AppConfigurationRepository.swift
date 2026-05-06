@@ -3,6 +3,10 @@ import Foundation
 final class AppConfigurationRepository {
     private let store: ConfigStore
 
+    var lastLoadWasLossy: Bool {
+        store.lastLoadWasLossy
+    }
+
     init(store: ConfigStore = ConfigStore()) {
         self.store = store
     }
@@ -13,6 +17,10 @@ final class AppConfigurationRepository {
 
     func save(_ config: AppConfig) throws {
         try store.save(config)
+    }
+
+    func saveDuringBootstrap(_ config: AppConfig) throws {
+        try store.saveDuringBootstrap(config)
     }
 
     func reset() throws {

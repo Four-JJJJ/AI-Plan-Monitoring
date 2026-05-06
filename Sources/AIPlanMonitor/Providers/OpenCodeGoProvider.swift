@@ -325,7 +325,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
         official: OfficialProviderConfig,
         forceRefresh: Bool
     ) throws -> String {
-        _ = forceRefresh
+        let browserAccessIntent: BrowserCredentialAccessIntent = forceRefresh ? .interactiveImport : .background
 
         if let rawManual = readStoredManualCookie(official: official),
            let manualHeader = Self.normalizedAuthCookieHeader(rawManual) {
@@ -342,7 +342,12 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
             break
         }
 
-        if let named = browserCookieService.detectNamedCookie(name: "auth", hostContains: "opencode.ai", order: nil),
+        if let named = browserCookieService.detectNamedCookie(
+            name: "auth",
+            hostContains: "opencode.ai",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ),
            let header = Self.normalizedAuthCookieHeader(named.header) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(header, service: KeychainService.defaultServiceName, account: account)
@@ -350,7 +355,11 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
             return header
         }
 
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "opencode.ai", order: nil),
+        if let detected = browserCookieService.detectCookieHeader(
+            hostContains: "opencode.ai",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ),
            let header = Self.normalizedAuthCookieHeader(detected.header) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(header, service: KeychainService.defaultServiceName, account: account)

@@ -79,6 +79,7 @@ final class StatusBarController: NSObject {
         startWorkspaceObservation()
         viewModel.start()
         refreshStatusDisplay()
+        scheduleWallpaperFollowUpRefreshes()
         startRefreshTimer()
         showInitialPopoverIfNeeded()
     }
@@ -176,6 +177,7 @@ final class StatusBarController: NSObject {
     private func closeMenuPanel() {
         guard isMenuPanelShown else { return }
         menuPanel?.orderOut(nil)
+        viewModel.setMenuPanelVisible(false)
         stopOutsideClickMonitoring()
         refreshStatusDisplay()
     }
@@ -207,6 +209,7 @@ final class StatusBarController: NSObject {
         updatePopoverContentSizeIfNeeded()
         alignPopoverWindow(to: button)
         menuPanel?.orderFrontRegardless()
+        viewModel.setMenuPanelVisible(true)
         startOutsideClickMonitoring()
     }
 
@@ -596,14 +599,22 @@ final class StatusBarController: NSObject {
     }
 
     private func resolvedForegroundStyle(for screen: NSScreen?) -> StatusBarForegroundStyle {
-        if viewModel.statusBarAppearanceMode == .followWallpaper,
-           let style = foregroundStyleFromStatusItemAppearance() {
-            return style
+        if viewModel.statusBarAppearanceMode == .followWallpaper {
+            let luminance = wallpaperLuminance(for: screen)
+            if luminance != nil {
+                return StatusBarAppearanceResolver.resolvedForegroundStyle(
+                    mode: .followWallpaper,
+                    wallpaperLuminance: luminance
+                )
+            }
+            if let style = foregroundStyleFromStatusItemAppearance() {
+                return style
+            }
         }
-        let luminance = wallpaperLuminance(for: screen)
+
         return StatusBarAppearanceResolver.resolvedForegroundStyle(
             mode: viewModel.statusBarAppearanceMode,
-            wallpaperLuminance: luminance
+            wallpaperLuminance: wallpaperLuminance(for: screen)
         )
     }
 

@@ -511,6 +511,7 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
     private func resolveCodexCookieHeader(forceRefresh: Bool) async throws -> BrowserCookieHeader {
         let official = descriptor.officialConfig ?? ProviderDescriptor.defaultOfficialConfig(type: .codex)
         let service = KeychainService.defaultServiceName
+        let browserAccessIntent: BrowserCredentialAccessIntent = forceRefresh ? .interactiveImport : .background
 
         if let account = official.manualCookieAccount,
            let header = keychain.readToken(service: service, account: account),
@@ -531,7 +532,11 @@ final class CodexProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.missingCredential("chatgpt.com cookie")
         }
 
-        if let detected = browserCookieService.detectCookieHeader(hostContains: "chatgpt.com", order: nil) {
+        if let detected = browserCookieService.detectCookieHeader(
+            hostContains: "chatgpt.com",
+            order: nil,
+            accessIntent: browserAccessIntent
+        ) {
             if let account = official.manualCookieAccount {
                 _ = keychain.saveToken(detected.header, service: service, account: account)
             }

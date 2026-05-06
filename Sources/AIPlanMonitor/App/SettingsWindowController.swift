@@ -8,12 +8,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var hostingController: NSHostingController<AnyView>?
     private var activationPolicyBeforeShowingSettings: NSApplication.ActivationPolicy?
+    private weak var currentViewModel: AppViewModel?
 
     private override init() {
         super.init()
     }
 
     func show(viewModel: AppViewModel) {
+        currentViewModel = viewModel
         showAppInDockForSettingsWindow()
 
         let initialContentSize = NSSize(width: 1416, height: 912)
@@ -81,6 +83,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        viewModel.setSettingsWindowVisible(true)
         if let panel = window {
             layoutTrafficLights(in: panel)
             DispatchQueue.main.async { [weak self, weak panel] in
@@ -96,6 +99,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        currentViewModel?.setSettingsWindowVisible(false)
         restoreActivationPolicyAfterSettingsWindow()
     }
 
@@ -108,6 +112,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     private func hideSettingsWindow() {
+        currentViewModel?.setSettingsWindowVisible(false)
         window?.orderOut(nil)
         restoreActivationPolicyAfterSettingsWindow()
     }

@@ -26,7 +26,7 @@ final class AppViewModelQuotaDisplayPreferenceTests: XCTestCase {
     func testUpdateThirdPartyQuotaDisplayModePostsStatusBarDisplayConfigNotification() {
         var relay = ProviderDescriptor.makeOpenRelay(
             name: "Relay Fixture",
-            baseURL: "https://relay-fixture.dev"
+            baseURL: "https://relay-preference.dev"
         )
         relay.enabled = false
         let viewModel = makeViewModel(providers: [relay])
@@ -111,7 +111,7 @@ final class AppViewModelQuotaDisplayPreferenceTests: XCTestCase {
     func testUpdateThirdPartyQuotaDisplayModeDoesNotPostWhenValueUnchanged() {
         var relay = ProviderDescriptor.makeOpenRelay(
             name: "Relay Fixture",
-            baseURL: "https://relay-fixture.dev"
+            baseURL: "https://relay-preference.dev"
         )
         relay.enabled = false
         let viewModel = makeViewModel(providers: [relay])
@@ -171,7 +171,7 @@ final class AppViewModelQuotaDisplayPreferenceTests: XCTestCase {
     func testUpdateOpenProviderSettingsNamePostsStatusBarDisplayConfigNotification() {
         var relay = ProviderDescriptor.makeOpenRelay(
             name: "Relay Fixture",
-            baseURL: "https://relay-fixture.dev"
+            baseURL: "https://relay-preference.dev"
         )
         relay.enabled = false
         let viewModel = makeViewModel(providers: [relay])
@@ -192,7 +192,7 @@ final class AppViewModelQuotaDisplayPreferenceTests: XCTestCase {
     func testUpdateOpenProviderSettingsNameDoesNotPostWhenUnchanged() {
         var relay = ProviderDescriptor.makeOpenRelay(
             name: "Relay Fixture",
-            baseURL: "https://relay-fixture.dev"
+            baseURL: "https://relay-preference.dev"
         )
         relay.enabled = false
         let viewModel = makeViewModel(providers: [relay])

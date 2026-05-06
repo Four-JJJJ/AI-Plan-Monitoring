@@ -9,9 +9,52 @@ struct BrowserCookieHeader: Equatable {
     let source: String
 }
 
+enum BrowserCredentialAccessIntent {
+    case background
+    case interactiveImport
+    case authRecovery
+
+    var allowsLiveLookup: Bool {
+        switch self {
+        case .background:
+            return false
+        case .interactiveImport, .authRecovery:
+            return true
+        }
+    }
+}
+
 protocol BrowserCookieDetecting {
-    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader?
-    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]?) -> BrowserCookieHeader?
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader?
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader?
+}
+
+extension BrowserCookieDetecting {
+    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]? = nil) -> BrowserCookieHeader? {
+        detectCookieHeader(
+            hostContains: hostContains,
+            order: order,
+            accessIntent: .interactiveImport
+        )
+    }
+
+    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]? = nil) -> BrowserCookieHeader? {
+        detectNamedCookie(
+            name: name,
+            hostContains: hostContains,
+            order: order,
+            accessIntent: .interactiveImport
+        )
+    }
 }
 
 struct ShellCommand {
@@ -570,7 +613,12 @@ final class BrowserCookieService: BrowserCookieDetecting {
         self.fileManager = fileManager
     }
 
-    func detectCookieHeader(hostContains: String, order: [KimiBrowserKind]? = nil) -> BrowserCookieHeader? {
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]? = nil,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        guard accessIntent.allowsLiveLookup else { return nil }
         let actualOrder = order ?? browserOrderDefault
         for browser in actualOrder {
             for path in candidateCookiePaths(for: browser) {
@@ -583,7 +631,13 @@ final class BrowserCookieService: BrowserCookieDetecting {
         return nil
     }
 
-    func detectNamedCookie(name: String, hostContains: String, order: [KimiBrowserKind]? = nil) -> BrowserCookieHeader? {
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]? = nil,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        guard accessIntent.allowsLiveLookup else { return nil }
         let actualOrder = order ?? browserOrderDefault
         for browser in actualOrder {
             for path in candidateCookiePaths(for: browser) {

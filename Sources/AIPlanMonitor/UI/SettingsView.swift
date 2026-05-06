@@ -86,8 +86,7 @@ struct SettingsView: View {
     @State private var localUsageTrendSelectedAccountKeys: [String: String] = [:]
     @State private var localUsageTrendExpandedAccountSelectorProviderID: String?
     @State private var settingsWallpaperLuminance: Double?
-
-    private let settingsClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var settingsClockTask: Task<Void, Never>?
 
     // MARK: - 设置页视觉 Token（改这里可全局影响样式）
     // 整个设置页外层背景。
@@ -450,14 +449,19 @@ struct SettingsView: View {
             refreshSettingsAppearanceSample()
             applySettingsWindowAppearance()
             viewModel.refreshPermissionStatusesNow()
+            restartSettingsClockIfNeeded()
+        }
+        .onDisappear {
+            stopSettingsClock()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard viewModel.settingsWindowVisible else { return }
             refreshSettingsAppearanceSample()
             applySettingsWindowAppearance()
             viewModel.refreshPermissionStatusesNow()
         }
-        .onReceive(settingsClock) { value in
-            settingsNow = value
+        .onChange(of: viewModel.settingsWindowVisible) { _, _ in
+            restartSettingsClockIfNeeded()
         }
         .onChange(of: viewModel.statusBarAppearanceMode) { _, _ in
             refreshSettingsAppearanceSample()
@@ -7856,8 +7860,8 @@ struct SettingsView: View {
             set: { relayCredentialModeInputs[provider.id] = $0 }
         )
         let contentLeading = thirdPartyConfigLabelWidth + thirdPartyConfigLabelSpacing
-        let persistRelaySettings: () -> Void = {
-            let draft = RelaySettingsDraft(
+        let currentRelayDraft: () -> RelaySettingsDraft = {
+            RelaySettingsDraft(
                 providerID: provider.id,
                 name: resolvedRelayNameInput(
                     typedName: providerNameInputs[provider.id] ?? provider.name,
@@ -7887,8 +7891,12 @@ struct SettingsView: View {
                     ?? provider.relayConfig?.quotaDisplayMode
                     ?? .remaining
             )
+        }
+        let persistRelaySettings: () -> Void = {
+            let draft = currentRelayDraft()
             viewModel.saveRelayDraft(draft)
         }
+        let supportsBrowserImport = relayTemplateSupportsBrowserImport(selectedTemplate)
 
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 8) {
@@ -8065,37 +8073,15 @@ struct SettingsView: View {
 
                 settingsCapsuleButton(viewModel.text(.testConnection)) {
                     Task {
-                        let draft = RelaySettingsDraft(
-                            providerID: provider.id,
-                            name: resolvedRelayNameInput(
-                                typedName: providerNameInputs[provider.id] ?? provider.name,
-                                manifest: selectedTemplate
-                            ),
-                            baseURL: resolvedRelayBaseURLInput(
-                                typedBaseURL: baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
-                                manifest: selectedTemplate
-                            ),
-                            preferredAdapterID: selectedTemplateID,
-                            balanceCredentialMode: relayCredentialModeInputs[provider.id]
-                                ?? provider.relayConfig?.balanceCredentialMode
-                                ?? .manualPreferred,
-                            tokenUsageEnabled: tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
-                            accountEnabled: accountEnabledInputs[provider.id] ?? accountChannelEnabled,
-                            authHeader: authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
-                            authScheme: authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
-                            userID: userIDInputs[provider.id] ?? defaultUserID,
-                            userIDHeader: userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
-                            endpointPath: endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
-                            remainingJSONPath: remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
-                            usedJSONPath: usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
-                            limitJSONPath: limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
-                            successJSONPath: successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-                            unit: unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota"),
-                            quotaDisplayMode: thirdPartyQuotaDisplayModeInputs[provider.id]
-                                ?? provider.relayConfig?.quotaDisplayMode
-                                ?? .remaining
-                        )
-                        relayTestResult[provider.id] = await viewModel.testRelayDraft(draft)
+                        relayTestResult[provider.id] = await viewModel.testRelayDraft(currentRelayDraft())
+                    }
+                }
+
+                if supportsBrowserImport {
+                    settingsCapsuleButton(viewModel.localizedText("从浏览器导入", "Import from Browser")) {
+                        Task {
+                            relayTestResult[provider.id] = await viewModel.importRelayDraftFromBrowser(currentRelayDraft())
+                        }
                     }
                 }
 
@@ -8108,7 +8094,7 @@ struct SettingsView: View {
             .padding(.leading, contentLeading)
 
             if let relayTestResult = relayTestResult[provider.id] {
-                relayDiagnosticSection(relayTestResult)
+                relayDiagnosticSection(provider, relayTestResult)
                     .padding(.leading, contentLeading)
             }
 
@@ -9021,6 +9007,37 @@ struct SettingsView: View {
         }
     }
 
+    private func relayTemplateSupportsBrowserImport(_ manifest: RelayAdapterManifest) -> Bool {
+        manifest.authStrategies.contains(where: { strategy in
+            switch strategy.kind {
+            case .browserBearer, .browserCookieHeader, .namedCookie:
+                return true
+            default:
+                return false
+            }
+        })
+    }
+
+    private func relayRecoveryStatusText(_ snapshot: UsageSnapshot?) -> String? {
+        guard let snapshot,
+              snapshot.rawMeta["relay.recovery.succeeded"] == "true",
+              let source = OfficialValueParser.nonPlaceholderString(snapshot.rawMeta["relay.recovery.source"]) else {
+            return nil
+        }
+
+        let timeSuffix: String
+        if let rawAt = OfficialValueParser.nonPlaceholderString(snapshot.rawMeta["relay.recovery.at"]),
+           let recoveredAt = OfficialValueParser.isoDate(rawAt) {
+            timeSuffix = settingsElapsedText(from: recoveredAt)
+        } else {
+            timeSuffix = viewModel.language == .zhHans ? "刚刚" : "just now"
+        }
+
+        return viewModel.language == .zhHans
+            ? "最近自动恢复：\(source)｜\(timeSuffix)"
+            : "Last auto recovery: \(source) | \(timeSuffix)"
+    }
+
     private func formattedSettingsAmount(_ value: Double) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -9038,7 +9055,9 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func relayDiagnosticSection(_ result: RelayDiagnosticResult) -> some View {
+    private func relayDiagnosticSection(_ provider: ProviderDescriptor, _ result: RelayDiagnosticResult) -> some View {
+        let snapshot = viewModel.snapshots[provider.id]
+        let recoveryText = relayRecoveryStatusText(snapshot)
         // “测试连接”结果卡片样式。
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -9057,6 +9076,12 @@ struct SettingsView: View {
 
             if let authSource = result.resolvedAuthSource, !authSource.isEmpty {
                 Text("\(viewModel.text(.authSourceLabel)): \(authSource)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let recoveryText, !recoveryText.isEmpty {
+                Text(recoveryText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -9105,6 +9130,7 @@ struct SettingsView: View {
         let sourceLine = viewModel.language == .zhHans
             ? "来源：\(sourceValue)｜\(freshnessText)"
             : "Source: \(sourceValue) | \(freshnessText)"
+        let recoveryLine = relayRecoveryStatusText(snapshot)
 
         if provider.relayDisplayMode == .quotaPercent {
             let metrics = relayQuotaMetricDisplays(provider: provider, snapshot: snapshot)
@@ -9176,6 +9202,13 @@ struct SettingsView: View {
                                 .lineLimit(1)
                         }
                         .frame(height: 10)
+
+                        if let recoveryLine, !recoveryLine.isEmpty {
+                            Text(recoveryLine)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(settingsHintColor)
+                                .lineLimit(1)
+                        }
                     }
                 }
             )
@@ -9251,6 +9284,13 @@ struct SettingsView: View {
                     .lineLimit(1)
             }
             .frame(height: 10)
+
+            if let recoveryLine, !recoveryLine.isEmpty {
+                Text(recoveryLine)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(settingsHintColor)
+                    .lineLimit(1)
+            }
         }
         .padding(12)
         .background(
@@ -9413,6 +9453,28 @@ struct SettingsView: View {
             if seconds < 86_400 { return "\(seconds / 3600)h ago" }
             return "\(seconds / 86_400)d ago"
         }
+    }
+
+    private func restartSettingsClockIfNeeded() {
+        stopSettingsClock()
+        guard viewModel.settingsWindowVisible else { return }
+        tickSettingsClock()
+        settingsClockTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(RuntimeDiagnosticsLimits.settingsClockIntervalSeconds))
+                guard !Task.isCancelled else { break }
+                tickSettingsClock()
+            }
+        }
+    }
+
+    private func stopSettingsClock() {
+        settingsClockTask?.cancel()
+        settingsClockTask = nil
+    }
+
+    private func tickSettingsClock(referenceDate: Date = Date()) {
+        settingsNow = referenceDate
     }
 
 }
