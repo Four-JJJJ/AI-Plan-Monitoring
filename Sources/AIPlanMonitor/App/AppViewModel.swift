@@ -1,4 +1,5 @@
 import AppKit
+import AIPlanMonitorApplication
 import Foundation
 import Observation
 import UserNotifications
@@ -76,9 +77,9 @@ final class AppViewModel {
     private var claudePrefetchAttemptedIdentity: [CodexSlotID: String] = [:]
     private var inactiveProfileBackgroundRefreshLastAttemptAt: [String: Date] = [:]
     private var codexInactiveRefreshCursor = 0
-    private var codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
+    private var codexInactiveRefreshRetryState = InactiveProfileRefreshRetryState<CodexSlotID>()
     private var claudeInactiveRefreshCursor = 0
-    private var claudeInactiveRefreshRetryState = InactiveProfileRefreshRetryState()
+    private var claudeInactiveRefreshRetryState = InactiveProfileRefreshRetryState<CodexSlotID>()
     private var didRunClaudeAutoCaptureCompaction = false
     private var consecutiveFailures: [String: Int] = [:]
     private var activeAlerts: Set<String> = []
@@ -220,10 +221,13 @@ final class AppViewModel {
     private func makeRefreshScheduler() -> ProviderRefreshScheduler {
         ProviderRefreshScheduler(
             descriptorProvider: { [weak self] providerID in
-                self?.descriptor(for: providerID)
+                guard let descriptor = self?.descriptor(for: providerID) else {
+                    return nil
+                }
+                return self?.refreshScheduleDescriptor(for: descriptor)
             },
             providersProvider: { [weak self] in
-                self?.config.providers ?? []
+                self?.refreshScheduleDescriptors(from: self?.config.providers ?? []) ?? []
             },
             activeProviderIDsProvider: { [weak self] in
                 Set(self?.statusBarProvidersForDisplay().map(\.id) ?? [])
@@ -231,10 +235,17 @@ final class AppViewModel {
             failureCountProvider: { [weak self] providerID in
                 self?.consecutiveFailures[providerID, default: 0] ?? 0
             },
-            refreshAction: { [weak self] descriptor, forceRefresh in
+            refreshAction: { [weak self] providerID, forceRefresh in
+                guard let descriptor = self?.descriptor(for: providerID) else { return }
                 await self?.refreshProvider(descriptor, forceRefresh: forceRefresh)
             },
-            localSessionRefreshCoordinator: localSessionRefreshCoordinator
+            localSessionRefreshCoordinator: localSessionRefreshCoordinator,
+            config: ProviderRefreshSchedulerConfig(
+                backgroundProviderPollIntervalMultiplier: RuntimeDiagnosticsLimits.backgroundProviderPollIntervalMultiplier,
+                backgroundProviderPollIntervalFloorSeconds: RuntimeDiagnosticsLimits.backgroundProviderPollIntervalFloorSeconds,
+                localSessionSignalActiveSleepSeconds: RuntimeDiagnosticsLimits.localSessionSignalActiveSleepSeconds,
+                localSessionSignalIdleSleepSeconds: RuntimeDiagnosticsLimits.localSessionSignalIdleSleepSeconds
+            )
         )
     }
 
@@ -247,11 +258,11 @@ final class AppViewModel {
     }
 
     func restartPolling() {
-        refreshScheduler?.restart(providers: config.providers)
+        refreshScheduler?.restart(providers: refreshScheduleDescriptors(from: config.providers))
     }
 
     func refreshNow() {
-        refreshScheduler?.refreshNow(providers: config.providers)
+        refreshScheduler?.refreshNow(providers: refreshScheduleDescriptors(from: config.providers))
     }
 
     func setMenuPanelVisible(_ visible: Bool) {
@@ -2713,6 +2724,33 @@ final class AppViewModel {
 
     private func descriptor(for id: String) -> ProviderDescriptor? {
         config.providers.first(where: { $0.id == id })
+    }
+
+    private func refreshScheduleDescriptors(from providers: [ProviderDescriptor]) -> [ProviderRefreshScheduleDescriptor] {
+        providers.map(refreshScheduleDescriptor(for:))
+    }
+
+    private func refreshScheduleDescriptor(for provider: ProviderDescriptor) -> ProviderRefreshScheduleDescriptor {
+        let localSessionWatchKind: LocalSessionWatchKind?
+        if provider.enabled && provider.family == .official {
+            switch provider.type {
+            case .codex:
+                localSessionWatchKind = .codex
+            case .claude:
+                localSessionWatchKind = .claude
+            default:
+                localSessionWatchKind = nil
+            }
+        } else {
+            localSessionWatchKind = nil
+        }
+
+        return ProviderRefreshScheduleDescriptor(
+            id: provider.id,
+            isEnabled: provider.enabled,
+            pollIntervalSec: provider.pollIntervalSec,
+            localSessionWatchKind: localSessionWatchKind
+        )
     }
 
     private func fetchProviderSnapshot(

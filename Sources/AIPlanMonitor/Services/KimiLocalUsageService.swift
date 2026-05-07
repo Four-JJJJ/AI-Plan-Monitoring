@@ -1,4 +1,5 @@
 import Foundation
+import AIPlanMonitorApplication
 
 final class KimiLocalUsageService {
     private let fileManager: FileManager

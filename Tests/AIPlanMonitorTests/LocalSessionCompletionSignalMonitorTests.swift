@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import AIPlanMonitorApplication
 @testable import AIPlanMonitor
 
 final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
@@ -131,17 +132,21 @@ final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
             nowProvider: { now }
         )
 
-        var codex = ProviderDescriptor.defaultOfficialCodex()
-        codex.enabled = true
+        let codex = ProviderRefreshScheduleDescriptor(
+            id: "codex-official",
+            isEnabled: true,
+            pollIntervalSec: 60,
+            localSessionWatchKind: .codex
+        )
 
-        XCTAssertEqual(coordinator.refreshCandidates(from: [codex]).map(\.id), ["codex-official"])
+        XCTAssertEqual(coordinator.refreshCandidates(from: [codex]), ["codex-official"])
 
         source.codexSignalAt = try fixedDate("2026-04-20T10:00:05Z")
         now = try fixedDate("2026-04-20T10:00:10Z")
         XCTAssertTrue(coordinator.refreshCandidates(from: [codex]).isEmpty)
 
         now = try fixedDate("2026-04-20T10:00:16Z")
-        XCTAssertEqual(coordinator.refreshCandidates(from: [codex]).map(\.id), ["codex-official"])
+        XCTAssertEqual(coordinator.refreshCandidates(from: [codex]), ["codex-official"])
     }
 
     func testClaudeSignalEnumerationIsThrottledByInterval() throws {

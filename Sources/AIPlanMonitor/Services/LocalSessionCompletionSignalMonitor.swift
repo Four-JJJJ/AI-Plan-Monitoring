@@ -1,10 +1,6 @@
 import Foundation
+import AIPlanMonitorApplication
 import SQLite3
-
-protocol LocalSessionCompletionSignalSource {
-    func latestCodexCompletionAt() -> Date?
-    func latestClaudeCompletionAt() -> Date?
-}
 
 final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSource {
     private struct ClaudeFileState {
@@ -354,64 +350,5 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
-final class LocalSessionRefreshCoordinator {
-    private let signalSource: LocalSessionCompletionSignalSource
-    private let minimumEventRefreshGap: TimeInterval
-    private let nowProvider: () -> Date
-    private var lastProcessedSignalAt: [String: Date] = [:]
-    private var lastTriggeredRefreshAt: [String: Date] = [:]
-
-    init(
-        signalSource: LocalSessionCompletionSignalSource,
-        minimumEventRefreshGap: TimeInterval = 15,
-        nowProvider: @escaping () -> Date = Date.init
-    ) {
-        self.signalSource = signalSource
-        self.minimumEventRefreshGap = max(1, minimumEventRefreshGap)
-        self.nowProvider = nowProvider
-    }
-
-    func refreshCandidates(from providers: [ProviderDescriptor]) -> [ProviderDescriptor] {
-        let now = nowProvider()
-        var output: [ProviderDescriptor] = []
-
-        for descriptor in providers {
-            guard descriptor.enabled,
-                  descriptor.family == .official,
-                  descriptor.type == .codex || descriptor.type == .claude else {
-                continue
-            }
-            guard let signalAt = latestSignal(for: descriptor) else {
-                continue
-            }
-            let lastProcessed = lastProcessedSignalAt[descriptor.id] ?? .distantPast
-            guard signalAt > lastProcessed else {
-                continue
-            }
-            if let lastTriggered = lastTriggeredRefreshAt[descriptor.id],
-               now.timeIntervalSince(lastTriggered) < minimumEventRefreshGap {
-                continue
-            }
-
-            lastProcessedSignalAt[descriptor.id] = signalAt
-            lastTriggeredRefreshAt[descriptor.id] = now
-            output.append(descriptor)
-        }
-
-        return output
-    }
-
-    private func latestSignal(for descriptor: ProviderDescriptor) -> Date? {
-        switch descriptor.type {
-        case .codex:
-            return signalSource.latestCodexCompletionAt()
-        case .claude:
-            return signalSource.latestClaudeCompletionAt()
-        case .gemini, .copilot, .microsoftCopilot, .zai, .amp, .cursor, .jetbrains, .kiro, .windsurf, .kimi, .trae, .openrouterCredits, .openrouterAPI, .ollamaCloud, .opencodeGo, .relay, .open, .dragon:
-            return nil
-        }
     }
 }

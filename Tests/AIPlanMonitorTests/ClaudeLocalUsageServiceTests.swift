@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import AIPlanMonitorApplication
 @testable import AIPlanMonitor
 
 final class ClaudeLocalUsageServiceTests: XCTestCase {

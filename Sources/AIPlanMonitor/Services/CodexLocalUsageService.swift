@@ -1,4 +1,5 @@
 import Foundation
+import AIPlanMonitorApplication
 import SQLite3
 
 enum CodexTrendScope: String, CaseIterable, Identifiable, Sendable {

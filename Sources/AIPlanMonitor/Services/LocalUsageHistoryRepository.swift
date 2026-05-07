@@ -1,4 +1,5 @@
 import Foundation
+import AIPlanMonitorApplication
 
 struct LocalUsageHistoryQuery: Codable, Equatable, Hashable, Sendable {
     var providerType: ProviderType

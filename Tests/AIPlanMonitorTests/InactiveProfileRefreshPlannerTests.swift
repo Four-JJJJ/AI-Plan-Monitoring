@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import AIPlanMonitorApplication
 @testable import AIPlanMonitor
 
 final class InactiveProfileRefreshPlannerTests: XCTestCase {
@@ -69,7 +70,7 @@ final class InactiveProfileRefreshPlannerTests: XCTestCase {
     }
 
     func testRetryBackoffBlocksSelectionAndSuccessRecovers() throws {
-        var retryState = InactiveProfileRefreshRetryState()
+        var retryState = InactiveProfileRefreshRetryState<CodexSlotID>()
         let slot = CodexSlotID.a
         let start = Date(timeIntervalSince1970: 3_000)
         retryState.markFailure(slotID: slot, baseInterval: 60, now: start)

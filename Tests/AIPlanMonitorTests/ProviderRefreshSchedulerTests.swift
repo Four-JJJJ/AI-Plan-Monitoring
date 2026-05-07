@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import AIPlanMonitor
+import AIPlanMonitorApplication
 
 @MainActor
 final class ProviderRefreshSchedulerTests: XCTestCase {
@@ -40,8 +40,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
     }
 
     func testPollLoopUsesFailureBackoff() async throws {
-        var provider = makeProvider(id: "poll", enabled: true)
-        provider.pollIntervalSec = 60
+        let provider = makeProvider(id: "poll", enabled: true, pollIntervalSec: 60)
         let recorder = RefreshRecorder()
         let sleepRecorder = SleepRecorder()
         let scheduler = makeScheduler(
@@ -66,10 +65,8 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
     }
 
     func testBackgroundProviderUsesStretchedPollInterval() async throws {
-        var foreground = makeProvider(id: "foreground", enabled: true)
-        foreground.pollIntervalSec = 60
-        var background = makeProvider(id: "background", enabled: true)
-        background.pollIntervalSec = 60
+        let foreground = makeProvider(id: "foreground", enabled: true, pollIntervalSec: 60)
+        let background = makeProvider(id: "background", enabled: true, pollIntervalSec: 60)
         let recorder = RefreshRecorder()
         let sleepRecorder = SleepRecorder()
         let scheduler = makeScheduler(
@@ -87,15 +84,18 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
 
         try await waitUntil {
             let sleeps = await sleepRecorder.snapshot()
-            return sleeps.contains(60)
-                && sleeps.contains(TimeInterval(RuntimeDiagnosticsLimits.backgroundProviderPollIntervalFloorSeconds))
+            return sleeps.contains(60) && sleeps.contains(180)
         }
         scheduler.stop()
     }
 
     func testLocalSessionSignalTriggersRefresh() async throws {
-        var provider = makeProvider(id: "codex-official", type: .codex, enabled: true)
-        provider.pollIntervalSec = 60
+        let provider = makeProvider(
+            id: "codex-official",
+            enabled: true,
+            pollIntervalSec: 60,
+            localSessionWatchKind: .codex
+        )
         let recorder = RefreshRecorder()
         let sleepRecorder = SleepRecorder()
         let signalSource = FakeLocalSessionSignalSource(codexCompletionAt: Date(timeIntervalSince1970: 100))
@@ -123,7 +123,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
     }
 
     private func makeScheduler(
-        providers: [ProviderDescriptor],
+        providers: [ProviderRefreshScheduleDescriptor],
         activeProviderIDs: Set<String> = [],
         failureCounts: [String: Int] = [:],
         refreshRecorder: RefreshRecorder = RefreshRecorder(),
@@ -147,10 +147,16 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
             failureCountProvider: { providerID in
                 failureCounts[providerID, default: 0]
             },
-            refreshAction: { descriptor, forceRefresh in
-                await refreshRecorder.record(descriptor: descriptor, forceRefresh: forceRefresh)
+            refreshAction: { providerID, forceRefresh in
+                await refreshRecorder.record(providerID: providerID, forceRefresh: forceRefresh)
             },
             localSessionRefreshCoordinator: localSessionRefreshCoordinator,
+            config: ProviderRefreshSchedulerConfig(
+                backgroundProviderPollIntervalMultiplier: 3,
+                backgroundProviderPollIntervalFloorSeconds: 180,
+                localSessionSignalActiveSleepSeconds: 15,
+                localSessionSignalIdleSleepSeconds: 60
+            ),
             startupJitterProvider: startupJitterProvider,
             sleepAction: sleepAction
         )
@@ -158,15 +164,16 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
 
     private func makeProvider(
         id: String,
-        type: ProviderType = .relay,
-        enabled: Bool
-    ) -> ProviderDescriptor {
-        var provider = ProviderDescriptor.makeOpenRelay(name: id, baseURL: "https://example.com")
-        provider.id = id
-        provider.type = type
-        provider.family = type == .relay ? .thirdParty : .official
-        provider.enabled = enabled
-        return provider
+        enabled: Bool,
+        pollIntervalSec: Int = 60,
+        localSessionWatchKind: LocalSessionWatchKind? = nil
+    ) -> ProviderRefreshScheduleDescriptor {
+        ProviderRefreshScheduleDescriptor(
+            id: id,
+            isEnabled: enabled,
+            pollIntervalSec: pollIntervalSec,
+            localSessionWatchKind: localSessionWatchKind
+        )
     }
 
     private func waitUntil(
@@ -187,8 +194,8 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
 private actor RefreshRecorder {
     private var events: [String] = []
 
-    func record(descriptor: ProviderDescriptor, forceRefresh: Bool) {
-        events.append("\(descriptor.id):\(forceRefresh)")
+    func record(providerID: String, forceRefresh: Bool) {
+        events.append("\(providerID):\(forceRefresh)")
     }
 
     func snapshot() -> [String] {

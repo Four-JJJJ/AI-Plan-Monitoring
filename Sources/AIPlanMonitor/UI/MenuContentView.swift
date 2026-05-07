@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import AIPlanMonitorApplication
 
 private struct MenuCardsContentHeightPreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = 0

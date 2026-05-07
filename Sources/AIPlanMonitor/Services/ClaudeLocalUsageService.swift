@@ -1,4 +1,5 @@
 import Foundation
+import AIPlanMonitorApplication
 
 final class ClaudeLocalUsageService {
     private let fileManager: FileManager

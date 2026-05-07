@@ -1,20 +1,27 @@
 import Foundation
 
-struct InactiveProfileRefreshSelection: Equatable {
-    var slotID: CodexSlotID
-    var nextCursor: Int
+package struct InactiveProfileRefreshSelection<SlotID: Hashable & Sendable>: Equatable, Sendable {
+    package var slotID: SlotID
+    package var nextCursor: Int
+
+    package init(slotID: SlotID, nextCursor: Int) {
+        self.slotID = slotID
+        self.nextCursor = nextCursor
+    }
 }
 
-struct InactiveProfileRefreshRetryState: Equatable {
-    private(set) var failureCounts: [CodexSlotID: Int] = [:]
-    private(set) var retryNotBefore: [CodexSlotID: Date] = [:]
+package struct InactiveProfileRefreshRetryState<SlotID: Hashable & Sendable>: Equatable, Sendable {
+    package private(set) var failureCounts: [SlotID: Int] = [:]
+    package private(set) var retryNotBefore: [SlotID: Date] = [:]
 
-    mutating func markSuccess(slotID: CodexSlotID) {
+    package init() {}
+
+    package mutating func markSuccess(slotID: SlotID) {
         failureCounts.removeValue(forKey: slotID)
         retryNotBefore.removeValue(forKey: slotID)
     }
 
-    mutating func markFailure(slotID: CodexSlotID, baseInterval: Int, now: Date) {
+    package mutating func markFailure(slotID: SlotID, baseInterval: Int, now: Date) {
         let nextFailures = failureCounts[slotID, default: 0] + 1
         failureCounts[slotID] = nextFailures
         retryNotBefore[slotID] = InactiveProfileRefreshPlanner.nextRetryAt(
@@ -24,19 +31,19 @@ struct InactiveProfileRefreshRetryState: Equatable {
         )
     }
 
-    mutating func remove(slotID: CodexSlotID) {
+    package mutating func remove(slotID: SlotID) {
         failureCounts.removeValue(forKey: slotID)
         retryNotBefore.removeValue(forKey: slotID)
     }
 
-    mutating func prune(keeping slotIDs: Set<CodexSlotID>) {
+    package mutating func prune(keeping slotIDs: Set<SlotID>) {
         failureCounts = failureCounts.filter { slotIDs.contains($0.key) }
         retryNotBefore = retryNotBefore.filter { slotIDs.contains($0.key) }
     }
 }
 
-enum InactiveProfileRefreshPlanner {
-    static func shouldAttemptProviderRefresh(
+package enum InactiveProfileRefreshPlanner {
+    package static func shouldAttemptProviderRefresh(
         lastAttemptAt: Date?,
         minimumInterval: TimeInterval,
         now: Date
@@ -45,14 +52,14 @@ enum InactiveProfileRefreshPlanner {
         return now.timeIntervalSince(lastAttemptAt) >= max(1, minimumInterval)
     }
 
-    static func selectNextSlot(
-        orderedSlotIDs: [CodexSlotID],
-        activeSlotIDs: Set<CodexSlotID>,
-        inFlightSlotIDs: Set<CodexSlotID>,
-        retryNotBefore: [CodexSlotID: Date],
+    package static func selectNextSlot<SlotID: Hashable & Sendable>(
+        orderedSlotIDs: [SlotID],
+        activeSlotIDs: Set<SlotID>,
+        inFlightSlotIDs: Set<SlotID>,
+        retryNotBefore: [SlotID: Date],
         cursor: Int,
         now: Date
-    ) -> InactiveProfileRefreshSelection? {
+    ) -> InactiveProfileRefreshSelection<SlotID>? {
         guard !orderedSlotIDs.isEmpty else { return nil }
         let count = orderedSlotIDs.count
         let normalizedCursor = ((cursor % count) + count) % count
@@ -77,7 +84,7 @@ enum InactiveProfileRefreshPlanner {
         return nil
     }
 
-    static func nextRetryAt(
+    package static func nextRetryAt(
         now: Date,
         baseInterval: Int,
         consecutiveFailures: Int

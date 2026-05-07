@@ -1,7 +1,7 @@
 import Foundation
 
-enum BackoffPolicy {
-    static func delaySeconds(baseInterval: Int, consecutiveFailures: Int) -> Int {
+package enum BackoffPolicy {
+    package static func delaySeconds(baseInterval: Int, consecutiveFailures: Int) -> Int {
         if consecutiveFailures <= 0 {
             return baseInterval
         }
