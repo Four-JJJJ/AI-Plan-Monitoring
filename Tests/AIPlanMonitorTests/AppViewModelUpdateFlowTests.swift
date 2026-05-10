@@ -128,6 +128,49 @@ final class AppViewModelUpdateFlowTests: XCTestCase {
         XCTAssertEqual(fetchCalls, 0)
     }
 
+    func testManualCheckShowsCheckingStateInSettingsWindow() async {
+        let service = SlowFailingAppUpdateService()
+        let viewModel = AppViewModel(
+            testingCurrentAppVersion: "1.0.0",
+            appUpdateService: service,
+            updateInstallBufferDelaySeconds: 0.10,
+            updateCheckStatusClearDelaySeconds: 0.08
+        )
+
+        viewModel.checkForAppUpdate(force: true)
+
+        if case .checking = viewModel.settingsUpdateDisplayState.kind {
+            XCTAssertEqual(
+                viewModel.settingsUpdateDisplayState.statusText,
+                viewModel.localizedText("正在检查更新", "Checking Updates")
+            )
+        } else {
+            XCTFail("manual update checks should surface checking state in settings")
+        }
+    }
+
+    func testCheckForUpdateExposesAvailableUpdateInSettingsDisplayState() async {
+        let service = StubAppUpdateService()
+        await service.enqueueFetch(.success(makeUpdate(version: "2.0.0")))
+
+        let viewModel = AppViewModel(
+            testingCurrentAppVersion: "1.0.0",
+            appUpdateService: service,
+            updateInstallBufferDelaySeconds: 0.10
+        )
+
+        viewModel.checkForAppUpdate(force: true)
+
+        await assertEventually("settings should expose available update") {
+            if case let .updateAvailable(version) = viewModel.settingsUpdateDisplayState.kind {
+                return version == "2.0.0"
+                    && viewModel.settingsUpdateDisplayState.statusText == viewModel.localizedText("新版本 2.0.0", "New 2.0.0")
+                    && viewModel.settingsUpdateDisplayState.isRetryEnabled
+            }
+            return false
+        }
+    }
+
     func testCheckForUpdateShowsUpToDateWhenNoNewVersion() async {
         let service = StubAppUpdateService()
         await service.enqueueFetch(.success(makeUpdate(version: "1.0.0")))
@@ -291,6 +334,21 @@ private actor StubAppUpdateService: AppUpdateServicing {
         installCalls += 1
         guard !installResults.isEmpty else { return }
         try installResults.removeFirst().get()
+    }
+}
+
+private actor SlowFailingAppUpdateService: AppUpdateServicing {
+    func fetchLatestRelease() async throws -> AppUpdateInfo {
+        try await Task.sleep(nanoseconds: 100_000_000)
+        throw StubUpdateError.fetchFailed
+    }
+
+    func prepareUpdate(_ update: AppUpdateInfo) async throws -> PreparedAppUpdate {
+        throw StubUpdateError.unconfiguredPrepare
+    }
+
+    func installPreparedUpdate(_ prepared: PreparedAppUpdate, over currentAppURL: URL) throws {
+        throw StubUpdateError.installFailed
     }
 }
 
