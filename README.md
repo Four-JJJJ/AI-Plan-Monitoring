@@ -1,5 +1,7 @@
 # oh-myusage
 
+<img width="2140" height="1470" alt="image" src="https://github.com/user-attachments/assets/a1804d4f-1c91-41d3-9c64-fab73a83cf44" />
+
 面向 macOS 菜单栏的 AI 订阅、额度与账号状态控制台。
 
 oh-myusage 把官方订阅额度、模型使用窗口、第三方中转余额、本地桌面端账号状态和异常诊断统一放到菜单栏里。它不是单一网页余额的封装，而是一个常驻运行、低打扰、可扩展的 AI 用量工作台。
