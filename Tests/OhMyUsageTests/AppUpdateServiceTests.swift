@@ -11,9 +11,14 @@ final class AppUpdateServiceTests: XCTestCase {
     func testMetadataURLUsesLatestJsonReleaseAttachment() {
         XCTAssertEqual(AppUpdateService.owner, "Four-JJJJ")
         XCTAssertEqual(AppUpdateService.repository, "oh-myusage")
+        XCTAssertEqual(AppUpdateService.legacyRepository, "AI-Plan-Monitor")
         XCTAssertEqual(
             AppUpdateService.metadataURL.absoluteString,
             "https://github.com/Four-JJJJ/oh-myusage/releases/latest/download/latest.json"
+        )
+        XCTAssertEqual(
+            AppUpdateService.legacyMetadataURL.absoluteString,
+            "https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest/download/latest.json"
         )
     }
 
@@ -75,6 +80,61 @@ final class AppUpdateServiceTests: XCTestCase {
         XCTAssertEqual(update.dmgAsset?.sha256, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         XCTAssertEqual(update.dmgAsset?.size, 654321)
         XCTAssertEqual(update.downloadURL, zipURL)
+    }
+
+    func testFetchLatestReleaseFallsBackToLegacyMetadataURLAfterPrimaryNetworkFailure() async throws {
+        let zipURL = URL(string: "https://github.com/Four-JJJJ/oh-myusage/releases/download/v2.0.0/oh-myusage-macOS.zip")!
+        let manifest = Data(
+            """
+            {
+              "version": "2.0.0",
+              "pub_date": "2026-05-09T12:34:56Z",
+              "release_url": "https://github.com/Four-JJJJ/oh-myusage/releases/tag/v2.0.0",
+              "assets": {
+                "macos_zip": {
+                  "url": "\(zipURL.absoluteString)"
+                }
+              }
+            }
+            """.utf8
+        )
+        var requestedURLs: [URL] = []
+        let session = makeMockSession { request in
+            requestedURLs.append(try XCTUnwrap(request.url))
+
+            if request.url == AppUpdateService.metadataURL {
+                return (
+                    HTTPURLResponse(
+                        url: AppUpdateService.metadataURL,
+                        statusCode: 503,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!,
+                    Data()
+                )
+            }
+
+            XCTAssertEqual(request.url, AppUpdateService.legacyMetadataURL)
+            return (
+                HTTPURLResponse(
+                    url: AppUpdateService.legacyMetadataURL,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                manifest
+            )
+        }
+        let service = AppUpdateService(
+            session: session,
+            latestMetadataURLs: [AppUpdateService.metadataURL, AppUpdateService.legacyMetadataURL]
+        )
+
+        let update = try await service.fetchLatestRelease()
+
+        XCTAssertEqual(update.latestVersion, "2.0.0")
+        XCTAssertEqual(update.zipAsset?.url, zipURL)
+        XCTAssertEqual(requestedURLs, [AppUpdateService.metadataURL, AppUpdateService.legacyMetadataURL])
     }
 
     func testFetchLatestReleaseRejectsInvalidMetadata() async throws {

@@ -59,10 +59,13 @@ enum AppUpdateError: LocalizedError {
 actor AppUpdateService {
     static let owner = "Four-JJJJ"
     static let repository = "oh-myusage"
+    static let legacyRepository = "AI-Plan-Monitor"
     static let repositoryURL = URL(string: "https://github.com/\(owner)/\(repository)")!
     static let releasesURL = URL(string: "https://github.com/\(owner)/\(repository)/releases/latest")!
     static let metadataURL = URL(string: "https://github.com/\(owner)/\(repository)/releases/latest/download/latest.json")!
+    static let legacyMetadataURL = URL(string: "https://github.com/\(owner)/\(legacyRepository)/releases/latest/download/latest.json")!
     static let apiBaseURL = URL(string: "https://api.github.com/repos/\(owner)/\(repository)")!
+    static let defaultMetadataURLs = [metadataURL, legacyMetadataURL]
 
     private struct ReleaseManifest: Decodable {
         var version: String
@@ -101,21 +104,40 @@ actor AppUpdateService {
     }
 
     private let session: URLSession
-    private let latestMetadataURL: URL
+    private let latestMetadataURLs: [URL]
     private let fileManager: FileManager
 
     init(
         session: URLSession = .shared,
-        latestMetadataURL: URL = metadataURL,
+        latestMetadataURLs: [URL] = defaultMetadataURLs,
         fileManager: FileManager = .default
     ) {
         self.session = session
-        self.latestMetadataURL = latestMetadataURL
+        self.latestMetadataURLs = latestMetadataURLs
         self.fileManager = fileManager
     }
 
     func fetchLatestRelease() async throws -> AppUpdateInfo {
-        var request = URLRequest(url: latestMetadataURL)
+        var lastFallbackError: Error?
+        let candidates = latestMetadataURLs.isEmpty ? Self.defaultMetadataURLs : latestMetadataURLs
+
+        for (index, metadataURL) in candidates.enumerated() {
+            do {
+                return try await fetchLatestRelease(from: metadataURL)
+            } catch {
+                let isLastCandidate = index == candidates.count - 1
+                guard !isLastCandidate, Self.shouldTryNextMetadataURL(after: error) else {
+                    throw error
+                }
+                lastFallbackError = error
+            }
+        }
+
+        throw lastFallbackError ?? URLError(.badURL)
+    }
+
+    private func fetchLatestRelease(from metadataURL: URL) async throws -> AppUpdateInfo {
+        var request = URLRequest(url: metadataURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -142,6 +164,10 @@ actor AppUpdateService {
             zipAsset: manifest.assets.macOSZip.map { AppUpdateAsset(url: $0.url, sha256: $0.sha256, size: $0.size) },
             dmgAsset: manifest.assets.macOSDMG.map { AppUpdateAsset(url: $0.url, sha256: $0.sha256, size: $0.size) }
         )
+    }
+
+    private static func shouldTryNextMetadataURL(after error: Error) -> Bool {
+        error is URLError || (error as NSError).domain == NSURLErrorDomain
     }
 
     func fetchReleaseNotesBody(forVersion version: String) async throws -> String {

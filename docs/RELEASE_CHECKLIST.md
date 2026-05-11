@@ -12,7 +12,7 @@ This checklist is the pre-push and release gate for `oh-myusage`. It should be c
 ## 2. Update Source And Repository
 
 - Confirm the canonical repository is `Four-JJJJ/oh-myusage`.
-- Confirm update detection points at `https://github.com/Four-JJJJ/oh-myusage/releases/latest/download/latest.json` through [AppUpdateService.swift](../Sources/OhMyUsage/Services/AppUpdateService.swift).
+- Confirm update detection points at `https://github.com/Four-JJJJ/oh-myusage/releases/latest/download/latest.json` through [AppUpdateService.swift](../Sources/OhMyUsage/Services/AppUpdateService.swift), with the legacy `AI-Plan-Monitor` endpoint kept as a compatibility fallback for 1.x clients.
 - If the old repository or old release URL remains public, add a redirect notice there before announcing the release.
 - If update metadata was ever hosted elsewhere, verify that source now redirects users to the GitHub Release for `oh-myusage`.
 
@@ -60,7 +60,7 @@ This checklist is the pre-push and release gate for `oh-myusage`. It should be c
 ## 7. Post-Release Verification
 
 - Open `https://github.com/Four-JJJJ/oh-myusage/releases/latest` and confirm it resolves to the expected tag.
-- Download `latest.json` from the latest release and verify both asset URLs return `200`.
+- Download `latest.json` from the current and legacy latest-release endpoints, then verify both asset URLs return `200`.
 - Download the DMG from the latest release, install it into `Applications`, and launch it on macOS 14 or newer.
 - In the app, verify the update screen sees the current version as latest and links back to the same release.
 - Verify at least one official provider and one relay provider still render expected menu states from existing saved config or test credentials.
