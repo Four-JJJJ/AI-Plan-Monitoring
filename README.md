@@ -99,16 +99,9 @@ oh-myusage 的目标是让这些信息变得可扫读、可诊断、可维护：
 
 | 模板 | 凭证方式 |
 | --- | --- |
-| `open.ailinyu.de` | Cookie |
-| `platform.moonshot.cn` | Bearer 或 Cookie |
-| `platform.xiaomimimo.com` | Cookie |
-| `platform.minimaxi.com` | Cookie |
-| `hongmacc.com` | Bearer |
-| `platform.deepseek.com` | Bearer |
-| `dragoncode.codes` | Relay Token |
 | Generic New API | Bearer 或 Cookie |
 
-第三方站点的认证方式和响应结构变化频率较高。内置模板能降低接入成本，但站点改版后仍可能需要更新模板或调整字段规则。
+支持通用的NewAPI站点模板获取信息
 
 ## 快速开始
 
