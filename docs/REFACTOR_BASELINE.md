@@ -1,4 +1,4 @@
-# AIPlanMonitor Refactor Baseline
+# OhMyUsage Refactor Baseline
 
 更新时间：2026-05-07
 
@@ -6,23 +6,23 @@
 
 ## Workspace 基线
 
-- 工作目录：`/Users/homelab/Desktop/Vibe Coding/oh-myusage`
+- 工作目录：`oh-myusage/`
 - Git 分支：`oh-myusage`
 - 基线提交：`5d4d1b6 docs: add refactor plan`
-- 旧目录保留：`/Users/homelab/Desktop/Vibe Coding/AI余额监控`
+- 旧目录保留：`AI余额监控/`
 
 ## 当前工程护栏
 
 - 新增常规 CI：`.github/workflows/ci.yml`
 - 现有发布流程保留：`.github/workflows/release.yml`
 - 当前仍以单一可执行 target 承载旧实现，但已补出新的目标架构骨架：
-  - `AIPlanMonitorDomain`
-  - `AIPlanMonitorInfrastructure`
-  - `AIPlanMonitorProviders`
-  - `AIPlanMonitorApplication`
-  - `AIPlanMonitorPresentation`
-  - `AIPlanMonitorFeatures`
-  - `AIPlanMonitorBootstrap`
+  - `OhMyUsageDomain`
+  - `OhMyUsageInfrastructure`
+  - `OhMyUsageProviders`
+  - `OhMyUsageApplication`
+  - `OhMyUsagePresentation`
+  - `OhMyUsageFeatures`
+  - `OhMyUsageBootstrap`
 
 ## 已验证命令
 
@@ -39,10 +39,10 @@
 ## 当前可确认的系统事实
 
 - 当前代码仍主要集中在：
-  - `Sources/AIPlanMonitor/App`
-  - `Sources/AIPlanMonitor/Providers`
-  - `Sources/AIPlanMonitor/Services`
-  - `Sources/AIPlanMonitor/UI`
+  - `Sources/OhMyUsage/App`
+  - `Sources/OhMyUsage/Providers`
+  - `Sources/OhMyUsage/Services`
+  - `Sources/OhMyUsage/UI`
 - `AppViewModel.swift` 和 `SettingsView.swift` 仍是主要复杂度中心
 - 仓库当前已有发布 workflow，但在本次修改前没有常规 push/PR CI
 

@@ -1,4 +1,4 @@
-# AIPlanMonitor 重构方案
+# OhMyUsage 重构方案
 
 更新时间：2026-05-07
 
@@ -48,7 +48,7 @@
 
 ## 2.1 架构层
 
-- `Sources/AIPlanMonitor/App/AppViewModel.swift` 超过 4000 行，同时承担：
+- `Sources/OhMyUsage/App/AppViewModel.swift` 超过 4000 行，同时承担：
   - 配置读写
   - Provider 刷新
   - 告警
@@ -57,7 +57,7 @@
   - Codex/Claude 账号管理与切换
   - 设置页行为
   - UI 可见状态
-- `Sources/AIPlanMonitor/UI/SettingsView.swift` 接近 10000 行，存在大量 `@State`、`onChange`、`alert`、`sheet`、业务规则和 UI 混排
+- `Sources/OhMyUsage/UI/SettingsView.swift` 接近 10000 行，存在大量 `@State`、`onChange`、`alert`、`sheet`、业务规则和 UI 混排
 - 当前 `UI/Settings/*.swift` 多数只是空包装视图，没有形成真正的 feature 分层
 - `ProviderFactory`、`AppViewModel`、`StatusBarController`、`MenuContentView`、`SettingsView` 都在持有或推导 Provider 相关元信息
 
@@ -167,23 +167,23 @@
 推荐在保持最终 executable product 不变的前提下，拆成以下 target：
 
 ```text
-AIPlanMonitorApp                 executable
-├── AIPlanMonitorBootstrap       app lifecycle / window controllers / shell wiring
-├── AIPlanMonitorFeatures        menu bar + settings feature entry points
-├── AIPlanMonitorPresentation    presenters / display models / formatters
-├── AIPlanMonitorApplication     coordinators / use cases / schedulers
-├── AIPlanMonitorProviders       provider runtime + provider implementations
-├── AIPlanMonitorInfrastructure  config/keychain/fs/http/browser/process/update
-└── AIPlanMonitorDomain          core models / policies / pure logic
+OhMyUsageApp                 executable
+├── OhMyUsageBootstrap       app lifecycle / window controllers / shell wiring
+├── OhMyUsageFeatures        menu bar + settings feature entry points
+├── OhMyUsagePresentation    presenters / display models / formatters
+├── OhMyUsageApplication     coordinators / use cases / schedulers
+├── OhMyUsageProviders       provider runtime + provider implementations
+├── OhMyUsageInfrastructure  config/keychain/fs/http/browser/process/update
+└── OhMyUsageDomain          core models / policies / pure logic
 ```
 
-如果想进一步细分，可以在第二阶段再把 `AIPlanMonitorProviders` 拆为：
+如果想进一步细分，可以在第二阶段再把 `OhMyUsageProviders` 拆为：
 
 ```text
-AIPlanMonitorProvidersCore
-AIPlanMonitorProvidersOfficial
-AIPlanMonitorProvidersRelay
-AIPlanMonitorProvidersLocal
+OhMyUsageProvidersCore
+OhMyUsageProvidersOfficial
+OhMyUsageProvidersRelay
+OhMyUsageProvidersLocal
 ```
 
 第一轮不建议过度切 target，6-7 个目标足够。
@@ -191,18 +191,18 @@ AIPlanMonitorProvidersLocal
 ## 4.3 推荐目录结构
 
 ```text
-Sources/AIPlanMonitorApp/
-Sources/AIPlanMonitorBootstrap/
-Sources/AIPlanMonitorFeatures/
+Sources/OhMyUsageApp/
+Sources/OhMyUsageBootstrap/
+Sources/OhMyUsageFeatures/
   MenuBar/
   Settings/
   Shared/
-Sources/AIPlanMonitorPresentation/
+Sources/OhMyUsagePresentation/
   StatusBar/
   Menu/
   Settings/
   Localization/
-Sources/AIPlanMonitorApplication/
+Sources/OhMyUsageApplication/
   AppSession/
   Providers/
   Accounts/
@@ -210,12 +210,12 @@ Sources/AIPlanMonitorApplication/
   Alerts/
   Updates/
   Permissions/
-Sources/AIPlanMonitorProviders/
+Sources/OhMyUsageProviders/
   Core/
   Official/
   Relay/
   Local/
-Sources/AIPlanMonitorInfrastructure/
+Sources/OhMyUsageInfrastructure/
   Config/
   Storage/
   Security/
@@ -223,7 +223,7 @@ Sources/AIPlanMonitorInfrastructure/
   HTTP/
   Process/
   Filesystem/
-Sources/AIPlanMonitorDomain/
+Sources/OhMyUsageDomain/
   Provider/
   Usage/
   Account/
@@ -667,6 +667,7 @@ Application/History/
 - `RuntimeGuards.swift` 里的单实例和激活桥接属于 bootstrap
 - `SettingsWindowController` / `ReleaseNotesWindowController` 属于 app shell
 - `AppUpdateService` 继续做 infrastructure service，不直接暴露给 UI
+- 更新检查必须保持现有 Release 附件 `latest.json` 流程：应用请求 `/releases/latest/download/latest.json`，发布 workflow 生成并上传同名 manifest；重构只允许移动职责边界，不改变 manifest schema 或更新来源
 
 ## 6.9 本地化与设计 Token
 
@@ -1074,4 +1075,4 @@ Application/History/
 - 官方 Provider 重复基础设施
 - `RelayProvider` 巨型主流程
 
-只要这四个点拆开，后续无论是继续做菜单栏优化、浏览器桥接、NewAPI 账本、资源模式还是多账号体验，都能在更低风险下推进。
+只要这四个点拆开，后续无论是继续做菜单栏优化、浏览器桥接、NewAPI 账本、后台刷新还是多账号体验，都能在更低风险下推进。

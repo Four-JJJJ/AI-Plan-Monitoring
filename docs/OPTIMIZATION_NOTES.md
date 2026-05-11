@@ -1,4 +1,4 @@
-# AIPlanMonitor 优化方向备忘录
+# OhMyUsage 优化方向备忘录
 
 更新时间：2026-05-05
 
@@ -146,7 +146,7 @@
 优化方向：
 
 - 新增 app 级 `LocalUsageHistoryRepository`，不要把历史用量缓存放在 `SettingsView`。
-- 增加磁盘缓存，例如 `Application Support/AIPlanMonitor/local_usage_history_cache.json`。
+- 增加磁盘缓存，例如 `Application Support/OhMyUsage/local_usage_history_cache.json`。
 - 缓存 key 包含 provider、scope、account identity，避免全量和按账号互相污染。
 - 使用 source fingerprint 判断日志是否变化：来源路径、文件数量、总大小、最新修改时间。
 - fingerprint 未变化时直接复用缓存，避免 JSONL 全量重扫。
@@ -183,6 +183,15 @@
 - 本地文件扫描改为文件变化触发 + debounce。
 - 所有缓存都要有 TTL、容量上限和裁剪策略。
 
+当前收口：
+
+- 已补最小展示层 smoke suite：
+  - [PresentationSmokeTests.swift](../Tests/OhMyUsageTests/PresentationSmokeTests.swift)
+- 已补设置页生命周期相关单测：
+  - [SettingsWindowAppearanceControllerTests.swift](../Tests/OhMyUsageTests/SettingsWindowAppearanceControllerTests.swift)
+  - [SettingsClockControllerTests.swift](../Tests/OhMyUsageTests/SettingsClockControllerTests.swift)
+- smoke 覆盖目标是“代表性展示组合不崩、不重复调度、关键文案和输入模型可生成”，不是硬 wall-clock 性能阈值。
+
 ## 建议优先级
 
 P0：先解决能直接影响体验的问题：
@@ -204,7 +213,7 @@ P2：长期扩展能力：
 - 浏览器扩展桥接。
 - 第三方站点 adapter 系统。
 - 额度账本和重置时间线。
-- `ResourceMode` 设置项和资源诊断面板。
+- 后台刷新设置项和运行概览面板。
 
 ## 验收标准
 

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="AI Plan Monitor"
-EXECUTABLE_NAME="AIPlanMonitor"
-BUNDLE_ID="com.aiplanmonitor.app"
+APP_NAME="oh-myusage"
+EXECUTABLE_NAME="OhMyUsage"
+BUNDLE_ID="com.oh-myusage.app"
 DIST_DIR="$ROOT_DIR/dist"
 TMP_ROOT="$(mktemp -d /tmp/aibm_pkg.XXXXXX)"
 APP_DIR="$TMP_ROOT/$APP_NAME.app"
@@ -14,13 +14,13 @@ RES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 DMG_STAGING="$TMP_ROOT/dmg-root"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
-ZIP_NAME="AI-Plan-Monitor-macOS.zip"
+ZIP_NAME="oh-myusage-macOS.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 RW_DMG_PATH="$TMP_ROOT/$APP_NAME-rw.dmg"
 MOUNT_POINT="$TMP_ROOT/mount"
 APP_ZIP_PATH="$TMP_ROOT/$APP_NAME.zip"
 INSTALL_GUIDE_NAME="安装说明（请先看这里）.txt"
-ICON_SOURCE_PATH="$ROOT_DIR/Sources/AIPlanMonitor/Resources/app_icon_source.png"
+ICON_SOURCE_PATH="$ROOT_DIR/Sources/OhMyUsage/Resources/app_icon_source.png"
 ICONSET_DIR="$TMP_ROOT/AppIcon.iconset"
 ICNS_PATH="$TMP_ROOT/AppIcon.icns"
 INSTALL_GUIDE_PATH="$DMG_STAGING/$INSTALL_GUIDE_NAME"
@@ -60,6 +60,31 @@ have_cmd() {
 
 require_cmd() {
   have_cmd "$1" || die "missing required command: $1"
+}
+
+clean_previous_artifacts() {
+  mkdir -p "$DIST_DIR"
+  log "Cleaning previous package artifacts"
+
+  local artifact
+  while IFS= read -r -d '' artifact; do
+    log "Removing previous artifact: ${artifact#$ROOT_DIR/}"
+    rm -rf "$artifact"
+  done < <(
+    find "$DIST_DIR" -maxdepth 1 \( \
+      -name "$APP_NAME.app" -o \
+      -name "$APP_NAME.dmg" -o \
+      -name "$APP_NAME [0-9]*.dmg" -o \
+      -name "$ZIP_NAME" -o \
+      -name "${ZIP_NAME%.zip} [0-9]*.zip" -o \
+      -name "AI Plan Monitor.app" -o \
+      -name "AI Plan Monitor.dmg" -o \
+      -name "AI Plan Monitor [0-9]*.dmg" -o \
+      -name "AI-Plan-Monitor-macOS.zip" -o \
+      -name "AI-Plan-Monitor-macOS [0-9]*.zip" -o \
+      -name "dmg-root" \
+    \) -print0
+  )
 }
 
 has_notary_profile() {
@@ -290,6 +315,9 @@ end tell
 EOF
 }
 
+# Remove old distributables first so a failed package run cannot leave stale output.
+clean_previous_artifacts
+
 # Always build fresh release before packaging to avoid stale DMG content.
 log "Building universal release binary..."
 swift build -c release --arch arm64 --arch x86_64
@@ -302,8 +330,6 @@ fi
 
 PRODUCTS_DIR="$(build_products_dir "$BIN_PATH")"
 
-mkdir -p "$DIST_DIR"
-rm -rf "$DIST_DIR/$APP_NAME.app" "$DIST_DIR/dmg-root" "$DMG_PATH" "$ZIP_PATH"
 mkdir -p "$MACOS_DIR" "$RES_DIR" "$FRAMEWORKS_DIR" "$DMG_STAGING"
 
 cp "$BIN_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
@@ -323,7 +349,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key>
   <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
-  <string>AIPlanMonitor</string>
+  <string>OhMyUsage</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIconName</key>

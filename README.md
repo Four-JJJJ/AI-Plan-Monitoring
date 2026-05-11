@@ -1,16 +1,25 @@
-# AI Plan Monitor
+# oh-myusage
 
 一个面向 macOS 的菜单栏应用，用来把 AI 官方订阅额度、模型使用窗口、第三方中转余额，以及本地桌面端账号状态统一收进一个地方。
 
-[下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
+[下载最新版本](https://github.com/Four-JJJJ/oh-myusage/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [发布清单](docs/RELEASE_CHECKLIST.md) · [English](docs/README.en.md)
 
 ## 最新更新
 
-### V1.8.6
+### V2.0
 
-1. Claude 设置页里“菜单栏展示账号”和用量显示的联动逻辑做了对齐，状态栏、菜单卡片和设置选择现在会统一跟随同一套已选监控账号。
-2. Windsurf、Cursor、Kiro 这类 IDE 的 `state.vscdb` 改成先复制快照再读取，避免直接碰运行中的活动数据库，同时把 Windsurf 之前会误报成 `Missing credential` 的读库失败改成真实错误。
-3. 小米 mi'mo `Token Plan` 的百分比计算补上 `used/limit` 推导、分数百分比兼容和正额度项回退，套餐卡显示与相关回归测试一起加强。
+这次更新重点不是增加一堆新按钮，而是把 oh-myusage 从“AI 余额读取工具”升级成更稳定、更省电、更容易扩展的 AI 订阅与额度控制台。
+
+相比 `v1.8.6`，V2.0 主要更新：
+
+1. 底层架构做了拆分，原来集中在大文件里的刷新、配置、账号、展示逻辑被逐步拆开，后续新增服务或调整页面会更稳。
+2. 刷新机制更聪明：当前正在看的服务会优先刷新，后台服务会降低无意义轮询，连续失败时会自动拉长重试间隔，减少常驻运行的耗电和打扰。
+3. 本地历史用量加入缓存，打开设置页时可以先显示已有结果，避免每次都重新扫描 Codex、Claude、Kimi 的本地记录。
+4. 配置加载更可靠，新增备份、恢复和 last-known-good 兜底，同时兼容老版本配置导入，降低覆盖安装或配置异常时丢设置的风险。
+5. Codex / Claude 账号切换改成更明确的流程，按准备、写入、重启或应用、校验、完成来处理，减少切换后界面状态和实际账号不同步的问题。
+6. 设置页和菜单栏的显示规则进一步统一，额度、倒计时、异常状态和 Provider 图标名称由更集中的展示逻辑处理，后续 UI 调整更安全。
+
+当前版本已通过 `swift test` 验证，664 个测试全绿。
 
 ## 它解决什么问题
 
@@ -20,7 +29,7 @@
 - 第三方中转站经常需要自己处理 Cookie、Bearer、用户 ID、GroupId 或组织上下文
 - 本地桌面端工具的使用状态，很多时候又不在公开网页里
 
-AI Plan Monitor 的目标很直接：
+oh-myusage 的目标很直接：
 
 - 在菜单栏里快速知道哪些额度快用完了
 - 明确看到会话、5 小时、周、月等窗口何时重置
@@ -131,9 +140,9 @@ AI Plan Monitor 的目标很直接：
 
 ### 下载安装
 
-1. 从 [Latest Release](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) 下载最新的 `AI Plan Monitor.dmg`
+1. 从 [Latest Release](https://github.com/Four-JJJJ/oh-myusage/releases/latest) 下载最新的 `oh-myusage.dmg`
 2. 打开 DMG
-3. 将 `AI Plan Monitor.app` 拖入 `Applications`
+3. 将 `oh-myusage.app` 拖入 `Applications`
 4. 第一次启动时，如果被系统拦截，右键应用并选择“打开”
 5. 如果仍被拦截，到“系统设置 -> 隐私与安全性”里选择“仍要打开”
 
@@ -147,8 +156,8 @@ AI Plan Monitor 的目标很直接：
 ## 数据与安全
 
 - 应用中手动保存的凭证默认存放在 macOS Keychain
-- 历史 `AIPlanMonitor` 钥匙串条目会迁移到新的 `AI Plan Monitor`
-- 应用配置保存在 `~/Library/Application Support/AIPlanMonitor`
+- 历史 `OhMyUsage` 钥匙串条目会迁移到新的 `oh-myusage`
+- 应用配置保存在 `~/Library/Application Support/OhMyUsage`
 - 对于支持的中转站，应用可在浏览器优先模式下把浏览器登录态作为兜底来源
 
 说明：
@@ -185,13 +194,13 @@ swift test
 
 打包产物默认输出到：
 
-- `dist/AI Plan Monitor.dmg`
-- `dist/AI-Plan-Monitor-macOS.zip`
+- `dist/oh-myusage.dmg`
+- `dist/oh-myusage-macOS.zip`
 
 ## 项目结构
 
 ```text
-Sources/AIPlanMonitor
+Sources/OhMyUsage
 ├── App        # 应用生命周期、状态栏、窗口与更新流程
 ├── Models     # Provider、配置与共享数据模型
 ├── Providers  # 各服务的接入实现
@@ -199,7 +208,7 @@ Sources/AIPlanMonitor
 ├── UI         # SwiftUI 设置页与菜单内容
 └── Resources  # 图标、模板与内置资源
 
-Tests/AIPlanMonitorTests
+Tests/OhMyUsageTests
 docs/
 scripts/
 ```
@@ -208,6 +217,7 @@ scripts/
 
 - [安装说明](docs/DOWNLOAD.md)
 - [支持的服务](docs/PROVIDERS.md)
+- [发布清单](docs/RELEASE_CHECKLIST.md)
 - [English README](docs/README.en.md)
 
 ## 分发说明

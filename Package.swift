@@ -3,76 +3,76 @@
 import PackageDescription
 
 let package = Package(
-    name: "AIPlanMonitor",
+    name: "OhMyUsage",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "AIPlanMonitor",
-            targets: ["AIPlanMonitor"]
+            name: "OhMyUsage",
+            targets: ["OhMyUsage"]
         )
     ],
     targets: [
         .target(
-            name: "AIPlanMonitorDomain"
+            name: "OhMyUsageDomain"
         ),
         .target(
-            name: "AIPlanMonitorInfrastructure",
-            dependencies: ["AIPlanMonitorDomain"]
+            name: "OhMyUsageInfrastructure",
+            dependencies: ["OhMyUsageDomain"]
         ),
         .target(
-            name: "AIPlanMonitorProviders",
+            name: "OhMyUsageProviders",
             dependencies: [
-                "AIPlanMonitorDomain",
-                "AIPlanMonitorInfrastructure"
+                "OhMyUsageDomain",
+                "OhMyUsageInfrastructure"
             ]
         ),
         .target(
-            name: "AIPlanMonitorApplication",
+            name: "OhMyUsageApplication",
             dependencies: [
-                "AIPlanMonitorDomain",
-                "AIPlanMonitorInfrastructure",
-                "AIPlanMonitorProviders"
+                "OhMyUsageDomain",
+                "OhMyUsageInfrastructure",
+                "OhMyUsageProviders"
             ]
         ),
         .target(
-            name: "AIPlanMonitorPresentation",
-            dependencies: ["AIPlanMonitorDomain"]
+            name: "OhMyUsagePresentation",
+            dependencies: ["OhMyUsageDomain"]
         ),
         .target(
-            name: "AIPlanMonitorFeatures",
+            name: "OhMyUsageFeatures",
             dependencies: [
-                "AIPlanMonitorApplication",
-                "AIPlanMonitorPresentation"
+                "OhMyUsageApplication",
+                "OhMyUsagePresentation"
             ]
         ),
         .target(
-            name: "AIPlanMonitorBootstrap",
+            name: "OhMyUsageBootstrap",
             dependencies: [
-                "AIPlanMonitorApplication",
-                "AIPlanMonitorFeatures",
-                "AIPlanMonitorPresentation"
+                "OhMyUsageApplication",
+                "OhMyUsageFeatures",
+                "OhMyUsagePresentation"
             ]
         ),
         .executableTarget(
-            name: "AIPlanMonitor",
+            name: "OhMyUsage",
             dependencies: [
-                "AIPlanMonitorDomain",
-                "AIPlanMonitorInfrastructure",
-                "AIPlanMonitorProviders",
-                "AIPlanMonitorApplication",
-                "AIPlanMonitorPresentation",
-                "AIPlanMonitorFeatures",
-                "AIPlanMonitorBootstrap"
+                "OhMyUsageDomain",
+                "OhMyUsageInfrastructure",
+                "OhMyUsageProviders",
+                "OhMyUsageApplication",
+                "OhMyUsagePresentation",
+                "OhMyUsageFeatures",
+                "OhMyUsageBootstrap"
             ],
             resources: [
                 .process("Resources")
             ]
         ),
         .testTarget(
-            name: "AIPlanMonitorTests",
-            dependencies: ["AIPlanMonitor"]
+            name: "OhMyUsageTests",
+            dependencies: ["OhMyUsage"]
         )
     ]
 )
