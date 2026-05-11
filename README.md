@@ -1,102 +1,93 @@
-# AI Plan Monitor
+# oh-myusage
 
-一个面向 macOS 的菜单栏应用，用来把 AI 官方订阅额度、模型使用窗口、第三方中转余额，以及本地桌面端账号状态统一收进一个地方。
+面向 macOS 菜单栏的 AI 订阅、额度与账号状态控制台。
 
-[下载最新版本](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [English](docs/README.en.md)
+oh-myusage 把官方订阅额度、模型使用窗口、第三方中转余额、本地桌面端账号状态和异常诊断统一放到菜单栏里。它不是单一网页余额的封装，而是一个常驻运行、低打扰、可扩展的 AI 用量工作台。
 
-## 最新更新
+[下载最新版本](https://github.com/Four-JJJJ/oh-myusage/releases/latest) · [安装说明](docs/DOWNLOAD.md) · [支持的服务](docs/PROVIDERS.md) · [扩展指南](docs/EXTENDING.md) · [发布清单](docs/RELEASE_CHECKLIST.md) · [English](docs/README.en.md)
 
-计划进行一次比较大的重构来提升使用体验和性能，近期不会针对这个版本进行频繁的更新
+## V2.0.0 大版本
 
-### V1.8.6
+V2 的重点是把 oh-myusage 从“AI 余额读取工具”升级为更稳定、更省电、更容易维护的 AI 订阅与额度控制台。
 
-1. Claude 设置页里“菜单栏展示账号”和用量显示的联动逻辑做了对齐，状态栏、菜单卡片和设置选择现在会统一跟随同一套已选监控账号。
-2. Windsurf、Cursor、Kiro 这类 IDE 的 `state.vscdb` 改成先复制快照再读取，避免直接碰运行中的活动数据库，同时把 Windsurf 之前会误报成 `Missing credential` 的读库失败改成真实错误。
-3. 小米 mi'mo `Token Plan` 的百分比计算补上 `used/limit` 推导、分数百分比兼容和正额度项回退，套餐卡显示与相关回归测试一起加强。
+相比 v1.x，本次大版本优化集中在六件事：
 
-## 它解决什么问题
-
-现在 AI 用量信息通常散落在很多地方：
-
-- 官方产品各自有不同的额度页、重置周期和展示方式
-- 第三方中转站经常需要自己处理 Cookie、Bearer、用户 ID、GroupId 或组织上下文
-- 本地桌面端工具的使用状态，很多时候又不在公开网页里
-
-AI Plan Monitor 的目标很直接：
-
-- 在菜单栏里快速知道哪些额度快用完了
-- 明确看到会话、5 小时、周、月等窗口何时重置
-- 统一管理官方来源和第三方中转来源
-- 提前发现登录态失效、鉴权过期、站点接口变更或连续失败
-- 在需要时直接切换本地 Codex 账号，而不是手动翻配置文件
+| 方向 | 改进 |
+| --- | --- |
+| 架构拆分 | 刷新、配置、账号、展示、Provider 接入逐步从大文件中拆出，新增服务和页面调整更安全 |
+| 智能刷新 | 当前可见服务优先刷新，后台服务降低无意义轮询，失败时自动退避，减少常驻能耗 |
+| 本地用量缓存 | Codex、Claude、Kimi 等本地记录支持缓存与后台刷新，设置页打开更快 |
+| 配置可靠性 | 增加备份、恢复、last-known-good 兜底和旧配置兼容，降低覆盖安装后的配置风险 |
+| 账号切换事务 | Codex / Claude 账号切换按准备、写入、应用、校验、完成处理，状态更可解释 |
+| 展示一致性 | 菜单栏和设置页统一额度、倒计时、异常状态、图标和名称规则，减少重复逻辑 |
 
 ## 适合谁
 
-- 同时使用多个 AI 官方产品，希望把额度状态常驻在菜单栏的人
-- 依赖多个中转站点，希望统一查看余额和异常状态的人
-- 经常在多个 Codex 本地账号之间切换的人
-- 想要一套更接近真实使用场景，而不是只看单一网页余额的监控工具的人
+- 同时使用多个 AI 官方产品，希望在菜单栏快速判断额度状态的人
+- 依赖多个第三方中转站，希望统一查看余额、Token 用量和异常原因的人
+- 经常在多个 Codex 或 Claude 本地账号之间切换的人
+- 希望区分“官方确认”“本地估算”“缓存回退”“鉴权失效”等数据可信度的人
+- 想要一个长期常驻、低能耗、可诊断的 AI 用量监控工具的人
 
-## 核心思路
+## 它解决什么问题
 
-这个项目把来源分成三类统一处理：
+AI 用量信息通常分散在很多地方：
 
-### 1. 官方订阅与官方用量
+- 官方产品各自有不同的额度页、重置周期和显示方式
+- 第三方中转站需要处理 Cookie、Bearer、用户 ID、GroupId、组织上下文或自定义 JSON 字段
+- 本地桌面端工具的账号状态和历史用量不一定存在公开网页里
+- 登录态过期、接口变更、限流和网络失败经常只表现为“刷新失败”
 
-适合能从官方 API、官方网页、官方 CLI 或本地官方会话中拿到真实状态的服务。
+oh-myusage 的目标是让这些信息变得可扫读、可诊断、可维护：
 
-### 2. 本地桌面端账号状态
-
-适合像 Codex 这类会把登录态、账号信息或本地使用记录落在本机的桌面端工具。
-
-### 3. 第三方中转站点
-
-通过模板化配置、浏览器兜底和更清晰的错误分类，减少用户手工拼接口和猜字段的成本。
+- 在菜单栏快速看到当前服务还能不能用
+- 明确看到会话、5 小时、天、周、月等窗口何时重置
+- 同时管理官方来源、本地来源和第三方中转来源
+- 发现低额度、鉴权失效、连续失败、缓存回退和接口变化
+- 在需要时直接管理或切换本地账号，而不是手动翻配置文件
 
 ## 核心能力
 
-### 菜单栏实时监控
+### 菜单栏状态驾驶舱
 
-- 菜单栏直接显示额度、百分比、倒计时和刷新状态
-- 支持单模型固定显示，也支持多模型轮换或多用量展示
-- 状态栏外观支持跟随壁纸、强制深色、强制浅色
+- 直接显示额度、百分比、余额、倒计时、刷新状态和异常状态
+- 支持固定单模型显示、多模型轮换和多用量展示
+- 支持低额度、鉴权失效、连续失败等提醒
+- 状态栏外观支持跟随壁纸、强制深色和强制浅色
 
-### 官方来源与第三方来源统一管理
+### 官方订阅与本地账号
 
-- 一个应用里同时管理官方服务和中转站
-- 每个 Provider 可单独启用、停用、设置阈值和显示策略
-- 尽量统一“低额度、鉴权失效、连续失败、已缓存回退”等状态表达
-
-### 更实用的中转站配置方式
-
-- 内置已验证模板，减少手工填写接口路径和解析字段
-- 支持 `Manual Preferred`、`Browser Preferred`、`Browser Only` 三种凭证策略
-- 对常见失败原因做更明确的用户可读提示，而不是只返回一个模糊错误
-
-### Codex 多账号与本地切换
-
-- 自动识别当前本机 Codex 桌面端登录态
-- 支持导入和保存多个 Codex 账号槽位
-- 可在应用内直接切换本地 Codex 账号
+- 统一管理官方 Provider、本地桌面端会话和账号资料
+- 支持 Codex / Claude OAuth 导入和账号槽位管理
+- 支持 Codex 本地多账号识别、保存与切换
 - 非当前账号的额度窗口和倒计时也可以保留展示
 
-### OAuth 导入与账号资料管理
+### 第三方中转账本
 
-- 支持 Codex 和 Claude 的 OAuth 导入流程
-- 支持已导入账号的备注、显示名和槽位管理
-- 尽量保留已识别账号与槽位之间的稳定对应关系
+- 内置常见站点模板，减少手工填写接口路径和字段解析
+- 支持余额通道、Token 通道、账号信息、有效期和额外上下文字段
+- 支持 `Manual Preferred`、`Browser Preferred`、`Browser Only` 三种凭证策略
+- 对认证失败、限流、端点配置错误、网络不可达等状态做用户可读诊断
 
-### 应用级能力
+### 本地历史用量
 
-- 支持低额度提醒、鉴权失效提醒和连续失败提醒
-- 支持开机自启动
-- 支持 GitHub Release 驱动的应用内更新检测与版本说明展示
+- 支持读取 Codex、Claude、Kimi 等本地使用记录
+- 缓存聚合结果，避免每次打开设置页都重新扫描
+- 刷新失败时保留旧数据，并明确标记缓存回退
+- 不保存原始聊天内容，重点保存用量聚合结果
 
-## 当前支持的服务
+### 更新与发布
 
-详细说明见 [docs/PROVIDERS.md](docs/PROVIDERS.md)。这里列出当前首页层面的支持范围。
+- 支持 GitHub Release 驱动的应用内更新检测
+- 支持更新说明展示
+- 打包脚本支持 DMG / ZIP 输出
+- 可接入 Developer ID 签名和 notarization
 
-### 官方来源
+## 支持的服务
+
+完整说明见 [docs/PROVIDERS.md](docs/PROVIDERS.md)。
+
+### 官方与本地来源
 
 | 类型 | 服务 |
 | --- | --- |
@@ -117,69 +108,70 @@ AI Plan Monitor 的目标很直接：
 | `dragoncode.codes` | Relay Token |
 | Generic New API | Bearer 或 Cookie |
 
-说明：
+第三方站点的认证方式和响应结构变化频率较高。内置模板能降低接入成本，但站点改版后仍可能需要更新模板或调整字段规则。
 
-- 第三方站点变化频率通常高于官方接口
-- 模板能降低接入成本，但当站点响应结构变化时，仍可能需要模板更新
-
-## 为什么这个项目和一般的“额度页封装”不一样
-
-- 它不是只做单一官方产品，也不是只做一个 OpenAI 风格余额接口
-- 它同时覆盖官方订阅、桌面端本地状态和第三方中转站
-- 它不是只给出一个数值，而是尽量把“额度、窗口、刷新、异常状态、账号上下文”一起展示出来
-- 它更偏向日常长期使用，而不是一次性查余额
-
-## 安装
+## 快速开始
 
 ### 下载安装
 
-1. 从 [Latest Release](https://github.com/Four-JJJJ/AI-Plan-Monitor/releases/latest) 下载最新的 `AI Plan Monitor.dmg`
-2. 打开 DMG
-3. 将 `AI Plan Monitor.app` 拖入 `Applications`
-4. 第一次启动时，如果被系统拦截，右键应用并选择“打开”
+1. 打开 [Latest Release](https://github.com/Four-JJJJ/oh-myusage/releases/latest)
+2. 下载 `oh-myusage.dmg`
+3. 打开 DMG，将 `oh-myusage.app` 拖入 `Applications`
+4. 第一次启动时如被 macOS 拦截，右键应用并选择“打开”
 5. 如果仍被拦截，到“系统设置 -> 隐私与安全性”里选择“仍要打开”
 
-更完整的步骤见 [安装说明](docs/DOWNLOAD.md)。
+更完整的安装和排障步骤见 [docs/DOWNLOAD.md](docs/DOWNLOAD.md)。
 
 ### 系统要求
 
 - macOS 14 或更高版本
-- 非 App Store 分发，当前通过 GitHub Releases 提供安装包
+- 当前通过 GitHub Releases 分发，非 App Store 安装包
+
+### 初次配置建议
+
+1. 先在设置页启用你真正需要监控的 Provider
+2. 官方服务优先使用本地登录态或 OAuth 导入
+3. 第三方中转优先选择内置模板，再补充必要的 Token、Cookie 或 GroupId
+4. 如果站点登录态更稳定，可把凭证策略切换为 `Browser Preferred`
+5. 对高频使用的服务设置低额度提醒和菜单栏显示策略
 
 ## 数据与安全
 
-- 应用中手动保存的凭证默认存放在 macOS Keychain
-- 历史 `AIPlanMonitor` 钥匙串条目会迁移到新的 `AI Plan Monitor`
-- 应用配置保存在 `~/Library/Application Support/AIPlanMonitor`
-- 对于支持的中转站，应用可在浏览器优先模式下把浏览器登录态作为兜底来源
-
-说明：
-
-- 读取浏览器状态只用于支持的站点和对应配置模式
-- 第三方站点接入能力会受到目标站点认证方式和返回结构变化的影响
+- 手动保存的 Token、Cookie 等凭证默认存放在 macOS Keychain
+- 历史 `OhMyUsage` 钥匙串条目会迁移到新的 `oh-myusage`
+- 应用配置保存在 `~/Library/Application Support/OhMyUsage`
+- 本地历史用量保存聚合缓存，不保存原始聊天内容
+- 浏览器凭证读取只用于支持的站点和对应凭证策略
+- 第三方站点接入能力会受到目标站点认证方式、权限策略和返回结构变化影响
 
 ## 从源码运行
 
 ### 环境要求
 
 - macOS 14+
-- Xcode / Swift 6 工具链
+- Xcode / Swift 6.2 工具链
 
 ### 常用命令
 
-运行应用：
+构建：
+
+```bash
+swift build
+```
+
+运行：
 
 ```bash
 swift run
 ```
 
-运行测试：
+测试：
 
 ```bash
 swift test
 ```
 
-打包通用 DMG：
+打包：
 
 ```bash
 ./scripts/package_dmg.sh
@@ -187,36 +179,77 @@ swift test
 
 打包产物默认输出到：
 
-- `dist/AI Plan Monitor.dmg`
-- `dist/AI-Plan-Monitor-macOS.zip`
+- `dist/oh-myusage.dmg`
+- `dist/oh-myusage-macOS.zip`
 
-## 项目结构
+## 工程结构
 
 ```text
-Sources/AIPlanMonitor
-├── App        # 应用生命周期、状态栏、窗口与更新流程
-├── Models     # Provider、配置与共享数据模型
-├── Providers  # 各服务的接入实现
-├── Services   # 鉴权、刷新、账号管理、通知、更新等服务
-├── UI         # SwiftUI 设置页与菜单内容
-└── Resources  # 图标、模板与内置资源
+Sources/
+├── OhMyUsage              # 当前可执行应用主体，包含 App、UI、Services、Providers、Resources
+├── OhMyUsageDomain        # 领域模型与稳定契约骨架
+├── OhMyUsageInfrastructure # 基础设施骨架
+├── OhMyUsageProviders     # Provider 运行时拆分目标骨架
+├── OhMyUsageApplication   # 应用层调度、退避、诊断等已抽出的逻辑
+├── OhMyUsagePresentation  # 展示层拆分目标骨架
+├── OhMyUsageFeatures      # 功能模块拆分目标骨架
+└── OhMyUsageBootstrap     # 启动组装拆分目标骨架
 
-Tests/AIPlanMonitorTests
-docs/
-scripts/
+Tests/OhMyUsageTests       # XCTest 测试
+docs/                      # 安装、支持服务、扩展、发布与重构说明
+scripts/                   # 打包与发布脚本
 ```
 
-## 相关文档
+当前代码仍保留兼容迁移路径：主应用逻辑主要位于 `Sources/OhMyUsage`，新的 target 用于承接 V2 之后的持续模块化拆分。
 
-- [安装说明](docs/DOWNLOAD.md)
-- [支持的服务](docs/PROVIDERS.md)
-- [English README](docs/README.en.md)
+## 扩展开发
 
-## 分发说明
+新增官方 Provider、第三方中转模板或设置项前，优先阅读 [docs/EXTENDING.md](docs/EXTENDING.md)。
 
-- 当前公开版本通过 GitHub Releases 分发
-- GitHub 分发的构建可能是 ad-hoc 签名，首次启动时可能需要右键打开
-- 打包脚本已经支持 Developer ID 签名和 notarization；在提供 Apple 分发凭证时可接入正式公证流程
+推荐原则：
+
+- Provider 接入代码放在 `Sources/OhMyUsage/Providers`
+- 共享模型放在 `Sources/OhMyUsage/Models`
+- 刷新、账号、配置、通知和更新能力放在 `Sources/OhMyUsage/Services` 或已抽出的应用层模块
+- 菜单栏和设置页展示逻辑优先放到 Presenter 或 Settings 子模块
+- 新增行为需要补 focused tests，并至少运行 `swift build` 和 `swift test`
+
+## 发布
+
+本地打包：
+
+```bash
+APP_VERSION=2.0.0 ./scripts/package_dmg.sh
+```
+
+发布前检查：
+
+- 确认 `VERSION` 与目标版本一致
+- 运行 `swift build`
+- 运行 `swift test`
+- 运行本地打包冒烟测试
+- 确认 `dist/oh-myusage.dmg` 和 `dist/oh-myusage-macOS.zip` 存在
+- 确认 GitHub Release 产物包含 `latest.json`
+
+完整流程见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+
+## 常见问题
+
+### 应用无法打开
+
+GitHub 分发的构建可能未完成正式公证。可先右键 `oh-myusage.app` 选择“打开”，或按 [安装说明](docs/DOWNLOAD.md) 处理 Gatekeeper 拦截。
+
+### Provider 显示鉴权失效
+
+重新登录对应官方应用或网站。对于手动凭证模式，重新保存 Token 或 Cookie；对于支持的中转站，可以尝试切换到浏览器优先模式。
+
+### 第三方中转突然刷新失败
+
+优先查看错误类型。如果是认证失败，通常需要重新登录或更新凭证；如果是端点或解析失败，可能是目标站点改版，需要更新模板或字段规则。
+
+### Codex 切换后仍提示验证
+
+本地账号配置可能已经切换成功，但 Codex 桌面端仍需要完成一次官方验证。按 Codex 桌面端提示完成验证后，再回到 oh-myusage 刷新状态。
 
 ## 致谢
 

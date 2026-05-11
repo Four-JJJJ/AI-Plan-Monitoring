@@ -1,6 +1,8 @@
 # Supported Services
 
-This page summarizes what AI Plan Monitor can currently monitor and how each service is typically connected.
+This page summarizes what oh-myusage can currently monitor and how each service is typically connected.
+
+For extension and integration paths after the refactor, see [EXTENDING.md](./EXTENDING.md).
 
 ## Official Providers
 
@@ -63,7 +65,7 @@ This makes it easier to tell the difference between:
 
 ## Notes on Third-Party Coverage
 
-Third-party sites change more often than official APIs. AI Plan Monitor tries to keep them stable through:
+Third-party sites change more often than official APIs. oh-myusage tries to keep them stable through:
 
 - per-site templates
 - browser-first credential fallback
@@ -71,3 +73,14 @@ Third-party sites change more often than official APIs. AI Plan Monitor tries to
 - clearer user-facing diagnostics
 
 If a relay changes its payload or auth flow, it may need a template update.
+
+## Integration Notes
+
+- Official profile monitoring now reuses the shared runtime seams:
+  - [OfficialProviderFetchRuntime.swift](../Sources/OhMyUsage/Providers/OfficialProviderFetchRuntime.swift)
+  - [OfficialProviderAuthRuntime.swift](../Sources/OhMyUsage/Providers/OfficialProviderAuthRuntime.swift)
+  - [OfficialProfileSnapshotRuntime.swift](../Sources/OhMyUsage/Services/OfficialProfileSnapshotRuntime.swift)
+- Relay and official display-layer metadata now flow through typed helpers instead of scattered `rawMeta` lookups:
+  - [RelaySnapshotDisplayMetadata.swift](../Sources/OhMyUsage/Models/RelaySnapshotDisplayMetadata.swift)
+  - [OfficialSnapshotIdentityMetadata.swift](../Sources/OhMyUsage/Models/OfficialSnapshotIdentityMetadata.swift)
+- For new provider onboarding after the refactor, prefer [EXTENDING.md](./EXTENDING.md) as the source of truth for UI/app integration seams.

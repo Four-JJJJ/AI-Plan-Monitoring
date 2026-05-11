@@ -1,12 +1,12 @@
-# AI Plan Monitor
+# oh-myusage
 
 A macOS menu bar app for monitoring AI plan limits, credits, relay balances, and local desktop account state in one place.
 
-[Download Latest Release](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest) · [Install Guide](DOWNLOAD.md) · [Supported Services](PROVIDERS.md) · [中文说明](../README.md)
+[Download Latest Release](https://github.com/Four-JJJJ/oh-myusage/releases/latest) · [Install Guide](DOWNLOAD.md) · [Supported Services](PROVIDERS.md) · [中文说明](../README.md)
 
 ## What It Is
 
-AI Plan Monitor solves a simple but annoying problem: AI usage and balance information is scattered everywhere.
+oh-myusage solves a simple but annoying problem: AI usage and balance information is scattered everywhere.
 
 - official products expose quotas in different formats
 - relay sites often require custom cookies, bearer tokens, account IDs, group IDs, or org IDs
@@ -97,9 +97,9 @@ The app supports:
 
 ## Installation
 
-1. Download the latest `AI Plan Monitor.dmg` from [Releases](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest)
+1. Download the latest `oh-myusage.dmg` from [Releases](https://github.com/Four-JJJJ/oh-myusage/releases/latest)
 2. Open the DMG
-3. Drag `AI Plan Monitor.app` into `Applications`
+3. Drag `oh-myusage.app` into `Applications`
 4. On first launch, right-click the app and choose `Open`
 5. If macOS blocks the app, allow it in `System Settings -> Privacy & Security`
 
@@ -108,8 +108,8 @@ For step-by-step instructions, see [Install Guide](DOWNLOAD.md).
 ## Security
 
 - Credentials saved from settings are stored in macOS Keychain by default
-- Legacy `AIPlanMonitor` keychain entries are migrated to `AI Plan Monitor`
-- App configuration is stored under `~/Library/Application Support/AIPlanMonitor`
+- Legacy `OhMyUsage` keychain entries are migrated to `oh-myusage`
+- App configuration is stored under `~/Library/Application Support/OhMyUsage`
 - Browser-derived credentials can be used as fallback for supported relay sites
 
 ## Build From Source

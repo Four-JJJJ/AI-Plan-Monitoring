@@ -74,7 +74,7 @@ let noteAttrs: [NSAttributedString.Key: Any] = [
     .paragraphStyle: paragraphStyle(alignment: .center, lineSpacing: 8)
 ]
 
-("安装 AI Plan Monitor" as NSString)
+("安装 oh-myusage" as NSString)
     .draw(in: NSRect(x: 90, y: 700, width: 720, height: 70), withAttributes: titleAttrs)
 
 ("1. 拖动左侧 app 到右侧 Applications\n2. 首次打开请右键“打开”\n3. 若被拦截：系统设置 -> 隐私与安全性 -> 仍要打开" as NSString)
@@ -96,21 +96,21 @@ func drawStep(number: String, title: String, body: String, y: CGFloat) {
 drawStep(
     number: "1",
     title: "拖动安装",
-    body: "把左侧 AI Plan Monitor.app\n拖到右侧 Applications 文件夹。",
+    body: "把左侧 oh-myusage.app\n拖到右侧 Applications 文件夹。",
     y: 380
 )
 
 drawStep(
     number: "2",
     title: "右键打开",
-    body: "如果系统拦截，请去“应用程序”里\n右键 AI Plan Monitor，选择“打开”。",
+    body: "如果系统拦截，请去“应用程序”里\n右键 oh-myusage，选择“打开”。",
     y: 250
 )
 
 drawStep(
     number: "3",
     title: "仍被拦截时",
-    body: "打开“系统设置” -> “隐私与安全性”\n找到 AI Plan Monitor，点击“仍要打开”。",
+    body: "打开“系统设置” -> “隐私与安全性”\n找到 oh-myusage，点击“仍要打开”。",
     y: 120
 )
 

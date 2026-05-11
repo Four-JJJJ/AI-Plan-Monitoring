@@ -2,14 +2,14 @@
 
 ## Latest Download
 
-- [Latest Release](https://github.com/Four-JJJJ/AI-Plan-Monitoring/releases/latest)
-- Recommended asset: `AI Plan Monitor.dmg`
+- [Latest Release](https://github.com/Four-JJJJ/oh-myusage/releases/latest)
+- Recommended asset: `oh-myusage.dmg`
 
 ## Install on macOS
 
-1. Download `AI Plan Monitor.dmg` from the latest release.
+1. Download `oh-myusage.dmg` from the latest release.
 2. Open the DMG.
-3. Drag `AI Plan Monitor.app` into `Applications`.
+3. Drag `oh-myusage.app` into `Applications`.
 4. Launch from `Applications`.
 
 ## First Launch on GitHub Builds
@@ -18,7 +18,7 @@ Because GitHub-distributed builds may not always be notarized, macOS can block f
 
 Use this order:
 
-1. Right-click `AI Plan Monitor.app`
+1. Right-click `oh-myusage.app`
 2. Choose `Open`
 3. Click `Open` again in the system dialog
 
@@ -26,7 +26,7 @@ If macOS still blocks it:
 
 1. Open `System Settings`
 2. Go to `Privacy & Security`
-3. Find the message for `AI Plan Monitor`
+3. Find the message for `oh-myusage`
 4. Click `Open Anyway`
 
 ## Terminal Fallback
@@ -34,7 +34,7 @@ If macOS still blocks it:
 If the app is quarantined and the GUI path still fails:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/AI Plan Monitor.app"
+xattr -dr com.apple.quarantine "/Applications/oh-myusage.app"
 ```
 
 Then launch the app again.
@@ -73,4 +73,4 @@ To build the release asset locally:
 ./scripts/package_dmg.sh
 ```
 
-The output DMG is written to `dist/AI Plan Monitor.dmg`.
+The output DMG is written to `dist/oh-myusage.dmg`.
