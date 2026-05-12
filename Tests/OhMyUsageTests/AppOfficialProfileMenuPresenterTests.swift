@@ -32,6 +32,32 @@ final class AppOfficialProfileMenuPresenterTests: XCTestCase {
         XCTAssertTrue(models[1].canSwitch)
     }
 
+    func testCodexSlotViewModelsHideRuntimeSlotsWithoutImportedProfile() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let profiles = [
+            makeCodexProfile(slotID: .a, email: "a@example.com", importedAt: now, isCurrent: false),
+            makeCodexProfile(slotID: .b, email: "b@example.com", importedAt: now.addingTimeInterval(60), isCurrent: false)
+        ]
+        let deletedSlotID = CodexSlotID(rawValue: "C")
+        let slots = [
+            makeCodexSlot(slotID: .a, email: "a@example.com", lastSeenAt: now.addingTimeInterval(10), isActive: false),
+            makeCodexSlot(slotID: .b, email: "b@example.com", lastSeenAt: now.addingTimeInterval(20), isActive: false),
+            makeCodexSlot(slotID: deletedSlotID, email: "deleted@example.com", lastSeenAt: now.addingTimeInterval(120), isActive: true)
+        ]
+
+        let models = AppOfficialProfileMenuPresenter.codexSlotViewModels(
+            profiles: profiles,
+            slots: slots,
+            feedbackBySlotID: [:],
+            isSwitching: { _ in false },
+            titleForSlotID: { "Codex \($0.rawValue)" },
+            now: now
+        )
+
+        XCTAssertEqual(models.map(\.slotID), [.b, .a])
+        XCTAssertFalse(models.contains(where: { $0.slotID == deletedSlotID }))
+    }
+
     func testClaudeSlotViewModelsFilterInferenceOnlyProfilesAndSortActiveFirst() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let visible = makeClaudeProfile(

@@ -9,10 +9,12 @@ enum AppOfficialProfileMenuPresenter {
         titleForSlotID: (CodexSlotID) -> String,
         now: Date = Date()
     ) -> [CodexSlotViewModel] {
-        AppOfficialProfileStateCoordinator.mergedCodexSlotsForMenu(
+        let visibleSlotIDs = Set(profiles.map(\.slotID))
+        return AppOfficialProfileStateCoordinator.mergedCodexSlotsForMenu(
             profiles: profiles,
             slots: slots
         )
+        .filter { visibleSlotIDs.contains($0.slotID) }
         .sorted { lhs, rhs in
             if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
             if lhs.lastSeenAt != rhs.lastSeenAt { return lhs.lastSeenAt > rhs.lastSeenAt }
