@@ -376,12 +376,12 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         tokenRequest: RelayTokenRequestManifest(),
         extract: RelayExtractManifest(
             success: "success",
-            remaining: "div(data.quota,50000)",
-            used: "div(data.used_quota,50000)",
-            limit: "div(add(data.quota,data.used_quota),50000)",
-            unit: "USD",
+            remaining: "data.quota",
+            used: "data.used_quota",
+            limit: "add(data.quota,data.used_quota)",
+            unit: "quota",
             accountLabel: "coalesce(data.group,\"默认套餐\")"
         ),
-        postprocessID: nil
+        postprocessID: .quotaDisplayStatus
     )
 }

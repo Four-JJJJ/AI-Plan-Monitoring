@@ -1,11 +1,13 @@
 import Foundation
 
-struct AilinyuDisplayAmount {
+struct RelayQuotaDisplayAmount {
     let remaining: Double
+    let valueScale: Double
     let quotaPerUnit: Double
     let rate: Double
     let unit: String
     let displayType: String
+    let displayInCurrency: Bool
 }
 
 struct AccountChannelResult {
@@ -93,20 +95,24 @@ enum RelayResponseInterpreter {
         }
 
         if manifest.postprocessID == .quotaDisplayStatus {
-            let converted = try? await convertAilinyuQuotaToDisplayAmount(
-                baseURL: baseURL,
-                headers: headers.merging(request.staticHeaders, uniquingKeysWith: { _, rhs in rhs }),
-                quota: remaining,
-                requestJSON: requestJSON
-            )
-            if let converted {
+            do {
+                let converted = try await convertQuotaToDisplayAmount(
+                    baseURL: baseURL,
+                    headers: headers.merging(request.staticHeaders, uniquingKeysWith: { _, rhs in rhs }),
+                    quota: remaining,
+                    requestJSON: requestJSON
+                )
                 remaining = converted.remaining
-                used = used.map { $0 / converted.quotaPerUnit * converted.rate }
-                limit = limit.map { $0 / converted.quotaPerUnit * converted.rate }
+                used = used.map { $0 * converted.valueScale }
+                limit = limit.map { $0 * converted.valueScale }
                 unit = converted.unit
                 extraMeta["displayType"] = converted.displayType
+                extraMeta["displayInCurrency"] = String(converted.displayInCurrency)
                 extraMeta["quotaPerUnit"] = String(converted.quotaPerUnit)
                 extraMeta["displayRate"] = String(converted.rate)
+                extraMeta["valueScale"] = String(converted.valueScale)
+            } catch {
+                extraMeta["quotaDisplayStatusError"] = String(describing: error)
             }
         }
 
@@ -611,12 +617,12 @@ enum RelayResponseInterpreter {
         return output
     }
 
-    private static func convertAilinyuQuotaToDisplayAmount(
+    private static func convertQuotaToDisplayAmount(
         baseURL: URL,
         headers: [String: String],
         quota: Double,
         requestJSON: @escaping JSONRequest
-    ) async throws -> AilinyuDisplayAmount {
+    ) async throws -> RelayQuotaDisplayAmount {
         let root = try await requestJSON(
             baseURL.appending(path: "/api/status"),
             headers,
@@ -627,40 +633,38 @@ enum RelayResponseInterpreter {
             throw ProviderError.invalidResponse("missing data.quota_per_unit")
         }
         let displayType = RelayJSONExpressionEvaluator.stringValue(for: "data.quota_display_type", in: root)?.uppercased() ?? "USD"
+        let displayInCurrency = RelayJSONExpressionEvaluator.boolValue(for: "data.display_in_currency", in: root) ?? true
+
         let displayRate: Double
         let unit: String
-        switch displayType {
-        case "CNY":
-            displayRate = RelayJSONExpressionEvaluator.numericValue(for: "data.usd_exchange_rate", in: root) ?? 1
-            unit = "¥"
-        case "CUSTOM":
-            displayRate = RelayJSONExpressionEvaluator.numericValue(for: "data.custom_currency_exchange_rate", in: root) ?? 1
-            unit = RelayJSONExpressionEvaluator.stringValue(for: "data.custom_currency_symbol", in: root) ?? "¤"
-        case "TOKENS":
+        let valueScale: Double
+        if displayType == "TOKENS" || !displayInCurrency {
             displayRate = 1
-            unit = "tokens"
-        default:
-            displayRate = 1
-            unit = "$"
+            unit = displayType == "TOKENS" ? "tokens" : "quota"
+            valueScale = 1
+        } else {
+            switch displayType {
+            case "CNY":
+                displayRate = RelayJSONExpressionEvaluator.numericValue(for: "data.usd_exchange_rate", in: root) ?? 1
+                unit = "¥"
+            case "CUSTOM":
+                displayRate = RelayJSONExpressionEvaluator.numericValue(for: "data.custom_currency_exchange_rate", in: root) ?? 1
+                unit = RelayJSONExpressionEvaluator.stringValue(for: "data.custom_currency_symbol", in: root) ?? "¤"
+            default:
+                displayRate = 1
+                unit = "$"
+            }
+            valueScale = displayRate / quotaPerUnit
         }
 
-        if displayType == "TOKENS" {
-            return AilinyuDisplayAmount(
-                remaining: quota,
-                quotaPerUnit: quotaPerUnit,
-                rate: 1,
-                unit: unit,
-                displayType: displayType
-            )
-        }
-
-        let remaining = (quota / quotaPerUnit) * displayRate
-        return AilinyuDisplayAmount(
-            remaining: remaining,
+        return RelayQuotaDisplayAmount(
+            remaining: quota * valueScale,
+            valueScale: valueScale,
             quotaPerUnit: quotaPerUnit,
             rate: displayRate,
             unit: unit,
-            displayType: displayType
+            displayType: displayType,
+            displayInCurrency: displayInCurrency
         )
     }
 }

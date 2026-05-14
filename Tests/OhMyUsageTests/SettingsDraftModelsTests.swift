@@ -114,8 +114,8 @@ final class SettingsDraftModelsTests: XCTestCase {
         XCTAssertEqual(draft.authScheme, "Bearer")
         XCTAssertEqual(draft.userIDHeader, "New-Api-User")
         XCTAssertEqual(draft.endpointPath, "/api/user/self")
-        XCTAssertEqual(draft.remainingJSONPath, "div(data.quota,50000)")
-        XCTAssertEqual(draft.unit, "USD")
+        XCTAssertEqual(draft.remainingJSONPath, "data.quota")
+        XCTAssertEqual(draft.unit, "quota")
     }
 
     func testRelayProviderEditorDraftSeedsExistingProviderState() {

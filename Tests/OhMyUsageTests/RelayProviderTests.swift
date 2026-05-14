@@ -124,7 +124,7 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(normalized.baseURL, "https://platform.deepseek.com")
         XCTAssertEqual(normalized.relayConfig?.baseURL, "https://platform.deepseek.com")
         XCTAssertEqual(normalized.relayConfig?.adapterID, "generic-newapi")
-        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.remainingExpression, "div(data.quota,50000)")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.remainingExpression, "data.quota")
     }
 
     func testRegistryMatchesBundledManifest() {
@@ -206,11 +206,12 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(manifest.setup?.requiredInputs, [.displayName, .baseURL, .balanceAuth, .userID])
         XCTAssertEqual(manifest.balanceRequest.path, "/api/user/self")
         XCTAssertEqual(manifest.balanceRequest.userIDHeader, "New-Api-User")
-        XCTAssertEqual(manifest.extract.remaining, "div(data.quota,50000)")
-        XCTAssertEqual(manifest.extract.used, "div(data.used_quota,50000)")
-        XCTAssertEqual(manifest.extract.limit, "div(add(data.quota,data.used_quota),50000)")
-        XCTAssertEqual(manifest.extract.unit, "USD")
+        XCTAssertEqual(manifest.extract.remaining, "data.quota")
+        XCTAssertEqual(manifest.extract.used, "data.used_quota")
+        XCTAssertEqual(manifest.extract.limit, "add(data.quota,data.used_quota)")
+        XCTAssertEqual(manifest.extract.unit, "quota")
         XCTAssertEqual(manifest.extract.accountLabel, "coalesce(data.group,\"默认套餐\")")
+        XCTAssertEqual(manifest.postprocessID, .quotaDisplayStatus)
     }
 
     func testRegistryMatchesDeepseekManifest() {
@@ -307,7 +308,12 @@ final class RelayProviderTests: XCTestCase {
             }
             XCTAssertEqual(auth, "Bearer good-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"success":true,"data":{"quota":6000000,"used_quota":1500000}}"#.utf8))
+            switch request.url?.path {
+            case "/api/status":
+                return (response, Data(#"{"success":true,"data":{"quota_per_unit":50000,"quota_display_type":"USD","display_in_currency":true}}"#.utf8))
+            default:
+                return (response, Data(#"{"success":true,"data":{"quota":6000000,"used_quota":1500000}}"#.utf8))
+            }
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -358,7 +364,12 @@ final class RelayProviderTests: XCTestCase {
         RelayMockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
+            switch request.url?.path {
+            case "/api/status":
+                return (response, Data(#"{"success":true,"data":{"quota_per_unit":50000,"quota_display_type":"USD","display_in_currency":true}}"#.utf8))
+            default:
+                return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
+            }
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -408,7 +419,12 @@ final class RelayProviderTests: XCTestCase {
         RelayMockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
+            switch request.url?.path {
+            case "/api/status":
+                return (response, Data(#"{"success":true,"data":{"quota_per_unit":50000,"quota_display_type":"USD","display_in_currency":true}}"#.utf8))
+            default:
+                return (response, Data(#"{"success":true,"data":{"quota":4500000,"used_quota":500000}}"#.utf8))
+            }
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -481,7 +497,7 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(browserBearerLookupCount, 1)
     }
 
-    func testGenericNewAPIFetchConvertsQuotaToUSDBalance() async throws {
+    func testGenericNewAPIFetchConvertsQuotaUsingStatusDisplaySettings() async throws {
         let service = "OhMyUsageTests-\(UUID().uuidString)"
         let keychain = makeTestKeychain()
         XCTAssertTrue(keychain.saveToken("access-token", service: service, account: "relay.example.com/system-token"))
@@ -505,13 +521,21 @@ final class RelayProviderTests: XCTestCase {
         )
 
         RelayMockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://relay.example.com/api/user/self")
             XCTAssertEqual(request.httpMethod, "GET")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
             XCTAssertEqual(request.value(forHTTPHeaderField: "New-Api-User"), "user-123")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let payload = #"{"success":true,"data":{"group":"Pro","quota":1500000,"used_quota":500000,"request_count":12}}"#
-            return (response, Data(payload.utf8))
+            switch request.url?.path {
+            case "/api/user/self":
+                let payload = #"{"success":true,"data":{"group":"Pro","quota":1500000,"used_quota":500000,"request_count":12}}"#
+                return (response, Data(payload.utf8))
+            case "/api/status":
+                let payload = #"{"success":true,"data":{"quota_per_unit":50000,"quota_display_type":"USD","display_in_currency":true}}"#
+                return (response, Data(payload.utf8))
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
         }
         defer { RelayMockURLProtocol.requestHandler = nil }
 
@@ -529,15 +553,111 @@ final class RelayProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.remaining ?? -1, 30, accuracy: 0.000001)
         XCTAssertEqual(snapshot.used ?? -1, 10, accuracy: 0.000001)
         XCTAssertEqual(snapshot.limit ?? -1, 40, accuracy: 0.000001)
-        XCTAssertEqual(snapshot.unit, "USD")
+        XCTAssertEqual(snapshot.unit, "$")
         XCTAssertEqual(snapshot.accountLabel, "Pro")
         XCTAssertEqual(snapshot.rawMeta["account.userID"], "user-123")
         XCTAssertEqual(snapshot.rawMeta["account.requestCount"], "12")
         XCTAssertEqual(snapshot.rawMeta["account.rawUsedQuota"], "500000.0")
+        XCTAssertEqual(snapshot.rawMeta["account.displayType"], "USD")
+        XCTAssertEqual(snapshot.rawMeta["account.quotaPerUnit"], "50000.0")
         XCTAssertTrue(snapshot.note.contains("Requests 12"))
     }
 
-    func testGenericNewAPIOverrideMigrationAppliesScaledExpressions() {
+    func testGenericNewAPIFetchUsesSiteQuotaPerUnitForFourjStyleBalance() async throws {
+        let service = "OhMyUsageTests-\(UUID().uuidString)"
+        let keychain = makeTestKeychain()
+        XCTAssertTrue(keychain.saveToken("access-token", service: service, account: "token.fourj.space/system-token"))
+
+        let descriptor = genericNewAPIDescriptor(
+            service: service,
+            baseURL: "https://token.fourj.space",
+            userID: "user-123"
+        )
+
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "New-Api-User"), "user-123")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/user/self":
+                let payload = #"{"success":true,"data":{"group":"Pro","quota":100000000,"used_quota":25000000}}"#
+                return (response, Data(payload.utf8))
+            case "/api/status":
+                let payload = #"{"success":true,"data":{"quota_per_unit":500000,"quota_display_type":"CNY","display_in_currency":true,"usd_exchange_rate":1}}"#
+                return (response, Data(payload.utf8))
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 200, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.used ?? -1, 50, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.limit ?? -1, 250, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.unit, "¥")
+        XCTAssertEqual(snapshot.rawMeta["account.displayType"], "CNY")
+        XCTAssertEqual(snapshot.rawMeta["account.quotaPerUnit"], "500000.0")
+    }
+
+    func testGenericNewAPIFetchKeepsOneToOneStatusScale() async throws {
+        let service = "OhMyUsageTests-\(UUID().uuidString)"
+        let keychain = makeTestKeychain()
+        XCTAssertTrue(keychain.saveToken("access-token", service: service, account: "relay.example.com/system-token"))
+
+        let descriptor = genericNewAPIDescriptor(
+            service: service,
+            baseURL: "https://relay.example.com",
+            userID: "user-123"
+        )
+
+        RelayMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch request.url?.path {
+            case "/api/user/self":
+                let payload = #"{"success":true,"data":{"quota":100,"used_quota":20}}"#
+                return (response, Data(payload.utf8))
+            case "/api/status":
+                let payload = #"{"success":true,"data":{"quota_per_unit":1,"quota_display_type":"USD","display_in_currency":true}}"#
+                return (response, Data(payload.utf8))
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (response, Data(#"{}"#.utf8))
+            }
+        }
+        defer { RelayMockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RelayMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let provider = RelayProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.remaining ?? -1, 100, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.used ?? -1, 20, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.limit ?? -1, 120, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.unit, "$")
+        XCTAssertEqual(snapshot.rawMeta["account.quotaPerUnit"], "1.0")
+    }
+
+    func testGenericNewAPIOverrideMigrationAppliesRawExpressions() {
         var descriptor = makeRelayDescriptor(
             service: "OhMyUsageTests",
             adapterID: "generic-newapi",
@@ -551,9 +671,9 @@ final class RelayProviderTests: XCTestCase {
             requestMethod: "GET",
             requestBodyJSON: nil,
             endpointPath: "/api/user/self",
-            remainingExpression: "data.quota",
-            usedExpression: "data.used_quota",
-            limitExpression: "add(data.quota,data.used_quota)",
+            remainingExpression: "div(data.quota,50000)",
+            usedExpression: "div(data.used_quota,50000)",
+            limitExpression: "div(add(data.quota,data.used_quota),50000)",
             successExpression: "success",
             unitExpression: "USD",
             accountLabelExpression: nil,
@@ -561,10 +681,10 @@ final class RelayProviderTests: XCTestCase {
         )
 
         let normalized = descriptor.normalized()
-        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.remainingExpression, "div(data.quota,50000)")
-        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.usedExpression, "div(data.used_quota,50000)")
-        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.limitExpression, "div(add(data.quota,data.used_quota),50000)")
-        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.unitExpression, "USD")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.remainingExpression, "data.quota")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.usedExpression, "data.used_quota")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.limitExpression, "add(data.quota,data.used_quota)")
+        XCTAssertEqual(normalized.relayConfig?.manualOverrides?.unitExpression, "quota")
         XCTAssertEqual(normalized.relayConfig?.manualOverrides?.userID, "1")
     }
 

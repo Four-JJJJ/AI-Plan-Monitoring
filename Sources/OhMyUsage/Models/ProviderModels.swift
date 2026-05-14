@@ -1674,17 +1674,22 @@ extension ProviderDescriptor {
             (success.isEmpty || success == "success") &&
             (userIDHeader.isEmpty || userIDHeader == "new-api-user") &&
             staticHeadersEmpty &&
-            (remaining.isEmpty || remaining == "data.quota") &&
-            (used.isEmpty || used == "data.used_quota") &&
-            (limit.isEmpty || limit == "data.request_quota" || limit == "add(data.quota,data.used_quota)") &&
+            (remaining.isEmpty || remaining == "data.quota" || remaining == "div(data.quota,50000)") &&
+            (used.isEmpty || used == "data.used_quota" || used == "div(data.used_quota,50000)") &&
+            (
+                limit.isEmpty ||
+                limit == "data.request_quota" ||
+                limit == "add(data.quota,data.used_quota)" ||
+                limit == "div(add(data.quota,data.used_quota),50000)"
+            ) &&
             (unit.isEmpty || unit == "usd" || unit == "quota")
 
         guard matchesLegacyGenericNewAPI else { return override }
 
-        override.remainingExpression = "div(data.quota,50000)"
-        override.usedExpression = "div(data.used_quota,50000)"
-        override.limitExpression = "div(add(data.quota,data.used_quota),50000)"
-        override.unitExpression = "USD"
+        override.remainingExpression = "data.quota"
+        override.usedExpression = "data.used_quota"
+        override.limitExpression = "add(data.quota,data.used_quota)"
+        override.unitExpression = "quota"
         return override
     }
 
