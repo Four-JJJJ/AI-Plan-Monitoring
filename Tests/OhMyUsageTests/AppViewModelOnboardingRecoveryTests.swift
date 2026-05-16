@@ -51,7 +51,11 @@ final class AppViewModelOnboardingRecoveryTests: XCTestCase {
         )
 
         XCTAssertTrue(isOfficialProviderEnabled(type: .codex, in: viewModel))
-        XCTAssertEqual(viewModel.statusBarProvidersForDisplay().map(\.id), ["codex-official"])
+        XCTAssertTrue(
+            viewModel.config.providers.contains {
+                $0.id == "codex-official" && $0.enabled && $0.showsInMenuBar
+            }
+        )
     }
 
     func testPermissionGuideHidesWhenAllPermissionRequirementsAreSatisfied() {

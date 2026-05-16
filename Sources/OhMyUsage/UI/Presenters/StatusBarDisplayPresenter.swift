@@ -122,12 +122,30 @@ enum StatusBarDisplayPresenter {
         let provider = source.provider
         if style == .barNamePercent,
            provider.family == .thirdParty,
-           !provider.displaysUsedQuota,
-           let percent = source.thirdPartyBarPercent {
-            return percent
+           !provider.displaysUsedQuota {
+            if let snapshot = source.snapshot,
+               let percent = thirdPartyRemainingLimitPercent(from: snapshot) {
+                return percent
+            }
+            if let percent = source.thirdPartyBarPercent {
+                return percent
+            }
         }
         guard let snapshot = source.snapshot else { return nil }
         return preferredPercent(from: snapshot, provider: provider)
+    }
+
+    private static func thirdPartyRemainingLimitPercent(from snapshot: UsageSnapshot) -> Double? {
+        guard let remaining = snapshot.remaining,
+              let limit = snapshot.limit,
+              remaining.isFinite,
+              limit.isFinite,
+              limit > 0 else {
+            return nil
+        }
+        let ratio = (remaining / limit) * 100
+        guard ratio.isFinite else { return nil }
+        return min(max(ratio, 0), 100)
     }
 
     static func preferredPercent(

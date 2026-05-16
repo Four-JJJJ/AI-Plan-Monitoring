@@ -8,14 +8,14 @@ final class StatusBarDisplayPresenterTests: XCTestCase {
         XCTAssertEqual(StatusBarDisplayPresenter.displayName(for: provider), "API")
     }
 
-    func testBarStyleUsesThirdPartyBaselinePercentWithIntegerValueText() {
+    func testBarStyleUsesThirdPartyBaselinePercentWhenLimitIsMissingWithIntegerValueText() {
         let provider = makeProvider(name: "Relay", family: .thirdParty, type: .relay)
         let snapshot = UsageSnapshot(
             source: provider.id,
             status: .ok,
             remaining: 12.34,
             used: 87.66,
-            limit: 100,
+            limit: nil,
             unit: "$",
             updatedAt: Date(timeIntervalSince1970: 1),
             note: "test",
@@ -32,6 +32,84 @@ final class StatusBarDisplayPresenterTests: XCTestCase {
 
         XCTAssertEqual(item.valueText, "12")
         assertPercent(item.percent, equals: 61)
+    }
+
+    func testBarStyleUsesRemainingLimitPercentBeforeThirdPartyBaselineForCodexProxy() {
+        let provider = makeProvider(name: "Codex代理", family: .thirdParty, type: .relay)
+        let snapshot = UsageSnapshot(
+            source: provider.id,
+            status: .ok,
+            remaining: 319.332608,
+            used: 180.667392,
+            limit: 500,
+            unit: "quota",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [],
+            sourceLabel: "API"
+        )
+        let source = StatusBarDisplaySource(
+            provider: provider,
+            snapshot: snapshot,
+            thirdPartyBarPercent: 9
+        )
+
+        let item = StatusBarDisplayPresenter.displayItem(for: source, style: .barNamePercent)
+
+        XCTAssertEqual(item.valueText, "319")
+        assertPercent(item.percent, equals: 63.8665216)
+    }
+
+    func testBarStyleUsesRemainingLimitPercentBeforeThirdPartyBaselineForCodexSelfUse() {
+        let provider = makeProvider(name: "Codex自用", family: .thirdParty, type: .relay)
+        let snapshot = UsageSnapshot(
+            source: provider.id,
+            status: .ok,
+            remaining: 181.178872,
+            used: 18.821128,
+            limit: 200,
+            unit: "quota",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [],
+            sourceLabel: "API"
+        )
+        let source = StatusBarDisplaySource(
+            provider: provider,
+            snapshot: snapshot,
+            thirdPartyBarPercent: 9
+        )
+
+        let item = StatusBarDisplayPresenter.displayItem(for: source, style: .barNamePercent)
+
+        XCTAssertEqual(item.valueText, "181")
+        assertPercent(item.percent, equals: 90.589436)
+    }
+
+    func testBarStyleFallsBackToThirdPartyBaselineWhenLimitIsInvalid() {
+        let provider = makeProvider(name: "Relay", family: .thirdParty, type: .relay)
+        let snapshot = UsageSnapshot(
+            source: provider.id,
+            status: .ok,
+            remaining: 42,
+            used: 58,
+            limit: 0,
+            unit: "quota",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            note: "test",
+            quotaWindows: [],
+            sourceLabel: "API"
+        )
+        let source = StatusBarDisplaySource(
+            provider: provider,
+            snapshot: snapshot,
+            thirdPartyBarPercent: 37
+        )
+
+        let item = StatusBarDisplayPresenter.displayItem(for: source, style: .barNamePercent)
+
+        XCTAssertEqual(item.valueText, "42")
+        assertPercent(item.percent, equals: 37)
     }
 
     func testThirdPartyAmountUsesGroupedIntegerValueText() {
