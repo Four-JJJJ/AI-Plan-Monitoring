@@ -11,17 +11,17 @@ extension SettingsView {
                         relayProviderSidebarRow(provider)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 12)
+                .padding(.horizontal, SettingsVisualTokens.Sidebar.horizontalPadding)
+                .padding(.top, SettingsVisualTokens.Sidebar.verticalPadding)
+                .padding(.bottom, SettingsVisualTokens.Sidebar.verticalPadding)
             }
             .scrollIndicators(.never)
 
             Spacer(minLength: 0)
 
             relayAddSiteButton
-                .padding(.horizontal, 12)
-                .padding(.bottom, 14)
+                .padding(.horizontal, SettingsVisualTokens.Sidebar.horizontalPadding)
+                .padding(.bottom, SettingsVisualTokens.Sidebar.addButtonBottomPadding)
         }
     }
 
@@ -30,22 +30,22 @@ extension SettingsView {
         if showingRelayNewSiteDraft {
             ScrollView {
                 relayNewSiteDraftDetailPage(contextProvider: selectedProvider)
-                    .frame(width: 566, alignment: .leading)
-                    .padding(.leading, 24)
-                    .padding(.trailing, 24)
-                    .padding(.top, 24)
-                    .padding(.bottom, 24)
+                    .frame(width: SettingsVisualTokens.SettingsLayout.configurationWidth, alignment: .leading)
+                    .padding(.leading, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.trailing, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.top, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.bottom, SettingsVisualTokens.SettingsLayout.rowHeight)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.never)
         } else if let provider = selectedProvider {
             ScrollView {
                 relayProviderDetailPage(provider)
-                    .frame(width: 566, alignment: .leading)
-                    .padding(.leading, 24)
-                    .padding(.trailing, 24)
-                    .padding(.top, 24)
-                    .padding(.bottom, 24)
+                    .frame(width: SettingsVisualTokens.SettingsLayout.configurationWidth, alignment: .leading)
+                    .padding(.leading, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.trailing, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.top, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.bottom, SettingsVisualTokens.SettingsLayout.rowHeight)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.never)
@@ -65,22 +65,30 @@ extension SettingsView {
                 }
             ))
 
-            relayProviderIcon(size: 14)
-                .frame(width: 14, height: 14, alignment: .center)
+            relayProviderIcon(size: SettingsVisualTokens.Sidebar.iconSize)
+                .frame(
+                    width: SettingsVisualTokens.Sidebar.iconSize,
+                    height: SettingsVisualTokens.Sidebar.iconSize,
+                    alignment: .center
+                )
 
             Text(sidebarDisplayName(for: provider))
                 .font(.system(size: 12, weight: provider.enabled ? .semibold : .regular))
-                .foregroundStyle(Color.white.opacity(provider.enabled ? 0.80 : 0.40))
+                .foregroundStyle(provider.enabled ? SettingsVisualTokens.Text.primary : SettingsVisualTokens.Text.tertiary)
                 .lineLimit(1)
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
-        .frame(width: 164, height: 30, alignment: .leading)
+        .frame(
+            width: SettingsVisualTokens.Sidebar.rowWidth,
+            height: SettingsVisualTokens.Sidebar.rowHeight,
+            alignment: .leading
+        )
         .background {
             if isSelected {
-                SettingsSmoothedRoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.08))
+                SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
+                    .fill(SettingsVisualTokens.Fill.selectedRow)
             }
         }
         .contentShape(Rectangle())
@@ -107,7 +115,7 @@ extension SettingsView {
                 "Add your first relay proxy site to get started"
             ))
             .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.40))
+            .foregroundStyle(SettingsVisualTokens.Text.tertiary)
             .multilineTextAlignment(.center)
 
             Button {
@@ -142,11 +150,15 @@ extension SettingsView {
             Text(viewModel.localizedText("NewAPI站点", "NewAPI Site"))
                 .font(.system(size: 12, weight: .regular))
         }
-        .foregroundStyle(Color.white.opacity(0.80))
-        .frame(width: 164, height: 28, alignment: .center)
+        .foregroundStyle(SettingsVisualTokens.Text.primary)
+        .frame(
+            width: SettingsVisualTokens.Sidebar.rowWidth,
+            height: SettingsVisualTokens.Sidebar.addButtonHeight,
+            alignment: .center
+        )
         .background(
-            SettingsSmoothedRoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.08))
+            SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
+                .fill(SettingsVisualTokens.Fill.selectedRow)
         )
     }
 
@@ -178,8 +190,11 @@ extension SettingsView {
         )
 
         return HStack(alignment: .center, spacing: 8) {
-            relayProviderIcon(size: 24)
-                .frame(width: 24, height: 24)
+            relayProviderIcon(size: SettingsVisualTokens.Sidebar.headerIconSize)
+                .frame(
+                    width: SettingsVisualTokens.Sidebar.headerIconSize,
+                    height: SettingsVisualTokens.Sidebar.headerIconSize
+                )
 
             if editingNewRelaySiteName {
                 relayTitleEditField(
@@ -201,7 +216,11 @@ extension SettingsView {
 
             Spacer(minLength: 0)
         }
-        .frame(width: 566, height: 24, alignment: .leading)
+        .frame(
+            width: SettingsVisualTokens.SettingsLayout.configurationWidth,
+            height: SettingsVisualTokens.SettingsLayout.rowHeight,
+            alignment: .leading
+        )
     }
 
     var relayNewSiteDraftUsagePanel: some View {
@@ -234,8 +253,11 @@ extension SettingsView {
         )
 
         return HStack(alignment: .center, spacing: 8) {
-            relayProviderIcon(size: 24)
-                .frame(width: 24, height: 24)
+            relayProviderIcon(size: SettingsVisualTokens.Sidebar.headerIconSize)
+                .frame(
+                    width: SettingsVisualTokens.Sidebar.headerIconSize,
+                    height: SettingsVisualTokens.Sidebar.headerIconSize
+                )
 
             if isEditing {
                 relayTitleEditField(
@@ -259,7 +281,11 @@ extension SettingsView {
 
             relayHeaderTrailingControls(provider)
         }
-        .frame(width: 566, height: 24, alignment: .leading)
+        .frame(
+            width: SettingsVisualTokens.SettingsLayout.configurationWidth,
+            height: SettingsVisualTokens.SettingsLayout.rowHeight,
+            alignment: .leading
+        )
     }
 
     func beginNewRelaySiteNameEdit() {
@@ -356,8 +382,8 @@ extension SettingsView {
         }
         .frame(width: 240, height: 24, alignment: .leading)
         .background(
-            SettingsSmoothedRoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(settingsUsesLightAppearance ? 0.10 : 0.15))
+            SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
+                .fill(settingsUsesLightAppearance ? Color.white.opacity(0.10) : SettingsVisualTokens.Fill.control)
         )
     }
 
@@ -414,9 +440,9 @@ extension SettingsView {
                     get: { provider.enabled },
                     set: { viewModel.setEnabled($0, providerID: provider.id) }
                 ),
-                offTrackColor: Color.white.opacity(0.15),
-                onTrackColor: Color.white.opacity(0.40),
-                knobColor: Color.white.opacity(0.80)
+                offTrackColor: SettingsVisualTokens.Fill.control,
+                onTrackColor: SettingsVisualTokens.Text.tertiary,
+                knobColor: SettingsVisualTokens.Text.primary
             )
         }
         .frame(width: 88, height: 24, alignment: .trailing)
@@ -430,56 +456,45 @@ extension SettingsView {
         let used = snapshot?.used
         let limit = snapshot?.limit ?? relayUsageTotalFallback(remaining: remaining, used: used)
 
-        return VStack(alignment: .leading, spacing: 16) {
-            Text(viewModel.localizedText("用量", "Usage"))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.80))
-                .frame(width: 566, height: 12, alignment: .leading)
+        return settingsConfigurationSection(title: viewModel.localizedText("用量", "Usage")) {
+            HStack(alignment: .center, spacing: 0) {
+                relayUsageMetric(
+                    title: viewModel.localizedText("余额", "Balance"),
+                    value: formattedRelayUsageAmount(remaining ?? 0)
+                )
 
-            settingsOutlineCard(
-                padding: 0,
-                cornerRadius: 8,
-                strokeOpacity: 0.15
-            ) {
-                HStack(alignment: .center, spacing: 0) {
-                    relayUsageMetric(
-                        title: viewModel.localizedText("余额", "Balance"),
-                        value: formattedRelayUsageAmount(remaining ?? 0)
-                    )
+                Spacer(minLength: 0)
 
-                    Spacer(minLength: 0)
+                relayUsageMetric(
+                    title: viewModel.localizedText("已消耗", "Used"),
+                    value: formattedRelayUsageAmount(used ?? 0)
+                )
 
-                    relayUsageMetric(
-                        title: viewModel.localizedText("已消耗", "Used"),
-                        value: formattedRelayUsageAmount(used ?? 0)
-                    )
+                Spacer(minLength: 0)
 
-                    Spacer(minLength: 0)
-
-                    relayUsageMetric(
-                        title: viewModel.localizedText("总额", "Total"),
-                        value: formattedRelayUsageAmount(limit ?? 0)
-                    )
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
-                .frame(width: 566, height: 64, alignment: .center)
+                relayUsageMetric(
+                    title: viewModel.localizedText("总额", "Total"),
+                    value: formattedRelayUsageAmount(limit ?? 0)
+                )
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .frame(width: 566, height: 64, alignment: .center)
         }
-        .frame(width: 566, height: 92, alignment: .topLeading)
+        .frame(width: 566, alignment: .topLeading)
     }
 
     func relayUsageMetric(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.40))
+                .foregroundStyle(SettingsVisualTokens.Text.tertiary)
                 .lineLimit(1)
                 .frame(height: 10, alignment: .leading)
 
             Text(value)
                 .font(AppFonts.numeric(size: 14, fallbackWeight: .bold))
-                .foregroundStyle(Color.white.opacity(0.80))
+                .foregroundStyle(SettingsVisualTokens.Text.primary)
                 .lineLimit(1)
                 .frame(width: 140, height: 14, alignment: .leading)
         }
@@ -545,7 +560,7 @@ extension SettingsView {
             currentText: nil,
             planType: nil,
             statusText: statusText,
-            statusColor: newRelaySiteDraft.testStatusVisible ? Color(hex: 0x69BD64) : .clear,
+            statusColor: newRelaySiteDraft.testStatusVisible ? SettingsVisualTokens.Status.sufficient : .clear,
             errorText: nil,
             metrics: metrics,
             actions: actions,
@@ -633,9 +648,9 @@ extension SettingsView {
                     officialSubscriptionSidebarRow(provider)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
+            .padding(.horizontal, SettingsVisualTokens.Sidebar.horizontalPadding)
+            .padding(.top, SettingsVisualTokens.Sidebar.verticalPadding)
+            .padding(.bottom, SettingsVisualTokens.Sidebar.verticalPadding)
         }
         .scrollIndicators(.never)
     }
@@ -645,11 +660,11 @@ extension SettingsView {
         if let provider = selectedProvider {
             ScrollView {
                 officialSubscriptionDetailPage(provider)
-                    .frame(width: 566, alignment: .leading)
-                    .padding(.leading, 24)
-                    .padding(.trailing, 24)
-                    .padding(.top, 24)
-                    .padding(.bottom, 24)
+                    .frame(width: SettingsVisualTokens.SettingsLayout.configurationWidth, alignment: .leading)
+                    .padding(.leading, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.trailing, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.top, SettingsVisualTokens.SettingsLayout.rowHeight)
+                    .padding(.bottom, SettingsVisualTokens.SettingsLayout.rowHeight)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.never)
@@ -695,13 +710,17 @@ extension SettingsView {
                 }
             ))
 
-            providerIcon(for: provider, size: 14)
-                .frame(width: 14, height: 14, alignment: .center)
+            providerIcon(for: provider, size: SettingsVisualTokens.Sidebar.iconSize)
+                .frame(
+                    width: SettingsVisualTokens.Sidebar.iconSize,
+                    height: SettingsVisualTokens.Sidebar.iconSize,
+                    alignment: .center
+                )
                 .opacity(0.8)
 
             Text(sidebarDisplayName(for: provider))
                 .font(.system(size: 12, weight: provider.enabled ? .semibold : .regular))
-                .foregroundStyle(Color.white.opacity(provider.enabled ? 0.80 : 0.40))
+                .foregroundStyle(provider.enabled ? SettingsVisualTokens.Text.primary : SettingsVisualTokens.Text.tertiary)
                 .lineLimit(1)
 
             Spacer(minLength: 0)
@@ -711,11 +730,15 @@ extension SettingsView {
             }
         }
         .padding(.horizontal, 8)
-        .frame(width: 164, height: 30, alignment: .leading)
+        .frame(
+            width: SettingsVisualTokens.Sidebar.rowWidth,
+            height: SettingsVisualTokens.Sidebar.rowHeight,
+            alignment: .leading
+        )
         .background {
             if isSelected {
-                SettingsSmoothedRoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.08))
+                SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
+                    .fill(SettingsVisualTokens.Fill.selectedRow)
             }
         }
         .overlay(alignment: navigationState.dropTargetInsertAfter ? .bottom : .top) {
@@ -752,8 +775,11 @@ extension SettingsView {
 
     func officialSubscriptionHeader(_ provider: ProviderDescriptor) -> some View {
         HStack(alignment: .center, spacing: 8) {
-            providerIcon(for: provider, size: 24)
-                .frame(width: 24, height: 24)
+            providerIcon(for: provider, size: SettingsVisualTokens.Sidebar.headerIconSize)
+                .frame(
+                    width: SettingsVisualTokens.Sidebar.headerIconSize,
+                    height: SettingsVisualTokens.Sidebar.headerIconSize
+                )
                 .opacity(0.8)
 
             Text(sidebarDisplayName(for: provider))
@@ -775,13 +801,17 @@ extension SettingsView {
                         get: { provider.enabled },
                         set: { viewModel.setEnabled($0, providerID: provider.id) }
                     ),
-                    offTrackColor: Color.white.opacity(0.15),
-                    onTrackColor: Color.white.opacity(0.40),
-                    knobColor: Color.white.opacity(0.80)
+                    offTrackColor: SettingsVisualTokens.Fill.control,
+                    onTrackColor: SettingsVisualTokens.Text.tertiary,
+                    knobColor: SettingsVisualTokens.Text.primary
                 )
             }
         }
-        .frame(width: 566, height: 24, alignment: .leading)
+        .frame(
+            width: SettingsVisualTokens.SettingsLayout.configurationWidth,
+            height: SettingsVisualTokens.SettingsLayout.rowHeight,
+            alignment: .leading
+        )
     }
 
     @ViewBuilder
@@ -813,7 +843,7 @@ extension SettingsView {
         } else {
             Image(systemName: fallback)
                 .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.80))
+                .foregroundStyle(SettingsVisualTokens.Text.primary)
                 .frame(width: 16, height: 16)
         }
     }
@@ -826,8 +856,8 @@ extension SettingsView {
         VStack(alignment: .leading, spacing: spacing) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.80))
-                .frame(width: 566, height: 12, alignment: .leading)
+                .foregroundStyle(SettingsVisualTokens.Text.primary)
+                .frame(width: SettingsVisualTokens.SettingsLayout.configurationWidth, height: 12, alignment: .leading)
 
             controls()
         }
@@ -847,7 +877,7 @@ extension SettingsView {
             if shouldShowEmptyState {
                 officialSubscriptionSectionCard(
                     padding: 0,
-                    cornerRadius: 8,
+                    cornerRadius: SettingsVisualTokens.Radius.control,
                     strokeOpacity: 0.15
                 ) {
                     officialSubscriptionCenteredPlaceholder(
@@ -864,7 +894,7 @@ extension SettingsView {
             } else {
                 officialSubscriptionSectionCard(
                     padding: 0,
-                    cornerRadius: 8,
+                    cornerRadius: SettingsVisualTokens.Radius.control,
                     strokeOpacity: 0.15
                 ) {
                     officialLocalTrendSection(
@@ -918,11 +948,11 @@ extension SettingsView {
                     }
                 }
             }
-            .frame(width: 566, height: 22, alignment: .center)
+            .frame(width: SettingsVisualTokens.SettingsLayout.configurationWidth, height: 22, alignment: .center)
 
             officialSubscriptionSectionCard(
                 padding: 0,
-                cornerRadius: 8,
+                cornerRadius: SettingsVisualTokens.Radius.control,
                 strokeOpacity: 0.15
             ) {
                 if officialSubscriptionHasNoAccounts(provider) {
@@ -947,15 +977,15 @@ extension SettingsView {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.80))
+                .foregroundStyle(SettingsVisualTokens.Text.primary)
                 .lineLimit(1)
                 .padding(.horizontal, 10)
                 .frame(minWidth: width)
                 .frame(height: 22)
                 .background(Color.clear)
                 .overlay(
-                    SettingsSmoothedRoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.white.opacity(0.80), lineWidth: 1)
+                    SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.compact)
+                        .stroke(SettingsVisualTokens.Text.primary, lineWidth: SettingsVisualTokens.Stroke.hairline)
                 )
         }
         .buttonStyle(.plain)
@@ -985,7 +1015,7 @@ extension SettingsView {
         )
         .overlay(
             SettingsSmoothedRoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color.white.opacity(strokeOpacity), lineWidth: 1)
+                .stroke(Color.white.opacity(strokeOpacity), lineWidth: SettingsVisualTokens.Stroke.hairline)
         )
     }
 
@@ -1039,7 +1069,7 @@ extension SettingsView {
     var dividerLine: some View {
         Rectangle()
             .fill(dividerColor)
-            .frame(height: 1)
+            .frame(height: SettingsVisualTokens.Menu.dividerHeight)
     }
 
     @ViewBuilder
@@ -1256,12 +1286,15 @@ extension SettingsView {
         .padding(.horizontal, 10)
         .frame(height: 38)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control, style: .continuous)
                 .fill(isSelected ? settingsSelectedRowFillColor : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor, lineWidth: 1)
+            RoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control, style: .continuous)
+                .stroke(
+                    isSelected ? settingsSelectedRowStrokeColor : settingsRowStrokeColor,
+                    lineWidth: SettingsVisualTokens.Stroke.hairline
+                )
         )
         .overlay(alignment: navigationState.dropTargetInsertAfter ? .bottom : .top) {
             if provider.enabled,

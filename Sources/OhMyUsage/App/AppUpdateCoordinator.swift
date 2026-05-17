@@ -127,10 +127,10 @@ final class AppUpdateCoordinator {
     func settingsDisplayState(
         for state: UpdateStore,
         localizedText: (String, String) -> String
-    ) -> AppViewModel.SettingsUpdateDisplayState {
+    ) -> SettingsUpdateDisplayState {
         let canRetryUpdateAction = canRetryUpdateAction(for: state)
         if state.updateInstallErrorMessage != nil {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .failed,
                 statusText: localizedText("安装失败", "Install Failed"),
                 tone: .negative,
@@ -139,7 +139,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.updateCheckErrorMessage != nil {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .checkFailed,
                 statusText: localizedText("检查失败", "Check Failed"),
                 tone: .negative,
@@ -148,7 +148,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.updateInstallBufferingInFlight || state.updateInstallationInFlight {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .installBuffering,
                 statusText: localizedText("即将安装重启...", "Installing and restarting..."),
                 tone: .positive,
@@ -157,7 +157,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.updateDownloadInFlight {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .downloading,
                 statusText: localizedText("正在下载...", "Downloading..."),
                 tone: .positive,
@@ -166,7 +166,7 @@ final class AppUpdateCoordinator {
             )
         }
         if let update = state.availableUpdate {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .updateAvailable(version: update.latestVersion),
                 statusText: localizedText("新版本 \(update.latestVersion)", "New \(update.latestVersion)"),
                 tone: .positive,
@@ -175,7 +175,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.lastCheckedLatestVersion != nil {
-            return AppViewModel.SettingsUpdateDisplayState(
+            return SettingsUpdateDisplayState(
                 kind: .upToDate,
                 statusText: localizedText("已经是最新版本", "Up to Date"),
                 tone: .positive,
@@ -183,7 +183,7 @@ final class AppUpdateCoordinator {
                 isRetryEnabled: false
             )
         }
-        return AppViewModel.SettingsUpdateDisplayState(
+        return SettingsUpdateDisplayState(
             kind: .idle,
             statusText: nil,
             tone: .neutral,
@@ -195,10 +195,10 @@ final class AppUpdateCoordinator {
     func menuDisplayState(
         for state: UpdateStore,
         localizedText: (String, String) -> String
-    ) -> AppViewModel.MenuUpdateDisplayState {
+    ) -> MenuUpdateDisplayState {
         let canRetryUpdateAction = canRetryUpdateAction(for: state)
         if state.updateInstallErrorMessage != nil {
-            return AppViewModel.MenuUpdateDisplayState(
+            return MenuUpdateDisplayState(
                 kind: .failed,
                 statusText: localizedText("安装失败", "Install Failed"),
                 tone: .negative,
@@ -207,7 +207,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.updateInstallBufferingInFlight || state.updateInstallationInFlight {
-            return AppViewModel.MenuUpdateDisplayState(
+            return MenuUpdateDisplayState(
                 kind: .installBuffering,
                 statusText: localizedText("即将安装重启...", "Installing and restarting..."),
                 tone: .positive,
@@ -216,7 +216,7 @@ final class AppUpdateCoordinator {
             )
         }
         if state.updateDownloadInFlight {
-            return AppViewModel.MenuUpdateDisplayState(
+            return MenuUpdateDisplayState(
                 kind: .downloading,
                 statusText: localizedText("正在下载...", "Downloading..."),
                 tone: .positive,
@@ -225,7 +225,7 @@ final class AppUpdateCoordinator {
             )
         }
         if let update = state.availableUpdate {
-            return AppViewModel.MenuUpdateDisplayState(
+            return MenuUpdateDisplayState(
                 kind: .updateAvailable(version: update.latestVersion),
                 statusText: localizedText("新版本 \(update.latestVersion)", "New \(update.latestVersion)"),
                 tone: .positive,
@@ -233,7 +233,7 @@ final class AppUpdateCoordinator {
                 isRetryEnabled: isActionEnabled(for: state)
             )
         }
-        return AppViewModel.MenuUpdateDisplayState(
+        return MenuUpdateDisplayState(
             kind: .idle,
             statusText: nil,
             tone: .neutral,
@@ -479,46 +479,6 @@ final class AppUpdateCoordinator {
 }
 
 extension AppViewModel {
-    enum UpdateDisplayTone: Equatable {
-        case neutral
-        case positive
-        case negative
-    }
-
-    struct SettingsUpdateDisplayState: Equatable {
-        enum Kind: Equatable {
-            case idle
-            case checkFailed
-            case upToDate
-            case updateAvailable(version: String)
-            case downloading
-            case installBuffering
-            case failed
-        }
-
-        var kind: Kind
-        var statusText: String?
-        var tone: UpdateDisplayTone
-        var retryTitle: String?
-        var isRetryEnabled: Bool
-    }
-
-    struct MenuUpdateDisplayState: Equatable {
-        enum Kind: Equatable {
-            case idle
-            case updateAvailable(version: String)
-            case downloading
-            case installBuffering
-            case failed
-        }
-
-        var kind: Kind
-        var statusText: String?
-        var tone: UpdateDisplayTone
-        var retryTitle: String?
-        var isRetryEnabled: Bool
-    }
-
     var settingsUpdateDisplayState: SettingsUpdateDisplayState {
         updateCoordinator.settingsDisplayState(
             for: updateStateStorage,

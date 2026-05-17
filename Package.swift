@@ -23,18 +23,11 @@ let package = Package(
         ),
         .target(
             name: "OhMyUsageProviders",
-            dependencies: [
-                "OhMyUsageDomain",
-                "OhMyUsageInfrastructure"
-            ]
+            dependencies: ["OhMyUsageDomain"]
         ),
         .target(
             name: "OhMyUsageApplication",
-            dependencies: [
-                "OhMyUsageDomain",
-                "OhMyUsageInfrastructure",
-                "OhMyUsageProviders"
-            ]
+            dependencies: ["OhMyUsageDomain"]
         ),
         .target(
             name: "OhMyUsagePresentation",
@@ -72,7 +65,19 @@ let package = Package(
         ),
         .testTarget(
             name: "OhMyUsageTests",
-            dependencies: ["OhMyUsage"]
+            dependencies: [
+                "OhMyUsage",
+                "OhMyUsageDomain",
+                "OhMyUsageInfrastructure",
+                "OhMyUsageProviders",
+                "OhMyUsageApplication",
+                "OhMyUsagePresentation",
+                "OhMyUsageFeatures",
+                "OhMyUsageBootstrap"
+            ],
+            exclude: [
+                "Fixtures"
+            ]
         )
     ]
 )

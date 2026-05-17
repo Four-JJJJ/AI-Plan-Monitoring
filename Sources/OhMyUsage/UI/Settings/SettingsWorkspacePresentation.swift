@@ -10,9 +10,21 @@ struct SettingsHeaderPresentation: Equatable {
 struct SettingsSidebarItemPresentation: Identifiable, Equatable {
     var tab: SettingsTab
     var icon: String
+    var selectedIcon: String
     var title: String
 
     var id: String { tab.rawValue }
+
+    init(tab: SettingsTab, icon: String, selectedIcon: String? = nil, title: String) {
+        self.tab = tab
+        self.icon = icon
+        self.selectedIcon = selectedIcon ?? icon
+        self.title = title
+    }
+
+    func iconName(isSelected: Bool) -> String {
+        isSelected ? selectedIcon : icon
+    }
 }
 
 struct SettingsSidebarSectionPresentation: Identifiable, Equatable {
@@ -60,6 +72,12 @@ enum SettingsWorkspacePresenter {
                 "调整菜单栏里显示哪些模型、如何显示以及跟随哪种外观。",
                 "Adjust which models appear in the menubar, how they render, and which appearance mode they use."
             )
+        case .usageAnalytics:
+            title = localizedText("使用统计", "Usage Analytics")
+            subtitle = localizedText(
+                "汇总本地服务、模型和供应商的请求与 Token 使用趋势。",
+                "Summarize local request and token usage by service, model, and provider."
+            )
         case .permissions:
             title = localizedText("权限", "Permissions")
             subtitle = localizedText(
@@ -83,6 +101,12 @@ enum SettingsWorkspacePresenter {
             subtitle = localizedText(
                 "配置 Relay、New API 和第三方余额接口。",
                 "Configure Relay, New API, and third-party balance endpoints."
+            )
+        case .donate:
+            title = localizedText("请我喝咖啡", "Buy me a coffee")
+            subtitle = localizedText(
+                "如果 oh-myusage 帮到了你，可以请我喝杯咖啡，或者随手赞赏支持一下继续维护。",
+                "If oh-myusage has helped you, you can buy me a coffee or support continued maintenance."
             )
         }
 
@@ -112,6 +136,12 @@ enum SettingsWorkspacePresenter {
                     title: "",
                     items: [
                         SettingsSidebarItemPresentation(
+                            tab: .usageAnalytics,
+                            icon: "settings_sidebar_usage_icon",
+                            selectedIcon: "settings_sidebar_usage_icon_selected",
+                            title: localizedText("使用统计", "Usage")
+                        ),
+                        SettingsSidebarItemPresentation(
                             tab: .general,
                             icon: "settings_sidebar_general_icon",
                             title: generalTabTitle
@@ -128,8 +158,14 @@ enum SettingsWorkspacePresenter {
                         ),
                         SettingsSidebarItemPresentation(
                             tab: .customProviders,
-                            icon: "menu_relay_icon",
+                            icon: "settings_sidebar_relay_icon",
                             title: localizedText("中转代理", "Relay")
+                        ),
+                        SettingsSidebarItemPresentation(
+                            tab: .donate,
+                            icon: "settings_sidebar_donate_icon",
+                            selectedIcon: "settings_sidebar_donate_icon_selected",
+                            title: localizedText("请我喝咖啡", "Buy me a coffee")
                         )
                     ]
                 )

@@ -1,9 +1,9 @@
 import Foundation
 
 struct AppConfigurationPersistenceFeedback: Equatable {
-    var kind: AppViewModel.SettingsPersistenceDisplayState.Kind
+    var kind: SettingsPersistenceDisplayState.Kind
     var statusText: String
-    var tone: AppViewModel.UpdateDisplayTone
+    var tone: UpdateDisplayTone
     var detail: String?
 }
 

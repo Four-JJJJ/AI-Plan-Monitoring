@@ -78,7 +78,7 @@ extension SettingsView {
         .padding(12)
         .background(
             SettingsSmoothedRoundedRectangle(cornerRadius: settingsSectionCornerRadius)
-                .fill(settingsSubtlePanelFillColor)
+                .fill(Color.clear)
         )
         .overlay(
             SettingsSmoothedRoundedRectangle(cornerRadius: settingsSectionCornerRadius)

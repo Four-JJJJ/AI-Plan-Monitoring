@@ -6,7 +6,7 @@ import XCTest
 final class AppSettingsPersistenceFeedbackCoordinatorTests: XCTestCase {
     func testApplyFeedbackUpdatesDisplayStateAndReturnsSuccess() {
         let coordinator = AppSettingsPersistenceFeedbackCoordinator(clearDelaySeconds: 1)
-        var displayState = AppViewModel.SettingsPersistenceDisplayState(
+        var displayState = SettingsPersistenceDisplayState(
             kind: .idle,
             statusText: nil,
             tone: .neutral
@@ -37,7 +37,7 @@ final class AppSettingsPersistenceFeedbackCoordinatorTests: XCTestCase {
 
     func testApplyFeedbackStoresFailureDetailThenAutoClears() async {
         let coordinator = AppSettingsPersistenceFeedbackCoordinator(clearDelaySeconds: 0.02)
-        var displayState = AppViewModel.SettingsPersistenceDisplayState(
+        var displayState = SettingsPersistenceDisplayState(
             kind: .idle,
             statusText: nil,
             tone: .neutral

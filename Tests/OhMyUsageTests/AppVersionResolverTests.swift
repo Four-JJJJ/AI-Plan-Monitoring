@@ -59,4 +59,12 @@ private final class HomeDirectoryFileManager: FileManager {
     override var homeDirectoryForCurrentUser: URL {
         homeDirectory
     }
+
+    override func fileExists(atPath path: String) -> Bool {
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard standardizedPath.hasPrefix(homeDirectory.path) else {
+            return false
+        }
+        return super.fileExists(atPath: path)
+    }
 }

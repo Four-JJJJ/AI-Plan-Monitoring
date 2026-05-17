@@ -40,6 +40,39 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("config.last-known-good.json").path))
     }
 
+    func testLoadGoldenPrimaryConfigSyncsMissingShadowSnapshots() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let directory = appSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let primaryURL = directory.appendingPathComponent("config.json")
+        try fixtureData("golden-primary-config.json").write(to: primaryURL, options: .atomic)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.language, .en)
+        XCTAssertEqual(loaded.resourceMode, .background10Minutes)
+        XCTAssertEqual(loaded.claudeStatusBarDisplaySlotID, .b)
+        XCTAssertEqual(loaded.statusBarProviderID, "open-golden-primary-relay")
+        XCTAssertTrue(loaded.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, ["codex-official", "open-golden-primary-relay"])
+        XCTAssertEqual(loaded.statusBarAppearanceMode, .dark)
+        XCTAssertEqual(loaded.statusBarDisplayStyle, .barNamePercent)
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "claude-official" && $0.enabled }))
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "open-golden-primary-relay" && $0.enabled }))
+
+        for filename in ["config.backup.json", "config.recovery.json", "config.last-known-good.json"] {
+            let url = directory.appendingPathComponent(filename)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "\(filename) should be created from primary")
+            let decoded = try AppConfig.decodeWithDiagnostics(from: Data(contentsOf: url))
+            XCTAssertFalse(decoded.diagnostics.hadLossyProviderDecoding)
+            XCTAssertEqual(decoded.config.statusBarProviderID, "open-golden-primary-relay")
+            XCTAssertTrue(decoded.config.providers.contains(where: { $0.id == "open-golden-primary-relay" && $0.enabled }))
+        }
+    }
+
     func testLoadRecoversEnabledOfficialProvidersFromPersistedProfilesWhenConfigMissing() throws {
         let root = try makeTempDirectory()
         let store = ConfigStore(baseDirectoryURL: root)
@@ -258,6 +291,41 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(loaded.providers.contains(where: { $0.id == "codex-official" && $0.enabled }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: preservedURL.path))
         XCTAssertEqual(try Data(contentsOf: preservedURL), lossyData)
+    }
+
+    func testSecondLoadRestoresGoldenLastKnownGoodAfterLossyCandidateIsPreserved() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let directory = appSupportDirectory(in: root)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let lossyData = try fixtureData("lossy-current-config.json")
+        try lossyData.write(to: directory.appendingPathComponent("config.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.backup.json"), options: .atomic)
+        try lossyData.write(to: directory.appendingPathComponent("config.recovery.json"), options: .atomic)
+        try fixtureData("golden-primary-config.json")
+            .write(to: directory.appendingPathComponent("config.last-known-good.json"), options: .atomic)
+
+        let firstLoad = try store.load()
+        let preservedURL = directory.appendingPathComponent("config.preserved-fallback-candidate.json")
+
+        XCTAssertTrue(store.lastLoadWasLossy)
+        XCTAssertEqual(firstLoad.statusBarProviderID, "codex-official")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preservedURL.path))
+        XCTAssertEqual(try Data(contentsOf: preservedURL), lossyData)
+
+        let secondLoad = try store.load()
+        let rewrittenPrimary = try AppConfig.decodeWithDiagnostics(
+            from: Data(contentsOf: directory.appendingPathComponent("config.json"))
+        )
+
+        XCTAssertFalse(store.lastLoadWasLossy)
+        XCTAssertEqual(secondLoad.statusBarProviderID, "open-golden-primary-relay")
+        XCTAssertTrue(secondLoad.statusBarMultiUsageEnabled)
+        XCTAssertEqual(secondLoad.statusBarMultiProviderIDs, ["codex-official", "open-golden-primary-relay"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preservedURL.path))
+        XCTAssertFalse(rewrittenPrimary.diagnostics.hadLossyProviderDecoding)
+        XCTAssertEqual(rewrittenPrimary.config.statusBarProviderID, "open-golden-primary-relay")
     }
 
     func testLoadPrefersPreservedFallbackCandidateBeforeDerivedPrimaryConfig() throws {
@@ -675,6 +743,33 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyDirectory.path))
     }
 
+    func testLegacyImportFromGoldenFixtureDoesNotOverwriteNonDefaultCurrentSettings() throws {
+        let root = try makeTempDirectory()
+        let store = ConfigStore(baseDirectoryURL: root)
+        let currentConfig = makeConfigWithRelayAndStatusBarState()
+        try store.save(currentConfig)
+        try writeLegacyConfigData(
+            fixtureData("legacy-aibalancemonitor-nondefault-settings.json"),
+            in: root,
+            directoryName: "AIBalanceMonitor"
+        )
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.language, currentConfig.language)
+        XCTAssertEqual(loaded.launchAtLoginEnabled, currentConfig.launchAtLoginEnabled)
+        XCTAssertEqual(loaded.showOfficialAccountEmailInMenuBar, currentConfig.showOfficialAccountEmailInMenuBar)
+        XCTAssertEqual(loaded.statusBarProviderID, currentConfig.statusBarProviderID)
+        XCTAssertEqual(loaded.statusBarMultiUsageEnabled, currentConfig.statusBarMultiUsageEnabled)
+        XCTAssertEqual(loaded.statusBarMultiProviderIDs, currentConfig.statusBarMultiProviderIDs)
+        XCTAssertEqual(loaded.statusBarAppearanceMode, currentConfig.statusBarAppearanceMode)
+        XCTAssertEqual(loaded.statusBarDisplayStyle, currentConfig.statusBarDisplayStyle)
+        XCTAssertTrue(loaded.providers.contains(where: { $0.id == "open-legacy-golden-relay" && $0.enabled }))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyImportMarkerURL(in: root).path))
+        XCTAssertEqual(legacyImportBackupDirectories(in: root).count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAppSupportDirectory(in: root).path))
+    }
+
     func testResetRemovesPrimaryAndBackup() throws {
         let root = try makeTempDirectory()
         let store = ConfigStore(baseDirectoryURL: root)
@@ -703,6 +798,14 @@ final class ConfigStoreTests: XCTestCase {
             .appendingPathComponent("config-store-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func fixtureData(_ name: String, filePath: String = #filePath) throws -> Data {
+        let fixturesURL = URL(fileURLWithPath: filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent("ConfigStore", isDirectory: true)
+        return try Data(contentsOf: fixturesURL.appendingPathComponent(name))
     }
 
     private func appSupportDirectory(in root: URL) -> URL {

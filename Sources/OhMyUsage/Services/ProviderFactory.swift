@@ -1,7 +1,14 @@
 import Foundation
+import OhMyUsageProviders
 
 protocol ProviderFactorying {
     func makeProvider(for descriptor: ProviderDescriptor) -> UsageProvider
+}
+
+extension ProviderFactorying {
+    func makeProviderFetcher(for descriptor: ProviderDescriptor) -> any UsageProviderFetching {
+        UsageProviderFetchingAdapter(provider: makeProvider(for: descriptor))
+    }
 }
 
 final class ProviderFactory: ProviderFactorying {
@@ -9,12 +16,14 @@ final class ProviderFactory: ProviderFactorying {
     private let kimiCookieService: KimiBrowserCookieService
     private let browserCookieService: BrowserCookieService
     private let browserCredentialService: BrowserCredentialService
+    private let registry: ProviderFactoryRegistry
 
     init(
         keychain: KeychainService,
         kimiCookieService: KimiBrowserCookieService = KimiBrowserCookieService(),
         browserCookieService: BrowserCookieService = BrowserCookieService(),
-        browserCredentialService: BrowserCredentialService? = nil
+        browserCredentialService: BrowserCredentialService? = nil,
+        registry: ProviderFactoryRegistry = ProviderFactoryRegistry()
     ) {
         self.keychain = keychain
         self.kimiCookieService = kimiCookieService
@@ -23,64 +32,19 @@ final class ProviderFactory: ProviderFactorying {
             bearerService: kimiCookieService,
             cookieService: browserCookieService
         )
+        self.registry = registry
     }
 
     func makeProvider(for descriptor: ProviderDescriptor) -> UsageProvider {
-        switch descriptor.type {
-        case .codex:
-            return CodexProvider(descriptor: descriptor, keychain: keychain, browserCookieService: browserCookieService)
-        case .claude:
-            return ClaudeProvider(descriptor: descriptor, keychain: keychain, browserCookieService: browserCookieService)
-        case .gemini:
-            return GeminiProvider(descriptor: descriptor)
-        case .copilot:
-            return CopilotProvider(descriptor: descriptor)
-        case .microsoftCopilot:
-            return MicrosoftCopilotProvider(descriptor: descriptor)
-        case .zai:
-            return ZaiProvider(descriptor: descriptor)
-        case .amp:
-            return AmpProvider(descriptor: descriptor)
-        case .cursor:
-            return CursorProvider(descriptor: descriptor)
-        case .jetbrains:
-            return JetBrainsProvider(descriptor: descriptor)
-        case .kiro:
-            return KiroProvider(descriptor: descriptor)
-        case .windsurf:
-            return WindsurfProvider(descriptor: descriptor)
-        case .trae:
-            return TraeProvider(
-                descriptor: descriptor,
+        registry.makeProvider(
+            for: descriptor,
+            dependencies: ProviderFactoryRegistry.Dependencies(
                 keychain: keychain,
+                kimiCookieService: kimiCookieService,
+                browserCookieService: browserCookieService,
                 browserCredentialService: browserCredentialService
             )
-        case .openrouterCredits, .openrouterAPI:
-            return OpenRouterProvider(descriptor: descriptor, keychain: keychain)
-        case .ollamaCloud:
-            return OllamaCloudProvider(
-                descriptor: descriptor,
-                keychain: keychain,
-                browserCookieService: browserCookieService
-            )
-        case .opencodeGo:
-            return OpenCodeGoProvider(
-                descriptor: descriptor,
-                keychain: keychain,
-                browserCookieService: browserCookieService
-            )
-        case .relay, .open, .dragon:
-            return RelayProvider(
-                descriptor: descriptor,
-                keychain: keychain,
-                browserCredentialService: browserCredentialService
-            )
-        case .kimi:
-            return KimiSmartProvider(
-                descriptor: descriptor,
-                keychain: keychain,
-                browserCookieService: kimiCookieService
-            )
-        }
+        )
     }
+
 }

@@ -11,7 +11,8 @@ final class BrowserCredentialService {
         let expiresAt: Date
     }
 
-    private let bearerService: KimiBrowserCookieService
+    private let storageReader: BrowserStorageCredentialReader
+    private let kimiCookieService: KimiBrowserCookieService
     private let cookieService: BrowserCookieService
     private let bearerCandidatesOverride: ((String) -> [BrowserDetectedCredential])?
     private let cookieHeaderOverride: ((String) -> BrowserDetectedCredential?)?
@@ -23,14 +24,17 @@ final class BrowserCredentialService {
     private var namedCookieCache: [String: ExpiringCacheEntry<BrowserDetectedCredential?>] = [:]
 
     init(
-        bearerService: KimiBrowserCookieService = KimiBrowserCookieService(),
+        bearerService: KimiBrowserCookieService? = nil,
+        storageReader: BrowserStorageCredentialReader = BrowserStorageCredentialReader(),
+        kimiCookieService: KimiBrowserCookieService? = nil,
         cookieService: BrowserCookieService = BrowserCookieService(),
         bearerCandidatesOverride: ((String) -> [BrowserDetectedCredential])? = nil,
         cookieHeaderOverride: ((String) -> BrowserDetectedCredential?)? = nil,
         namedCookieOverride: ((String, String) -> BrowserDetectedCredential?)? = nil,
         cacheTTL: TimeInterval = 5
     ) {
-        self.bearerService = bearerService
+        self.storageReader = storageReader
+        self.kimiCookieService = kimiCookieService ?? bearerService ?? KimiBrowserCookieService()
         self.cookieService = cookieService
         self.bearerCandidatesOverride = bearerCandidatesOverride
         self.cookieHeaderOverride = cookieHeaderOverride
@@ -55,9 +59,7 @@ final class BrowserCredentialService {
         if let bearerCandidatesOverride {
             resolved = bearerCandidatesOverride(normalizedHost)
         } else {
-            resolved = bearerService.detectBearerTokenCandidates(host: normalizedHost).map {
-                BrowserDetectedCredential(value: $0.token, source: $0.source)
-            }
+            resolved = storageReader.bearerTokenCandidates(host: normalizedHost)
         }
         cacheBearerCandidates(resolved, for: normalizedHost, now: now)
         return resolved
@@ -100,7 +102,7 @@ final class BrowserCredentialService {
             }
             if candidate == nil {
                 for candidateHost in hostCandidates(for: normalizedHost) {
-                    if let detected = bearerService.detectCookieHeader(host: candidateHost) {
+                    if let detected = kimiCookieService.detectCookieHeader(host: candidateHost) {
                         candidate = BrowserDetectedCredential(value: detected.token, source: detected.source)
                         break
                     }

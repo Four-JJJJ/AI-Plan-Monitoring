@@ -1,0 +1,96 @@
+{
+  "language": "en",
+  "resourceMode": "background10m",
+  "launchAtLoginEnabled": true,
+  "simplifiedRelayConfig": true,
+  "showOfficialAccountEmailInMenuBar": true,
+  "claudeStatusBarDisplaySlotID": "B",
+  "statusBarProviderID": "open-golden-primary-relay",
+  "statusBarMultiUsageEnabled": true,
+  "statusBarMultiProviderIDs": [
+    "codex-official",
+    "open-golden-primary-relay"
+  ],
+  "statusBarAppearanceMode": "dark",
+  "statusBarDisplayStyle": "barNamePercent",
+  "providers": [
+    {
+      "id": "codex-official",
+      "name": "Official Codex",
+      "family": "official",
+      "type": "codex",
+      "enabled": true,
+      "pollIntervalSec": 120,
+      "threshold": {
+        "lowRemaining": 20,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "localCodex"
+      },
+      "baseURL": "https://chatgpt.com"
+    },
+    {
+      "id": "claude-official",
+      "name": "Official Claude",
+      "family": "official",
+      "type": "claude",
+      "enabled": true,
+      "pollIntervalSec": 120,
+      "threshold": {
+        "lowRemaining": 20,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "none"
+      },
+      "baseURL": "https://claude.ai"
+    },
+    {
+      "id": "open-golden-primary-relay",
+      "name": "Golden Primary Relay",
+      "family": "thirdParty",
+      "type": "relay",
+      "enabled": true,
+      "pollIntervalSec": 60,
+      "threshold": {
+        "lowRemaining": 10,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "bearer",
+        "keychainService": "oh-myusage",
+        "keychainAccount": "golden-primary.invalid/sk-token"
+      },
+      "baseURL": "https://golden-primary.invalid",
+      "relayConfig": {
+        "adapterID": "generic-newapi",
+        "baseURL": "https://golden-primary.invalid",
+        "tokenChannelEnabled": true,
+        "balanceChannelEnabled": true,
+        "balanceAuth": {
+          "kind": "bearer",
+          "keychainService": "oh-myusage",
+          "keychainAccount": "golden-primary.invalid/auth-token"
+        },
+        "balanceCredentialMode": "manualPreferred",
+        "quotaDisplayMode": "remaining",
+        "manualOverrides": {
+          "authHeader": "Authorization",
+          "authScheme": "Bearer",
+          "userIDHeader": "New-Api-User",
+          "requestMethod": "GET",
+          "endpointPath": "/api/user/self",
+          "remainingExpression": "data.quota",
+          "usedExpression": "data.used_quota",
+          "limitExpression": "data.request_quota",
+          "successExpression": "success",
+          "unitExpression": "quota"
+        }
+      }
+    }
+  ]
+}

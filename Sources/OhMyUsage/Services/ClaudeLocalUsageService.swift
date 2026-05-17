@@ -54,6 +54,23 @@ final class ClaudeLocalUsageService {
         )
     }
 
+    func fetchEvents(
+        scope: LocalUsageTrendScope = .allAccounts,
+        currentConfigDir: String? = nil,
+        allConfigDirs: [String] = [],
+        since: Date
+    ) throws -> [LocalUsageEvent] {
+        scanProjectEvents(
+            projectRoots: resolvedProjectRoots(
+                scope: scope,
+                currentConfigDir: currentConfigDir,
+                allConfigDirs: allConfigDirs
+            ),
+            startOfLast30Days: since
+        )
+        .filter { $0.eventAt >= since }
+    }
+
     private func resolvedProjectRoots(
         scope: LocalUsageTrendScope,
         currentConfigDir: String?,
@@ -159,8 +176,8 @@ final class ClaudeLocalUsageService {
                 return
             }
 
-            let totalTokens = Self.tokenCount(from: usage)
-            guard totalTokens > 0 else { return }
+            let components = Self.tokenComponents(from: usage)
+            guard components.totalTokens > 0 else { return }
 
             let modelID = Self.stringValue(message["model"]) ?? "unknown"
             let signature = Self.eventSignature(root: root, message: message, fallbackLine: line)
@@ -169,7 +186,11 @@ final class ClaudeLocalUsageService {
                     signature: signature,
                     eventAt: eventAt,
                     modelID: modelID,
-                    totalTokens: totalTokens
+                    totalTokens: components.totalTokens,
+                    inputTokens: components.inputTokens,
+                    outputTokens: components.outputTokens,
+                    cacheReadTokens: components.cacheReadTokens,
+                    cacheWriteTokens: components.cacheWriteTokens
                 )
             )
         }
@@ -274,22 +295,24 @@ final class ClaudeLocalUsageService {
         return "claude|\(sessionID)|hash=\(stableHash(of: fallbackLine))"
     }
 
-    private static func tokenCount(from usage: [String: Any]) -> Int {
-        let keys = [
-            "input_tokens",
+    private static func tokenComponents(from usage: [String: Any]) -> LocalUsageTokenComponents {
+        let input = max(0, intValue(usage["input_tokens"]) ?? 0)
+        let outputKeys = [
             "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
             "reasoning_output_tokens",
             "tool_tokens"
         ]
-
-        var total = 0
-        for key in keys {
-            guard let value = intValue(usage[key]) else { continue }
-            total += max(0, value)
+        let output = outputKeys.reduce(0) { partial, key in
+            partial + max(0, intValue(usage[key]) ?? 0)
         }
-        return total
+        let cacheWrite = max(0, intValue(usage["cache_creation_input_tokens"]) ?? 0)
+        let cacheRead = max(0, intValue(usage["cache_read_input_tokens"]) ?? 0)
+        return LocalUsageTokenComponents(
+            inputTokens: input,
+            outputTokens: output,
+            cacheReadTokens: cacheRead,
+            cacheWriteTokens: cacheWrite
+        )
     }
 
     private static func intValue(_ value: Any?) -> Int? {

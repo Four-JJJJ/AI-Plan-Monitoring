@@ -1,5 +1,7 @@
 import Foundation
 import LocalAuthentication
+import OhMyUsageDomain
+import OhMyUsageInfrastructure
 import Security
 
 final class KeychainService: @unchecked Sendable {
@@ -180,6 +182,27 @@ final class KeychainService: @unchecked Sendable {
                 markSecureStorePrepared()
             }
         }
+        return ok
+    }
+
+    @discardableResult
+    func deleteToken(service: String, account: String) -> Bool {
+        let normalizedService = normalizedServiceName(service)
+        let key = cacheKey(service: normalizedService, account: account)
+
+        lock.lock()
+        tokenCache.removeValue(forKey: key)
+        missingCache.insert(key)
+        let snapshot = tokenCache
+        lock.unlock()
+
+        removeCredentialLength(for: key)
+        if useFileStorage {
+            return persist(snapshot)
+        }
+
+        let ok = persistSecureSnapshot(snapshot, interactive: false)
+        deleteSecureStoreItem(service: normalizedService, account: account)
         return ok
     }
 
@@ -487,6 +510,12 @@ final class KeychainService: @unchecked Sendable {
         defaults.set(snapshot, forKey: Self.credentialLengthDefaultsKey)
     }
 
+    private func removeCredentialLength(for key: String) {
+        var snapshot = credentialLengthSnapshot()
+        snapshot.removeValue(forKey: key)
+        defaults.set(snapshot, forKey: Self.credentialLengthDefaultsKey)
+    }
+
     private func readVaultSnapshotFromSecureStore(interactive: Bool) -> [String: String]? {
         guard let data = readDataFromSecureStore(
             service: Self.defaultServiceName,
@@ -714,5 +743,19 @@ final class KeychainService: @unchecked Sendable {
             return nil
         }
         return data
+    }
+}
+
+extension KeychainService: UsageCredentialStore {
+    func credential(for providerID: UsageProviderIdentity) async throws -> String? {
+        readToken(service: Self.defaultServiceName, account: providerID.rawValue)
+    }
+
+    func saveCredential(_ credential: String, for providerID: UsageProviderIdentity) async throws {
+        _ = saveToken(credential, service: Self.defaultServiceName, account: providerID.rawValue)
+    }
+
+    func removeCredential(for providerID: UsageProviderIdentity) async throws {
+        _ = deleteToken(service: Self.defaultServiceName, account: providerID.rawValue)
     }
 }

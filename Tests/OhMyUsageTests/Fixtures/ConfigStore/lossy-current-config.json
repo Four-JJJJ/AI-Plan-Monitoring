@@ -1,0 +1,46 @@
+{
+  "language": "en",
+  "resourceMode": "background5m",
+  "launchAtLoginEnabled": true,
+  "statusBarProviderID": "codex-official",
+  "statusBarMultiUsageEnabled": true,
+  "statusBarMultiProviderIDs": [
+    "codex-official",
+    "open-golden-primary-relay"
+  ],
+  "providers": [
+    {
+      "id": "legacy-opencode-go",
+      "name": "Legacy OpenCode Go",
+      "family": "official",
+      "type": "openCodeGo",
+      "enabled": true,
+      "pollIntervalSec": 60,
+      "threshold": {
+        "lowRemaining": 20,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "bearer"
+      }
+    },
+    {
+      "id": "codex-official",
+      "name": "Official Codex",
+      "family": "official",
+      "type": "codex",
+      "enabled": true,
+      "pollIntervalSec": 120,
+      "threshold": {
+        "lowRemaining": 20,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "localCodex"
+      },
+      "baseURL": "https://chatgpt.com"
+    }
+  ]
+}

@@ -71,7 +71,7 @@ struct SettingsWorkspaceSidebarView<Identity: View>: View {
             onSelectTab(item.tab)
         } label: {
             HStack(alignment: .center, spacing: 6) {
-                sidebarIcon(named: item.icon, opacity: isSelected ? 0.8 : 0.4)
+                sidebarIcon(named: item.iconName(isSelected: isSelected), opacity: isSelected ? 0.8 : 0.4)
                     .frame(width: 14, height: 14)
 
                 Text(item.title)

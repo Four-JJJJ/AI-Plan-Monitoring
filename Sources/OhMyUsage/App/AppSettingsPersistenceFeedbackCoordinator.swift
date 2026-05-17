@@ -2,9 +2,9 @@ import Foundation
 
 @MainActor
 final class AppSettingsPersistenceFeedbackCoordinator {
-    typealias DisplayState = AppViewModel.SettingsPersistenceDisplayState
-    typealias DisplayKind = AppViewModel.SettingsPersistenceDisplayState.Kind
-    typealias DisplayTone = AppViewModel.UpdateDisplayTone
+    typealias DisplayState = SettingsPersistenceDisplayState
+    typealias DisplayKind = SettingsPersistenceDisplayState.Kind
+    typealias DisplayTone = UpdateDisplayTone
     typealias StateUpdater = @MainActor (_ state: DisplayState, _ errorMessage: String?) -> Void
 
     private static let idleState = DisplayState(

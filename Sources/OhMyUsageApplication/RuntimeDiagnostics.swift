@@ -4,9 +4,12 @@ import Darwin.Mach
 package enum RuntimeDiagnosticsLimits {
     package static let snapshotNoteMaxLength = 384
     package static let localUsageTrendCacheMaxEntries = 24
+    package static let usageAnalyticsCacheMaxEntries = 16
     package static let thirdPartyBalanceBaselineCacheMaxEntries = 24
     package static let localUsageTrendCacheEntryTTL: TimeInterval = 15 * 60
     package static let localUsageTrendFingerprintProbeInterval: TimeInterval = 60
+    package static let usageAnalyticsCacheEntryTTL: TimeInterval = 15 * 60
+    package static let usageAnalyticsFingerprintProbeInterval: TimeInterval = 60
     package static let localUsageTrendModelBreakdownCacheEntries = 0
     package static let localSessionSignalActiveSleepSeconds: TimeInterval = 15
     package static let localSessionSignalIdleSleepSeconds: TimeInterval = 60

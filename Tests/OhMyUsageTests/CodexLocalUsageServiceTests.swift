@@ -128,6 +128,43 @@ final class CodexLocalUsageServiceTests: XCTestCase {
         XCTAssertEqual(byModel["unknown"], 12)
     }
 
+    func testFetchSummaryAllAccountsSeparatesOpenAIStyleCachedInputComponents() throws {
+        let now = try fixedDate("2026-04-18T12:00:00Z")
+        try writeSessionFile(
+            relativePath: "2026/04/18/rollout-components.jsonl",
+            lines: [
+                turnContextLine(timestamp: "2026-04-18T08:00:00Z", model: "gpt-5.5"),
+                tokenCountUsageLine(
+                    timestamp: "2026-04-18T08:05:00Z",
+                    key: "total_token_usage",
+                    input: 100,
+                    output: 50,
+                    cacheRead: 20,
+                    cacheWrite: 10,
+                    total: 160
+                )
+            ]
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let service = CodexLocalUsageService(
+            calendar: calendar,
+            nowProvider: { now }
+        )
+
+        let summary = try service.fetchSummary(
+            sessionsRootPath: sessionsDirectory.path,
+            scope: .allAccounts
+        )
+
+        XCTAssertEqual(summary.today.totalTokens, 160)
+        XCTAssertEqual(summary.today.inputTokens, 80)
+        XCTAssertEqual(summary.today.outputTokens, 50)
+        XCTAssertEqual(summary.today.cacheReadTokens, 20)
+        XCTAssertEqual(summary.today.cacheWriteTokens, 10)
+    }
+
     func testFetchSummaryAllAccountsReusesUnchangedSessionFileCacheAndRefreshesAfterChange() throws {
         let now = try fixedDate("2026-04-18T12:00:00Z")
         let relativePath = "2026/04/18/cached-rollout.jsonl"
@@ -815,6 +852,39 @@ final class CodexLocalUsageServiceTests: XCTestCase {
                 "output_tokens": 0,
                 "reasoning_output_tokens": 0,
                 "total_tokens": last
+            ]
+        ]
+        if let model {
+            info["model"] = model
+        }
+
+        return jsonLine([
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": [
+                "type": "token_count",
+                "info": info
+            ]
+        ])
+    }
+
+    private func tokenCountUsageLine(
+        timestamp: String,
+        key: String,
+        input: Int,
+        output: Int,
+        cacheRead: Int,
+        cacheWrite: Int,
+        total: Int,
+        model: String? = nil
+    ) -> String {
+        var info: [String: Any] = [
+            key: [
+                "input_tokens": input,
+                "cached_input_tokens": cacheRead,
+                "cache_creation_input_tokens": cacheWrite,
+                "output_tokens": output,
+                "total_tokens": total
             ]
         ]
         if let model {

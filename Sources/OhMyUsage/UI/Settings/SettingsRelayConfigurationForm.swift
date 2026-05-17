@@ -3,7 +3,6 @@ import SwiftUI
 
 extension SettingsView {
     func currentRelaySettingsDraft(for provider: ProviderDescriptor) -> RelaySettingsDraft {
-        let relayViewConfig = provider.relayViewConfig
         let providerAdapterID = provider.relayConfig?.adapterID
             ?? provider.relayManifest?.id
             ?? "generic-newapi"
@@ -11,44 +10,32 @@ extension SettingsView {
         let selectedTemplate = relaySiteTemplates.first(where: { $0.id == selectedTemplateID })?.manifest
             ?? provider.relayManifest
             ?? RelayAdapterRegistry.shared.manifest(for: provider.baseURL ?? "", preferredID: selectedTemplateID)
-        let tokenChannelEnabled = relayEditorDraft.tokenUsageEnabledInputs[provider.id]
-            ?? relayViewConfig?.tokenUsageEnabled
-            ?? selectedTemplate.match.defaultTokenChannelEnabled
-        let accountChannelEnabled = relayEditorDraft.accountEnabledInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.enabled
-            ?? selectedTemplate.match.defaultBalanceChannelEnabled
+        let seed = RelaySettingsDraftSeed(provider: provider, preferredAdapterID: selectedTemplateID, manifest: selectedTemplate)
         return RelaySettingsDraft(
             providerID: provider.id,
             name: resolvedRelayNameInput(
-                typedName: relayEditorDraft.providerNameInputs[provider.id] ?? provider.name,
+                typedName: relayEditorDraft.providerNameInputs[provider.id] ?? seed.name,
                 manifest: selectedTemplate
             ),
             baseURL: resolvedRelayBaseURLInput(
-                typedBaseURL: relayEditorDraft.baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
+                typedBaseURL: relayEditorDraft.baseURLInputs[provider.id] ?? seed.baseURL,
                 manifest: selectedTemplate
             ),
-            preferredAdapterID: relayEditorDraft.selectedRelayTemplateInputs[provider.id] ?? providerAdapterID,
-            balanceCredentialMode: relayEditorDraft.relayCredentialModeInputs[provider.id]
-                ?? provider.relayConfig?.balanceCredentialMode
-                ?? .manualPreferred,
-            tokenUsageEnabled: tokenChannelEnabled,
-            accountEnabled: accountChannelEnabled,
-            authHeader: relayEditorDraft.authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
-            authScheme: relayEditorDraft.authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
-            userID: relayEditorDraft.userIDInputs[provider.id]
-                ?? relayViewConfig?.accountBalance?.userID
-                ?? selectedTemplate.balanceRequest.userID
-                ?? "",
-            userIDHeader: relayEditorDraft.userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
-            endpointPath: relayEditorDraft.endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
-            remainingJSONPath: relayEditorDraft.remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
-            usedJSONPath: relayEditorDraft.usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
-            limitJSONPath: relayEditorDraft.limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
-            successJSONPath: relayEditorDraft.successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-            unit: relayEditorDraft.unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota"),
-            quotaDisplayMode: relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id]
-                ?? provider.relayConfig?.quotaDisplayMode
-                ?? .remaining
+            preferredAdapterID: seed.preferredAdapterID,
+            balanceCredentialMode: relayEditorDraft.relayCredentialModeInputs[provider.id] ?? seed.balanceCredentialMode,
+            tokenUsageEnabled: relayEditorDraft.tokenUsageEnabledInputs[provider.id] ?? seed.tokenUsageEnabled,
+            accountEnabled: relayEditorDraft.accountEnabledInputs[provider.id] ?? seed.accountEnabled,
+            authHeader: relayEditorDraft.authHeaderInputs[provider.id] ?? seed.authHeader,
+            authScheme: relayEditorDraft.authSchemeInputs[provider.id] ?? seed.authScheme,
+            userID: relayEditorDraft.userIDInputs[provider.id] ?? seed.userID,
+            userIDHeader: relayEditorDraft.userHeaderInputs[provider.id] ?? seed.userIDHeader,
+            endpointPath: relayEditorDraft.endpointPathInputs[provider.id] ?? seed.endpointPath,
+            remainingJSONPath: relayEditorDraft.remainingPathInputs[provider.id] ?? seed.remainingJSONPath,
+            usedJSONPath: relayEditorDraft.usedPathInputs[provider.id] ?? seed.usedJSONPath,
+            limitJSONPath: relayEditorDraft.limitPathInputs[provider.id] ?? seed.limitJSONPath,
+            successJSONPath: relayEditorDraft.successPathInputs[provider.id] ?? seed.successJSONPath,
+            unit: relayEditorDraft.unitInputs[provider.id] ?? seed.unit,
+            quotaDisplayMode: relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id] ?? seed.quotaDisplayMode
         )
     }
 
@@ -66,6 +53,7 @@ extension SettingsView {
 
     @ViewBuilder
     func relayCondensedConfigSection(_ provider: ProviderDescriptor) -> some View {
+        let providerConfiguration = providerConfigurationFacade
         let relayViewConfig = provider.relayViewConfig
         let accountAuth = relayViewConfig?.accountBalance?.auth
         let providerAdapterID = provider.relayConfig?.adapterID
@@ -75,63 +63,55 @@ extension SettingsView {
         let selectedTemplate = relaySiteTemplates.first(where: { $0.id == selectedTemplateID })?.manifest
             ?? provider.relayManifest
             ?? RelayAdapterRegistry.shared.manifest(for: provider.baseURL ?? "", preferredID: selectedTemplateID)
+        let seed = RelaySettingsDraftSeed(provider: provider, preferredAdapterID: selectedTemplateID, manifest: selectedTemplate)
         let accountChannelEnabled = relayEditorDraft.accountEnabledInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.enabled
-            ?? selectedTemplate.match.defaultBalanceChannelEnabled
+            ?? seed.accountEnabled
         let showBalanceCredential = accountChannelEnabled
-        let defaultUserID = relayViewConfig?.accountBalance?.userID
-            ?? selectedTemplate.balanceRequest.userID
-            ?? ""
+        let defaultUserID = seed.userID
         let showUserIDField = showBalanceCredential && relayTemplateNeedsManualUserID(selectedTemplate)
-        let currentBaseURL = relayEditorDraft.baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
+        let currentBaseURL = relayEditorDraft.baseURLInputs[provider.id] ?? seed.baseURL
         let balanceAuthHeader = relayEditorDraft.authHeaderInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.authHeader
-            ?? selectedTemplate.balanceRequest.authHeader
-            ?? "Authorization"
+            ?? seed.authHeader
         let balanceAuthScheme = relayEditorDraft.authSchemeInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.authScheme
-            ?? selectedTemplate.balanceRequest.authScheme
-            ?? "Bearer"
+            ?? seed.authScheme
         let balanceCredentialTemplate = relayCredentialTemplate(authHeader: balanceAuthHeader, authScheme: balanceAuthScheme)
         let quotaCredentialTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
         let credentialModeBinding = Binding<RelayCredentialMode>(
             get: {
                 relayEditorDraft.relayCredentialModeInputs[provider.id]
-                    ?? provider.relayConfig?.balanceCredentialMode
-                    ?? .manualPreferred
+                    ?? seed.balanceCredentialMode
             },
             set: { relayEditorDraft.relayCredentialModeInputs[provider.id] = $0 }
         )
         let quotaDisplayBinding: Binding<OfficialQuotaDisplayMode> = Binding(
             get: {
                 relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id]
-                    ?? provider.relayConfig?.quotaDisplayMode
-                    ?? .remaining
+                    ?? seed.quotaDisplayMode
             },
             set: { newValue in
                 relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id] = newValue
-                viewModel.updateThirdPartyQuotaDisplayMode(
+                providerConfiguration.updateThirdPartyQuotaDisplayMode(
                     providerID: provider.id,
                     quotaDisplayMode: newValue
                 )
             }
         )
         let persistRelaySettings: () -> Void = {
-            viewModel.saveRelayDraft(currentRelaySettingsDraft(for: provider))
+            providerConfiguration.saveRelayDraft(currentRelaySettingsDraft(for: provider))
         }
 
         let saveBalanceCredential: () -> Void = {
             guard let accountAuth else { return }
             let token = relayEditorDraft.systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else { return }
-            _ = viewModel.saveTokenAndRestart(token, auth: accountAuth)
+            _ = providerConfiguration.saveTokenAndRestart(token, auth: accountAuth)
             relayEditorDraft.systemTokenInputs[provider.id] = ""
         }
 
         let saveQuotaCredential: () -> Void = {
             let token = relayEditorDraft.tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else { return }
-            _ = viewModel.saveTokenAndRestart(token, for: provider)
+            _ = providerConfiguration.saveTokenAndRestart(token, for: provider)
             relayEditorDraft.tokenInputs[provider.id] = ""
         }
 
@@ -141,8 +121,8 @@ extension SettingsView {
             settingsConfigToggleRow(
                 title: officialStatusBarTitle,
                 isOn: Binding(
-                    get: { viewModel.isStatusBarProvider(providerID: provider.id) },
-                    set: { viewModel.setStatusBarDisplayEnabled($0, providerID: provider.id) }
+                    get: { providerConfiguration.isStatusBarProvider(providerID: provider.id) },
+                    set: { providerConfiguration.setStatusBarDisplayEnabled($0, providerID: provider.id) }
                 )
             )
 
@@ -198,8 +178,8 @@ extension SettingsView {
             relayCompactConfigRow(title: viewModel.localizedText("凭证", "Credential")) {
                 Group {
                     if showBalanceCredential {
-                        let hasSavedBalanceToken = accountAuth.map { viewModel.hasToken(auth: $0) } ?? false
-                        let savedBalanceTokenLength = accountAuth.flatMap { viewModel.savedTokenLength(auth: $0) }
+                        let hasSavedBalanceToken = accountAuth.map { providerConfiguration.hasToken(auth: $0) } ?? false
+                        let savedBalanceTokenLength = accountAuth.flatMap { providerConfiguration.savedTokenLength(auth: $0) }
                         settingsConfigSecureField(
                             hasSavedBalanceToken ? maskedSecretDots(length: savedBalanceTokenLength) : balanceCredentialTemplate.placeholder,
                             text: Binding(
@@ -209,8 +189,8 @@ extension SettingsView {
                         )
                         .onSubmit(saveBalanceCredential)
                     } else {
-                        let hasSavedToken = viewModel.hasToken(for: provider)
-                        let savedTokenLength = viewModel.savedTokenLength(for: provider)
+                        let hasSavedToken = providerConfiguration.hasToken(for: provider)
+                        let savedTokenLength = providerConfiguration.savedTokenLength(for: provider)
                         settingsConfigSecureField(
                             hasSavedToken ? maskedSecretDots(length: savedTokenLength) : quotaCredentialTemplate.placeholder,
                             text: Binding(
@@ -244,7 +224,7 @@ extension SettingsView {
                 ),
                 valueStyle: .number,
                 onValueCommit: { newValue in
-                    viewModel.commitProviderThreshold(newValue, providerID: provider.id)
+                    providerConfiguration.commitProviderThreshold(newValue, providerID: provider.id)
                 },
                 onEditingChanged: { editing in
                     if !editing {
@@ -265,7 +245,7 @@ extension SettingsView {
                     let providerID = provider.id
                     Task {
                         let draft = currentRelaySettingsDraft(for: provider)
-                        let result = await viewModel.testRelayDraft(draft)
+                        let result = await providerConfiguration.testRelayDraft(draft)
                         guard resultGeneration == relayTestResultGeneration,
                               navigationState.selectedProviderID == providerID else { return }
                         relayEditorDraft.relayTestResult[providerID] = result
@@ -387,6 +367,7 @@ extension SettingsView {
     }
 
     func openRelayConfigSection(_ provider: ProviderDescriptor) -> some View {
+        let providerConfiguration = providerConfigurationFacade
         let relayViewConfig = provider.relayViewConfig
         let accountAuth = relayViewConfig?.accountBalance?.auth
         let providerAdapterID = provider.relayConfig?.adapterID
@@ -396,35 +377,28 @@ extension SettingsView {
         let selectedTemplate = relaySiteTemplates.first(where: { $0.id == selectedTemplateID })?.manifest
             ?? provider.relayManifest
             ?? RelayAdapterRegistry.shared.manifest(for: provider.baseURL ?? "", preferredID: selectedTemplateID)
+        let seed = RelaySettingsDraftSeed(provider: provider, preferredAdapterID: selectedTemplateID, manifest: selectedTemplate)
         let currentPreset = providerAdapterID == "generic-newapi"
             ? nil
             : relayBuiltInPresets.first(where: { $0.id == providerAdapterID })?.manifest
         let tokenChannelEnabled = relayEditorDraft.tokenUsageEnabledInputs[provider.id]
-            ?? relayViewConfig?.tokenUsageEnabled
-            ?? selectedTemplate.match.defaultTokenChannelEnabled
+            ?? seed.tokenUsageEnabled
         let accountChannelEnabled = relayEditorDraft.accountEnabledInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.enabled
-            ?? selectedTemplate.match.defaultBalanceChannelEnabled
+            ?? seed.accountEnabled
         let showTokenCredential = tokenChannelEnabled
         let showBalanceCredential = accountChannelEnabled
-        let defaultUserID = relayViewConfig?.accountBalance?.userID
-            ?? selectedTemplate.balanceRequest.userID
-            ?? ""
+        let defaultUserID = seed.userID
         let showUserIDField = showBalanceCredential && relayTemplateNeedsManualUserID(selectedTemplate)
-        let currentBaseURL = relayEditorDraft.baseURLInputs[provider.id] ?? (provider.baseURL ?? "")
+        let currentBaseURL = relayEditorDraft.baseURLInputs[provider.id] ?? seed.baseURL
         let usesGenericTemplate = (relayEditorDraft.selectedRelayTemplateInputs[provider.id] ?? providerAdapterID) == "generic-newapi"
         let showNameField = true
         let showBaseURLField = usesGenericTemplate || requiresBaseURLInput(for: selectedTemplate, currentBaseURL: currentBaseURL)
         let tokenSaveButtonTitle = viewModel.language == .zhHans ? "保存" : "Save"
         let quotaCredentialTemplate = relayCredentialTemplate(authHeader: "Authorization", authScheme: "Bearer")
         let balanceAuthHeader = relayEditorDraft.authHeaderInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.authHeader
-            ?? selectedTemplate.balanceRequest.authHeader
-            ?? "Authorization"
+            ?? seed.authHeader
         let balanceAuthScheme = relayEditorDraft.authSchemeInputs[provider.id]
-            ?? relayViewConfig?.accountBalance?.authScheme
-            ?? selectedTemplate.balanceRequest.authScheme
-            ?? "Bearer"
+            ?? seed.authScheme
         let balanceCredentialTemplate = relayCredentialTemplate(authHeader: balanceAuthHeader, authScheme: balanceAuthScheme)
         let quotaFieldTitle = relayCredentialFieldName(isAccount: false, templateKind: quotaCredentialTemplate.kind)
         let balanceFieldTitle = relayCredentialFieldName(isAccount: true, templateKind: balanceCredentialTemplate.kind)
@@ -453,8 +427,7 @@ extension SettingsView {
         let credentialModeBinding = Binding<RelayCredentialMode>(
             get: {
                 relayEditorDraft.relayCredentialModeInputs[provider.id]
-                    ?? provider.relayConfig?.balanceCredentialMode
-                    ?? .manualPreferred
+                    ?? seed.balanceCredentialMode
             },
             set: { relayEditorDraft.relayCredentialModeInputs[provider.id] = $0 }
         )
@@ -463,37 +436,33 @@ extension SettingsView {
             RelaySettingsDraft(
                 providerID: provider.id,
                 name: resolvedRelayNameInput(
-                    typedName: relayEditorDraft.providerNameInputs[provider.id] ?? provider.name,
+                    typedName: relayEditorDraft.providerNameInputs[provider.id] ?? seed.name,
                     manifest: selectedTemplate
                 ),
                 baseURL: resolvedRelayBaseURLInput(
-                    typedBaseURL: relayEditorDraft.baseURLInputs[provider.id] ?? (provider.baseURL ?? ""),
+                    typedBaseURL: relayEditorDraft.baseURLInputs[provider.id] ?? seed.baseURL,
                     manifest: selectedTemplate
                 ),
-                preferredAdapterID: relayEditorDraft.selectedRelayTemplateInputs[provider.id] ?? providerAdapterID,
-                balanceCredentialMode: relayEditorDraft.relayCredentialModeInputs[provider.id]
-                    ?? provider.relayConfig?.balanceCredentialMode
-                    ?? .manualPreferred,
+                preferredAdapterID: seed.preferredAdapterID,
+                balanceCredentialMode: relayEditorDraft.relayCredentialModeInputs[provider.id] ?? seed.balanceCredentialMode,
                 tokenUsageEnabled: relayEditorDraft.tokenUsageEnabledInputs[provider.id] ?? tokenChannelEnabled,
                 accountEnabled: relayEditorDraft.accountEnabledInputs[provider.id] ?? accountChannelEnabled,
-                authHeader: relayEditorDraft.authHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authHeader ?? "Authorization"),
-                authScheme: relayEditorDraft.authSchemeInputs[provider.id] ?? (relayViewConfig?.accountBalance?.authScheme ?? "Bearer"),
+                authHeader: relayEditorDraft.authHeaderInputs[provider.id] ?? seed.authHeader,
+                authScheme: relayEditorDraft.authSchemeInputs[provider.id] ?? seed.authScheme,
                 userID: relayEditorDraft.userIDInputs[provider.id] ?? defaultUserID,
-                userIDHeader: relayEditorDraft.userHeaderInputs[provider.id] ?? (relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"),
-                endpointPath: relayEditorDraft.endpointPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"),
-                remainingJSONPath: relayEditorDraft.remainingPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"),
-                usedJSONPath: relayEditorDraft.usedPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.usedJSONPath ?? ""),
-                limitJSONPath: relayEditorDraft.limitPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.limitJSONPath ?? ""),
-                successJSONPath: relayEditorDraft.successPathInputs[provider.id] ?? (relayViewConfig?.accountBalance?.successJSONPath ?? ""),
-                unit: relayEditorDraft.unitInputs[provider.id] ?? (relayViewConfig?.accountBalance?.unit ?? "quota"),
-                quotaDisplayMode: relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id]
-                    ?? provider.relayConfig?.quotaDisplayMode
-                    ?? .remaining
+                userIDHeader: relayEditorDraft.userHeaderInputs[provider.id] ?? seed.userIDHeader,
+                endpointPath: relayEditorDraft.endpointPathInputs[provider.id] ?? seed.endpointPath,
+                remainingJSONPath: relayEditorDraft.remainingPathInputs[provider.id] ?? seed.remainingJSONPath,
+                usedJSONPath: relayEditorDraft.usedPathInputs[provider.id] ?? seed.usedJSONPath,
+                limitJSONPath: relayEditorDraft.limitPathInputs[provider.id] ?? seed.limitJSONPath,
+                successJSONPath: relayEditorDraft.successPathInputs[provider.id] ?? seed.successJSONPath,
+                unit: relayEditorDraft.unitInputs[provider.id] ?? seed.unit,
+                quotaDisplayMode: relayEditorDraft.thirdPartyQuotaDisplayModeInputs[provider.id] ?? seed.quotaDisplayMode
             )
         }
         let persistRelaySettings: () -> Void = {
             let draft = currentRelayDraft()
-            viewModel.saveRelayDraft(draft)
+            providerConfiguration.saveRelayDraft(draft)
         }
         let supportsBrowserImport = relayTemplateSupportsBrowserImport(selectedTemplate)
 
@@ -591,8 +560,8 @@ extension SettingsView {
             }
 
             if showBalanceCredential {
-                let hasSavedBalanceToken = accountAuth.map { viewModel.hasToken(auth: $0) } ?? false
-                let savedBalanceTokenLength = accountAuth.flatMap { viewModel.savedTokenLength(auth: $0) }
+                let hasSavedBalanceToken = accountAuth.map { providerConfiguration.hasToken(auth: $0) } ?? false
+                let savedBalanceTokenLength = accountAuth.flatMap { providerConfiguration.savedTokenLength(auth: $0) }
 
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: balanceFieldTitle) {
@@ -607,7 +576,7 @@ extension SettingsView {
                                 guard let accountAuth else { return }
                                 let token = relayEditorDraft.systemTokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
-                                _ = viewModel.saveTokenAndRestart(token, auth: accountAuth)
+                                _ = providerConfiguration.saveTokenAndRestart(token, auth: accountAuth)
                                 relayEditorDraft.systemTokenInputs[provider.id] = ""
                             }
                             .fixedSize(horizontal: true, vertical: false)
@@ -623,8 +592,8 @@ extension SettingsView {
             }
 
             if showTokenCredential {
-                let hasSavedToken = viewModel.hasToken(for: provider)
-                let savedTokenLength = viewModel.savedTokenLength(for: provider)
+                let hasSavedToken = providerConfiguration.hasToken(for: provider)
+                let savedTokenLength = providerConfiguration.savedTokenLength(for: provider)
 
                 VStack(alignment: .leading, spacing: 8) {
                     thirdPartyConfigRow(title: quotaFieldTitle) {
@@ -638,7 +607,7 @@ extension SettingsView {
                             settingsCapsuleButton(tokenSaveButtonTitle, dismissInputFocus: true) {
                                 let token = relayEditorDraft.tokenInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !token.isEmpty else { return }
-                                _ = viewModel.saveTokenAndRestart(token, for: provider)
+                                _ = providerConfiguration.saveTokenAndRestart(token, for: provider)
                                 relayEditorDraft.tokenInputs[provider.id] = ""
                             }
                             .fixedSize(horizontal: true, vertical: false)
@@ -674,7 +643,7 @@ extension SettingsView {
                     let resultGeneration = relayTestResultGeneration
                     let providerID = provider.id
                     Task {
-                        let result = await viewModel.testRelayDraft(currentRelayDraft())
+                        let result = await providerConfiguration.testRelayDraft(currentRelayDraft())
                         guard resultGeneration == relayTestResultGeneration,
                               navigationState.selectedProviderID == providerID else { return }
                         relayEditorDraft.relayTestResult[providerID] = result
@@ -686,7 +655,7 @@ extension SettingsView {
                         let resultGeneration = relayTestResultGeneration
                         let providerID = provider.id
                         Task {
-                            let result = await viewModel.importRelayDraftFromBrowser(currentRelayDraft())
+                            let result = await providerConfiguration.importRelayDraftFromBrowser(currentRelayDraft())
                             guard resultGeneration == relayTestResultGeneration,
                                   navigationState.selectedProviderID == providerID else { return }
                             relayEditorDraft.relayTestResult[providerID] = result
@@ -696,7 +665,7 @@ extension SettingsView {
 
                 if provider.family == .thirdParty && provider.id != "open-ailinyu" {
                     settingsCapsuleButton(viewModel.text(.removeProvider), destructive: true) {
-                        viewModel.removeProvider(providerID: provider.id)
+                        providerConfiguration.removeProvider(providerID: provider.id)
                     }
                 }
             }
@@ -709,7 +678,7 @@ extension SettingsView {
 
             dividerLine
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text(viewModel.language == .zhHans ? "连接状态" : "Connection status")
                     .font(settingsLabelFont)
                     .foregroundStyle(settingsBodyColor)
@@ -814,9 +783,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.authHeader), text: Binding(
                             get: {
                                 relayEditorDraft.authHeaderInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.authHeader
-                                    ?? selectedTemplate.balanceRequest.authHeader
-                                    ?? "Authorization"
+                                    ?? seed.authHeader
                             },
                             set: { relayEditorDraft.authHeaderInputs[provider.id] = $0 }
                         ))
@@ -824,9 +791,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.authScheme), text: Binding(
                             get: {
                                 relayEditorDraft.authSchemeInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.authScheme
-                                    ?? selectedTemplate.balanceRequest.authScheme
-                                    ?? "Bearer"
+                                    ?? seed.authScheme
                             },
                             set: { relayEditorDraft.authSchemeInputs[provider.id] = $0 }
                         ))
@@ -836,9 +801,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.userIDHeader), text: Binding(
                             get: {
                                 relayEditorDraft.userHeaderInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.userIDHeader
-                                    ?? selectedTemplate.balanceRequest.userIDHeader
-                                    ?? "New-Api-User"
+                                    ?? seed.userIDHeader
                             },
                             set: { relayEditorDraft.userHeaderInputs[provider.id] = $0 }
                         ))
@@ -846,8 +809,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.endpointPath), text: Binding(
                             get: {
                                 relayEditorDraft.endpointPathInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.endpointPath
-                                    ?? selectedTemplate.balanceRequest.path
+                                    ?? seed.endpointPath
                             },
                             set: { relayEditorDraft.endpointPathInputs[provider.id] = $0 }
                         ))
@@ -857,9 +819,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.unit), text: Binding(
                             get: {
                                 relayEditorDraft.unitInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.unit
-                                    ?? selectedTemplate.extract.unit
-                                    ?? "quota"
+                                    ?? seed.unit
                             },
                             set: { relayEditorDraft.unitInputs[provider.id] = $0 }
                         ))
@@ -867,8 +827,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.remainingPath), text: Binding(
                             get: {
                                 relayEditorDraft.remainingPathInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.remainingJSONPath
-                                    ?? selectedTemplate.extract.remaining
+                                    ?? seed.remainingJSONPath
                             },
                             set: { relayEditorDraft.remainingPathInputs[provider.id] = $0 }
                         ))
@@ -878,9 +837,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.usedPath), text: Binding(
                             get: {
                                 relayEditorDraft.usedPathInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.usedJSONPath
-                                    ?? selectedTemplate.extract.used
-                                    ?? ""
+                                    ?? seed.usedJSONPath
                             },
                             set: { relayEditorDraft.usedPathInputs[provider.id] = $0 }
                         ))
@@ -888,9 +845,7 @@ extension SettingsView {
                         relayCompactTextField(viewModel.text(.limitPath), text: Binding(
                             get: {
                                 relayEditorDraft.limitPathInputs[provider.id]
-                                    ?? relayViewConfig?.accountBalance?.limitJSONPath
-                                    ?? selectedTemplate.extract.limit
-                                    ?? ""
+                                    ?? seed.limitJSONPath
                             },
                             set: { relayEditorDraft.limitPathInputs[provider.id] = $0 }
                         ))
@@ -899,9 +854,7 @@ extension SettingsView {
                     relayCompactTextField(viewModel.text(.successPath), text: Binding(
                         get: {
                             relayEditorDraft.successPathInputs[provider.id]
-                                ?? relayViewConfig?.accountBalance?.successJSONPath
-                                ?? selectedTemplate.extract.success
-                                ?? ""
+                                ?? seed.successJSONPath
                         },
                         set: { relayEditorDraft.successPathInputs[provider.id] = $0 }
                     ))

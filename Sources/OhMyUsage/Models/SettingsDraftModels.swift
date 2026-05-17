@@ -29,10 +29,12 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case overview
     case general
     case menuBar
+    case usageAnalytics
     case permissions
     case localData
     case officialProviders
     case customProviders
+    case donate
 
     var id: String { rawValue }
 
@@ -58,7 +60,7 @@ struct ClaudeProfileEditorState: Identifiable, Equatable {
 }
 
 struct SettingsNavigationState: Equatable {
-    var selectedSettingsTab: SettingsTab = .general
+    var selectedSettingsTab: SettingsTab = .usageAnalytics
     var selectedGroup: ProviderGroup = .official
     var selectedProviderID: String?
     var draggingProviderID: String?
@@ -173,6 +175,28 @@ struct SettingsRuntimeState {
     var permissionTileHeight: CGFloat = 0
     var settingsNow = Date()
     var settingsClockTask: Task<Void, Never>?
+    var showingRelayNewSiteDraft = false
+    var editingNewRelaySiteName = false
+    var editingRelayProviderID: String?
+    var relayTitleEditOriginalValue = ""
+
+    mutating func beginNewRelaySiteTitleEdit(originalValue: String) {
+        relayTitleEditOriginalValue = originalValue
+        editingRelayProviderID = nil
+        editingNewRelaySiteName = true
+    }
+
+    mutating func beginRelayProviderTitleEdit(providerID: String, originalValue: String) {
+        relayTitleEditOriginalValue = originalValue
+        editingNewRelaySiteName = false
+        editingRelayProviderID = providerID
+    }
+
+    mutating func clearRelayTitleEditingState() {
+        editingNewRelaySiteName = false
+        editingRelayProviderID = nil
+        relayTitleEditOriginalValue = ""
+    }
 }
 
 struct RelayProviderEditorDraft: Equatable {
@@ -201,69 +225,59 @@ struct RelayProviderEditorDraft: Equatable {
     mutating func seed(from provider: ProviderDescriptor) {
         guard provider.isRelay else { return }
 
-        let relayViewConfig = provider.relayViewConfig
-        let defaultManifest = provider.relayManifest
-            ?? RelayAdapterRegistry.shared.manifest(
-                for: provider.baseURL ?? "",
-                preferredID: provider.relayConfig?.adapterID
-            )
+        let seed = RelaySettingsDraftSeed(provider: provider)
         if selectedRelayTemplateInputs[provider.id] == nil {
-            let providerAdapterID = provider.relayConfig?.adapterID
-                ?? provider.relayManifest?.id
-                ?? "generic-newapi"
-            if providerAdapterID == "generic-newapi" {
+            if seed.preferredAdapterID == "generic-newapi" {
                 selectedRelayTemplateInputs[provider.id] = "generic-newapi"
             }
         }
         if providerNameInputs[provider.id] == nil {
-            providerNameInputs[provider.id] = provider.name
+            providerNameInputs[provider.id] = seed.name
         }
         if baseURLInputs[provider.id] == nil {
-            baseURLInputs[provider.id] = provider.baseURL ?? ""
+            baseURLInputs[provider.id] = seed.baseURL
         }
         if tokenUsageEnabledInputs[provider.id] == nil {
-            tokenUsageEnabledInputs[provider.id] = relayViewConfig?.tokenUsageEnabled ?? true
+            tokenUsageEnabledInputs[provider.id] = seed.tokenUsageEnabled
         }
         if accountEnabledInputs[provider.id] == nil {
-            accountEnabledInputs[provider.id] = relayViewConfig?.accountBalance?.enabled ?? false
+            accountEnabledInputs[provider.id] = seed.accountEnabled
         }
         if authHeaderInputs[provider.id] == nil {
-            authHeaderInputs[provider.id] = relayViewConfig?.accountBalance?.authHeader ?? "Authorization"
+            authHeaderInputs[provider.id] = seed.authHeader
         }
         if authSchemeInputs[provider.id] == nil {
-            authSchemeInputs[provider.id] = relayViewConfig?.accountBalance?.authScheme ?? "Bearer"
+            authSchemeInputs[provider.id] = seed.authScheme
         }
         if userIDInputs[provider.id] == nil {
-            userIDInputs[provider.id] = relayViewConfig?.accountBalance?.userID
-                ?? defaultManifest.balanceRequest.userID
-                ?? ""
+            userIDInputs[provider.id] = seed.userID
         }
         if userHeaderInputs[provider.id] == nil {
-            userHeaderInputs[provider.id] = relayViewConfig?.accountBalance?.userIDHeader ?? "New-Api-User"
+            userHeaderInputs[provider.id] = seed.userIDHeader
         }
         if endpointPathInputs[provider.id] == nil {
-            endpointPathInputs[provider.id] = relayViewConfig?.accountBalance?.endpointPath ?? "/api/user/self"
+            endpointPathInputs[provider.id] = seed.endpointPath
         }
         if remainingPathInputs[provider.id] == nil {
-            remainingPathInputs[provider.id] = relayViewConfig?.accountBalance?.remainingJSONPath ?? "data.quota"
+            remainingPathInputs[provider.id] = seed.remainingJSONPath
         }
         if usedPathInputs[provider.id] == nil {
-            usedPathInputs[provider.id] = relayViewConfig?.accountBalance?.usedJSONPath ?? ""
+            usedPathInputs[provider.id] = seed.usedJSONPath
         }
         if limitPathInputs[provider.id] == nil {
-            limitPathInputs[provider.id] = relayViewConfig?.accountBalance?.limitJSONPath ?? ""
+            limitPathInputs[provider.id] = seed.limitJSONPath
         }
         if successPathInputs[provider.id] == nil {
-            successPathInputs[provider.id] = relayViewConfig?.accountBalance?.successJSONPath ?? ""
+            successPathInputs[provider.id] = seed.successJSONPath
         }
         if unitInputs[provider.id] == nil {
-            unitInputs[provider.id] = relayViewConfig?.accountBalance?.unit ?? "quota"
+            unitInputs[provider.id] = seed.unit
         }
         if relayCredentialModeInputs[provider.id] == nil {
-            relayCredentialModeInputs[provider.id] = provider.relayConfig?.balanceCredentialMode ?? .manualPreferred
+            relayCredentialModeInputs[provider.id] = seed.balanceCredentialMode
         }
         if thirdPartyQuotaDisplayModeInputs[provider.id] == nil {
-            thirdPartyQuotaDisplayModeInputs[provider.id] = provider.relayConfig?.quotaDisplayMode ?? .remaining
+            thirdPartyQuotaDisplayModeInputs[provider.id] = seed.quotaDisplayMode
         }
     }
 }
@@ -371,37 +385,7 @@ struct RelaySettingsDraft: Equatable {
     }
 
     init(provider: ProviderDescriptor, preferredAdapterID: String? = nil) {
-        let selectedAdapterID = preferredAdapterID
-            ?? provider.relayConfig?.adapterID
-            ?? provider.relayManifest?.id
-            ?? "generic-newapi"
-        let manifest = RelayAdapterRegistry.shared.manifest(
-            for: provider.baseURL ?? provider.relayConfig?.baseURL ?? "",
-            preferredID: selectedAdapterID
-        )
-        let relayViewConfig = provider.relayViewConfig
-        let account = relayViewConfig?.accountBalance
-
-        self.init(
-            providerID: provider.id,
-            name: provider.name,
-            baseURL: provider.baseURL ?? provider.relayConfig?.baseURL ?? "",
-            preferredAdapterID: selectedAdapterID,
-            balanceCredentialMode: provider.relayConfig?.balanceCredentialMode ?? .manualPreferred,
-            tokenUsageEnabled: relayViewConfig?.tokenUsageEnabled ?? manifest.match.defaultTokenChannelEnabled,
-            accountEnabled: account?.enabled ?? manifest.match.defaultBalanceChannelEnabled,
-            authHeader: account?.authHeader ?? manifest.balanceRequest.authHeader ?? "Authorization",
-            authScheme: account?.authScheme ?? manifest.balanceRequest.authScheme ?? "Bearer",
-            userID: account?.userID ?? manifest.balanceRequest.userID ?? "",
-            userIDHeader: account?.userIDHeader ?? manifest.balanceRequest.userIDHeader ?? "New-Api-User",
-            endpointPath: account?.endpointPath ?? manifest.balanceRequest.path,
-            remainingJSONPath: account?.remainingJSONPath ?? manifest.extract.remaining,
-            usedJSONPath: account?.usedJSONPath ?? manifest.extract.used ?? "",
-            limitJSONPath: account?.limitJSONPath ?? manifest.extract.limit ?? "",
-            successJSONPath: account?.successJSONPath ?? manifest.extract.success ?? "",
-            unit: account?.unit ?? manifest.extract.unit ?? "quota",
-            quotaDisplayMode: provider.relayConfig?.quotaDisplayMode ?? .remaining
-        )
+        self = RelaySettingsDraftSeed(provider: provider, preferredAdapterID: preferredAdapterID).draft
     }
 }
 

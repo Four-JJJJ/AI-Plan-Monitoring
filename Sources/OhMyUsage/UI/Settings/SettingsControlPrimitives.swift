@@ -103,7 +103,7 @@ struct SettingsPillSegmentedControl<ID: Hashable>: View {
                         .frame(height: height)
                         .background {
                             if isSelected {
-                                SettingsSmoothedRoundedRectangle(cornerRadius: 8)
+                                SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
                                     .fill(selectedFillColor)
                             }
                         }
@@ -113,7 +113,7 @@ struct SettingsPillSegmentedControl<ID: Hashable>: View {
         }
         .padding(0)
         .background(
-            SettingsSmoothedRoundedRectangle(cornerRadius: 8)
+            SettingsSmoothedRoundedRectangle(cornerRadius: SettingsVisualTokens.Radius.control)
                 .fill(backgroundColor)
         )
         .frame(height: height)
@@ -134,7 +134,10 @@ struct SettingsToggleSwitch: View {
                 Capsule(style: .continuous)
                     .fill(isOn ? onTrackColor : offTrackColor)
 
-                SettingsSmoothedRoundedRectangle(cornerRadius: 8, smoothing: 0.6)
+                SettingsSmoothedRoundedRectangle(
+                    cornerRadius: SettingsVisualTokens.Radius.control,
+                    smoothing: SettingsVisualTokens.Smoothing.continuous
+                )
                     .fill(knobColor)
                     .frame(width: 28, height: 16)
                     .padding(4)
@@ -155,7 +158,7 @@ struct SettingsCheckbox: View {
             isOn.toggle()
         } label: {
             SettingsSmoothedRoundedRectangle(cornerRadius: cornerRadius)
-                .fill(isOn ? Color.white.opacity(0.92) : Color.white.opacity(0.18))
+                .fill(isOn ? Color.white.opacity(0.92) : SettingsVisualTokens.Fill.controlStrong)
                 .frame(width: size, height: size)
                 .overlay {
                     if isOn {

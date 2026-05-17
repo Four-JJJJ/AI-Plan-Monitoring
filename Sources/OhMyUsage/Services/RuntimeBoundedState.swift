@@ -151,12 +151,20 @@ enum RuntimeBoundedState {
             return LocalUsagePeriodSummary(
                 totalTokens: value.totalTokens,
                 responses: value.responses,
+                inputTokens: value.inputTokens,
+                outputTokens: value.outputTokens,
+                cacheReadTokens: value.cacheReadTokens,
+                cacheWriteTokens: value.cacheWriteTokens,
                 byModel: []
             )
         }
         return LocalUsagePeriodSummary(
             totalTokens: value.totalTokens,
             responses: value.responses,
+            inputTokens: value.inputTokens,
+            outputTokens: value.outputTokens,
+            cacheReadTokens: value.cacheReadTokens,
+            cacheWriteTokens: value.cacheWriteTokens,
             byModel: Array(value.byModel.prefix(modelBreakdownLimit))
         )
     }

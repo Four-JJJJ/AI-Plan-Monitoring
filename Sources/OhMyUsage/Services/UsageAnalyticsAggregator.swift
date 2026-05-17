@@ -1,0 +1,3 @@
+import OhMyUsageApplication
+
+typealias UsageAnalyticsAggregator = OhMyUsageApplication.UsageAnalyticsAggregator

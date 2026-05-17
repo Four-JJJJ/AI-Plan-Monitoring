@@ -3,6 +3,7 @@ import SwiftUI
 extension SettingsView {
     @ViewBuilder
     func officialConfigurationRows(_ provider: ProviderDescriptor) -> some View {
+        let providerConfiguration = providerConfigurationFacade
         let settingsSpec = ProviderSettingsSpec.resolve(for: provider)
         let supportedSourceModes = settingsSpec.supportedSourceModes
         let visibleWebModes = officialConfigVisibleWebModes(settingsSpec.supportedWebModes)
@@ -42,24 +43,24 @@ extension SettingsView {
             settingsConfigToggleRow(
                 title: officialStatusBarTitle,
                 isOn: Binding(
-                    get: { viewModel.isStatusBarProvider(providerID: provider.id) },
-                    set: { viewModel.setStatusBarDisplayEnabled($0, providerID: provider.id) }
+                    get: { providerConfiguration.isStatusBarProvider(providerID: provider.id) },
+                    set: { providerConfiguration.setStatusBarDisplayEnabled($0, providerID: provider.id) }
                 )
             )
 
             settingsConfigToggleRow(
                 title: officialShowEmailTitle,
                 isOn: Binding(
-                    get: { viewModel.showOfficialAccountEmailInMenuBar },
-                    set: { viewModel.setShowOfficialAccountEmailInMenuBar($0) }
+                    get: { providerConfiguration.showOfficialAccountEmailInMenuBar },
+                    set: { providerConfiguration.setShowOfficialAccountEmailInMenuBar($0) }
                 )
             )
 
             settingsConfigToggleRow(
                 title: officialShowPlanTypeTitle,
                 isOn: Binding(
-                    get: { viewModel.showOfficialPlanTypeInMenuBar(providerID: provider.id) },
-                    set: { viewModel.setShowOfficialPlanTypeInMenuBar($0, providerID: provider.id) }
+                    get: { providerConfiguration.showOfficialPlanTypeInMenuBar(providerID: provider.id) },
+                    set: { providerConfiguration.setShowOfficialPlanTypeInMenuBar($0, providerID: provider.id) }
                 )
             )
 
@@ -139,7 +140,7 @@ extension SettingsView {
                     traeValueDisplayMode: settingsSpec.showsTraeValueDisplayMode ? traeValueDisplayBinding.wrappedValue : nil
                 ),
                 onValueCommit: { newValue in
-                    viewModel.commitProviderThreshold(newValue, providerID: provider.id)
+                    providerConfiguration.commitProviderThreshold(newValue, providerID: provider.id)
                 },
                 onEditingChanged: { editing in
                     if !editing {
@@ -200,6 +201,7 @@ extension SettingsView {
 
     @ViewBuilder
     func officialConfigSection(_ provider: ProviderDescriptor) -> some View {
+        let providerConfiguration = providerConfigurationFacade
         let settingsSpec = ProviderSettingsSpec.resolve(for: provider)
         let supportedSourceModes = settingsSpec.supportedSourceModes
         let supportedWebModes = settingsSpec.supportedWebModes
@@ -271,8 +273,8 @@ extension SettingsView {
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
-                            let hasSavedWorkspaceID = viewModel.hasToken(for: provider)
-                            let savedWorkspaceLength = viewModel.savedTokenLength(for: provider)
+                            let hasSavedWorkspaceID = providerConfiguration.hasToken(for: provider)
+                            let savedWorkspaceLength = providerConfiguration.savedTokenLength(for: provider)
 
                             Text("Workspace ID")
                                 .font(settingsLabelFont)
@@ -294,9 +296,9 @@ extension SettingsView {
                                 let raw = officialEditorDraft.officialWorkspaceInputs[provider.id, default: ""]
                                     .trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !raw.isEmpty {
-                                    _ = viewModel.saveToken(raw, for: provider)
+                                    _ = providerConfiguration.saveToken(raw, for: provider)
                                 }
-                                viewModel.updateOfficialProviderSettings(
+                                providerConfiguration.updateOfficialProviderSettings(
                                     providerID: provider.id,
                                     sourceMode: sourceBinding.wrappedValue,
                                     webMode: webBinding.wrappedValue,
@@ -310,8 +312,8 @@ extension SettingsView {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         HStack(spacing: 8) {
-                            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
-                            let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
+                            let hasSavedManualCookie = providerConfiguration.hasOfficialManualCookie(for: provider)
+                            let savedManualCookieLength = providerConfiguration.savedOfficialManualCookieLength(for: provider)
 
                             Text("Cookie")
                                 .font(settingsLabelFont)
@@ -333,9 +335,9 @@ extension SettingsView {
                                 let raw = officialEditorDraft.officialCookieInputs[provider.id, default: ""]
                                     .trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !raw.isEmpty {
-                                    _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                                    _ = providerConfiguration.saveOfficialManualCookie(raw, providerID: provider.id)
                                 }
-                                viewModel.updateOfficialProviderSettings(
+                                providerConfiguration.updateOfficialProviderSettings(
                                     providerID: provider.id,
                                     sourceMode: sourceBinding.wrappedValue,
                                     webMode: webBinding.wrappedValue,
@@ -353,8 +355,8 @@ extension SettingsView {
                 VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
-                            let hasSavedToken = viewModel.hasToken(for: provider)
-                            let savedTokenLength = viewModel.savedTokenLength(for: provider)
+                            let hasSavedToken = providerConfiguration.hasToken(for: provider)
+                            let savedTokenLength = providerConfiguration.savedTokenLength(for: provider)
 
                             Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
                                 .font(settingsLabelFont)
@@ -376,9 +378,9 @@ extension SettingsView {
                             settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                                 let raw = officialEditorDraft.officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !raw.isEmpty {
-                                    _ = viewModel.saveToken(raw, for: provider)
+                                    _ = providerConfiguration.saveToken(raw, for: provider)
                                 }
-                                viewModel.updateOfficialProviderSettings(
+                                providerConfiguration.updateOfficialProviderSettings(
                                     providerID: provider.id,
                                     sourceMode: .auto,
                                     webMode: .disabled,
@@ -420,8 +422,8 @@ extension SettingsView {
             } else if supportsBearerCredentialInput {
                 VStack(alignment: .leading, spacing: modelSettingsItemSpacing) {
                     HStack(spacing: 8) {
-                        let hasSavedToken = viewModel.hasToken(for: provider)
-                        let savedTokenLength = viewModel.savedTokenLength(for: provider)
+                        let hasSavedToken = providerConfiguration.hasToken(for: provider)
+                        let savedTokenLength = providerConfiguration.savedTokenLength(for: provider)
 
                         Text(viewModel.language == .zhHans ? "凭证信息" : "Credential")
                             .font(settingsLabelFont)
@@ -443,9 +445,9 @@ extension SettingsView {
                         settingsCapsuleButton(viewModel.text(.save), dismissInputFocus: true) {
                             let raw = officialEditorDraft.officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                             if !raw.isEmpty {
-                                _ = viewModel.saveToken(raw, for: provider)
+                                _ = providerConfiguration.saveToken(raw, for: provider)
                             }
-                            viewModel.updateOfficialProviderSettings(
+                            providerConfiguration.updateOfficialProviderSettings(
                                 providerID: provider.id,
                                 sourceMode: sourceBinding.wrappedValue,
                                 webMode: webBinding.wrappedValue,
@@ -511,8 +513,8 @@ extension SettingsView {
                 if supportsManualInput {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
-                            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
-                            let savedManualCookieLength = viewModel.savedOfficialManualCookieLength(for: provider)
+                            let hasSavedManualCookie = providerConfiguration.hasOfficialManualCookie(for: provider)
+                            let savedManualCookieLength = providerConfiguration.savedOfficialManualCookieLength(for: provider)
 
                             Text("Token")
                                 .font(settingsLabelFont)
@@ -532,9 +534,9 @@ extension SettingsView {
                             settingsCapsuleButton(viewModel.text(.save)) {
                                 let raw = officialEditorDraft.officialCookieInputs[provider.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !raw.isEmpty {
-                                    _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                                    _ = providerConfiguration.saveOfficialManualCookie(raw, providerID: provider.id)
                                 }
-                                viewModel.updateOfficialProviderSettings(
+                                providerConfiguration.updateOfficialProviderSettings(
                                     providerID: provider.id,
                                     sourceMode: sourceBinding.wrappedValue,
                                     webMode: webBinding.wrappedValue,
@@ -552,7 +554,7 @@ extension SettingsView {
         }
         .onChange(of: sourceBinding.wrappedValue) { _, newValue in
             guard provider.type != .trae, !supportsManualInput else { return }
-            viewModel.updateOfficialProviderSettings(
+            providerConfiguration.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: newValue,
                 webMode: webBinding.wrappedValue,
@@ -561,7 +563,7 @@ extension SettingsView {
         }
         .onChange(of: webBinding.wrappedValue) { _, newValue in
             guard provider.type != .trae, !supportsManualInput else { return }
-            viewModel.updateOfficialProviderSettings(
+            providerConfiguration.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
                 webMode: newValue,
@@ -569,7 +571,7 @@ extension SettingsView {
             )
         }
         .onChange(of: quotaDisplayBinding.wrappedValue) { _, newValue in
-            viewModel.updateOfficialProviderSettings(
+            providerConfiguration.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: sourceBinding.wrappedValue,
                 webMode: webBinding.wrappedValue,
@@ -579,7 +581,7 @@ extension SettingsView {
         }
         .onChange(of: traeValueDisplayBinding.wrappedValue) { _, newValue in
             guard provider.type == .trae else { return }
-            viewModel.updateOfficialProviderSettings(
+            providerConfiguration.updateOfficialProviderSettings(
                 providerID: provider.id,
                 sourceMode: .auto,
                 webMode: .disabled,
@@ -681,29 +683,29 @@ extension SettingsView {
     ) -> String {
         switch field.kind {
         case .opencodeWorkspaceID:
-            let hasSavedToken = viewModel.hasToken(for: provider)
+            let hasSavedToken = providerConfigurationFacade.hasToken(for: provider)
             return hasSavedToken
-                ? maskedSecretDots(length: viewModel.savedTokenLength(for: provider))
+                ? maskedSecretDots(length: providerConfigurationFacade.savedTokenLength(for: provider))
                 : viewModel.localizedText("粘贴 wrk_... (必填)", "Paste wrk_... (Required)")
         case .bearerToken:
-            let hasSavedToken = viewModel.hasToken(for: provider)
+            let hasSavedToken = providerConfigurationFacade.hasToken(for: provider)
             return hasSavedToken
-                ? maskedSecretDots(length: viewModel.savedTokenLength(for: provider))
+                ? maskedSecretDots(length: providerConfigurationFacade.savedTokenLength(for: provider))
                 : viewModel.localizedText("粘贴 API Key", "Paste API Key")
         case .traeAuthorization:
-            let hasSavedToken = viewModel.hasToken(for: provider)
+            let hasSavedToken = providerConfigurationFacade.hasToken(for: provider)
             return hasSavedToken
-                ? maskedSecretDots(length: viewModel.savedTokenLength(for: provider))
+                ? maskedSecretDots(length: providerConfigurationFacade.savedTokenLength(for: provider))
                 : viewModel.localizedText("粘贴 Cloud-IDE-JWT / JWT", "Paste Cloud-IDE-JWT / JWT")
         case .manualCookie:
-            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
+            let hasSavedManualCookie = providerConfigurationFacade.hasOfficialManualCookie(for: provider)
             return hasSavedManualCookie
-                ? maskedSecretDots(length: viewModel.savedOfficialManualCookieLength(for: provider))
+                ? maskedSecretDots(length: providerConfigurationFacade.savedOfficialManualCookieLength(for: provider))
                 : viewModel.text(.manualCookieHeader)
         case .opencodeManualCookie:
-            let hasSavedManualCookie = viewModel.hasOfficialManualCookie(for: provider)
+            let hasSavedManualCookie = providerConfigurationFacade.hasOfficialManualCookie(for: provider)
             return hasSavedManualCookie
-                ? maskedSecretDots(length: viewModel.savedOfficialManualCookieLength(for: provider))
+                ? maskedSecretDots(length: providerConfigurationFacade.savedOfficialManualCookieLength(for: provider))
                 : viewModel.localizedText("auth=... (可选，自动导入可留空)", "auth=... (Optional when auto import is enabled)")
         }
     }
@@ -797,9 +799,9 @@ extension SettingsView {
         if !raw.isEmpty {
             switch field.storageTarget {
             case .providerToken:
-                _ = viewModel.saveToken(raw, for: provider)
+                _ = providerConfigurationFacade.saveToken(raw, for: provider)
             case .officialManualCookie:
-                _ = viewModel.saveOfficialManualCookie(raw, providerID: provider.id)
+                _ = providerConfigurationFacade.saveOfficialManualCookie(raw, providerID: provider.id)
             }
         }
         officialConfigSetCredentialInput("", for: field, providerID: provider.id)
@@ -819,7 +821,7 @@ extension SettingsView {
         quotaDisplayMode: OfficialQuotaDisplayMode,
         traeValueDisplayMode: OfficialTraeValueDisplayMode?
     ) {
-        viewModel.updateOfficialProviderSettings(
+        providerConfigurationFacade.updateOfficialProviderSettings(
             providerID: provider.id,
             sourceMode: sourceMode,
             webMode: webMode,
@@ -970,13 +972,13 @@ extension SettingsView {
             officialEditorDraft.officialThresholdInputs[providerID] = formattedOfficialThresholdValue(clamped)
         }
         if persist {
-            viewModel.commitProviderThreshold(clamped, providerID: providerID)
+            providerConfigurationFacade.commitProviderThreshold(clamped, providerID: providerID)
         }
     }
 
     func commitOfficialThresholdDraft(_ provider: ProviderDescriptor) {
         let value = officialEditorDraft.thresholdDraftValues[provider.id] ?? provider.threshold.lowRemaining
-        viewModel.commitProviderThreshold(value, providerID: provider.id)
+        providerConfigurationFacade.commitProviderThreshold(value, providerID: provider.id)
         officialEditorDraft.thresholdDraftValues[provider.id] = value
     }
 
@@ -997,7 +999,7 @@ extension SettingsView {
 
         let clamped = min(max(parsedValue, 0), 100)
         officialEditorDraft.thresholdDraftValues[key] = clamped
-        viewModel.commitProviderThreshold(clamped, providerID: key)
+        providerConfigurationFacade.commitProviderThreshold(clamped, providerID: key)
         officialEditorDraft.officialThresholdInputs[key] = formattedOfficialThresholdValue(clamped)
     }
 }

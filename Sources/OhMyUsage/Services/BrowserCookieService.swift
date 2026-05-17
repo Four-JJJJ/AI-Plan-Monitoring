@@ -1,0 +1,72 @@
+import Foundation
+
+final class BrowserCookieService: BrowserCookieDetecting {
+    private let cookieReader: BrowserCookieDatabaseReader
+    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
+
+    init(fileManager: FileManager = .default) {
+        self.cookieReader = BrowserCookieDatabaseReader(fileManager: fileManager, sqliteTimeout: 5)
+    }
+
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]? = nil,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        guard accessIntent.allowsLiveLookup else { return nil }
+        let actualOrder = order ?? browserOrderDefault
+        for browser in actualOrder {
+            for path in cookieReader.candidateCookiePaths(for: browser, includeSafariBinaryCookies: true) {
+                if let header = cookieReader.cookieHeader(fromDatabaseAt: path, browser: browser, hostContains: hostContains),
+                   !header.isEmpty {
+                    return BrowserCookieHeader(header: header, source: browserLabel(browser))
+                }
+            }
+        }
+        return nil
+    }
+
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]? = nil,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        guard accessIntent.allowsLiveLookup else { return nil }
+        let actualOrder = order ?? browserOrderDefault
+        for browser in actualOrder {
+            for path in cookieReader.candidateCookiePaths(for: browser, includeSafariBinaryCookies: true) {
+                if let value = cookieReader.namedCookieValue(fromDatabaseAt: path, browser: browser, cookieName: name, hostContains: hostContains),
+                   !value.isEmpty {
+                    return BrowserCookieHeader(header: "\(name)=\(value)", source: browserLabel(browser))
+                }
+            }
+        }
+        return nil
+    }
+
+    private func browserLabel(_ browser: KimiBrowserKind) -> String {
+        switch browser {
+        case .arc:
+            return "Auto:Arc"
+        case .chrome:
+            return "Auto:Chrome"
+        case .safari:
+            return "Auto:Safari"
+        case .edge:
+            return "Auto:Edge"
+        case .brave:
+            return "Auto:Brave"
+        case .chromium:
+            return "Auto:Chromium"
+        case .firefox:
+            return "Auto:Firefox"
+        case .opera:
+            return "Auto:Opera"
+        case .operaGX:
+            return "Auto:OperaGX"
+        case .vivaldi:
+            return "Auto:Vivaldi"
+        }
+    }
+}

@@ -26,7 +26,7 @@ enum MenuDashboardPresenter {
         language: AppLanguage,
         now: Date,
         updatedAgoLabel: String,
-        updateState: AppViewModel.MenuUpdateDisplayState
+        updateState: MenuUpdateDisplayState
     ) -> MenuDashboardHeaderPresentation {
         MenuDashboardHeaderPresentation(
             updatedText: updatedText(
@@ -73,7 +73,7 @@ enum MenuDashboardPresenter {
 
     private static func updatePresentation(
         language: AppLanguage,
-        updateState: AppViewModel.MenuUpdateDisplayState
+        updateState: MenuUpdateDisplayState
     ) -> MenuDashboardHeaderUpdatePresentation? {
         if case .idle = updateState.kind {
             return nil
@@ -92,7 +92,7 @@ enum MenuDashboardPresenter {
         )
     }
 
-    private static func tone(for tone: AppViewModel.UpdateDisplayTone) -> MenuDashboardHeaderUpdatePresentation.Tone {
+    private static func tone(for tone: UpdateDisplayTone) -> MenuDashboardHeaderUpdatePresentation.Tone {
         switch tone {
         case .neutral:
             return .neutral
@@ -103,7 +103,7 @@ enum MenuDashboardPresenter {
         }
     }
 
-    private static func showsPrimaryAction(for kind: AppViewModel.MenuUpdateDisplayState.Kind) -> Bool {
+    private static func showsPrimaryAction(for kind: MenuUpdateDisplayState.Kind) -> Bool {
         if case .updateAvailable = kind {
             return true
         }

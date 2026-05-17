@@ -1,0 +1,3 @@
+import OhMyUsageApplication
+
+typealias UsageAnalyticsSnapshotCacheStore = OhMyUsageApplication.UsageAnalyticsSnapshotCacheStore

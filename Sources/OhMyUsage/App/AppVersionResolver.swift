@@ -19,7 +19,7 @@ enum AppVersionResolver {
     ) -> String {
         var newest = fallbackVersion
         for bundleURL in candidateInstalledAppBundleURLs(fileManager: fileManager) {
-            guard let version = bundleVersion(at: bundleURL) else { continue }
+            guard let version = bundleVersion(at: bundleURL, fileManager: fileManager) else { continue }
             if isVersion(version, newerThan: newest) {
                 newest = version
             }
@@ -67,8 +67,8 @@ enum AppVersionResolver {
         return deduped
     }
 
-    private static func bundleVersion(at bundleURL: URL) -> String? {
-        guard FileManager.default.fileExists(atPath: bundleURL.path),
+    private static func bundleVersion(at bundleURL: URL, fileManager: FileManager = .default) -> String? {
+        guard fileManager.fileExists(atPath: bundleURL.path),
               let bundle = Bundle(url: bundleURL) else {
             return nil
         }

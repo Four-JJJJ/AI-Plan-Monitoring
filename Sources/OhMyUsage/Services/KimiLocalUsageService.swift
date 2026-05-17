@@ -51,6 +51,19 @@ final class KimiLocalUsageService {
         )
     }
 
+    func fetchEvents(
+        scope: LocalUsageTrendScope = .allAccounts,
+        sessionsRootPath: String? = nil,
+        since: Date
+    ) throws -> [LocalUsageEvent] {
+        _ = scope
+        return scanSessionEvents(
+            sessionsRoot: resolvedSessionsRoot(explicitPath: sessionsRootPath),
+            startOfLast30Days: since
+        )
+        .filter { $0.eventAt >= since }
+    }
+
     private func resolvedSessionsRoot(explicitPath: String?) -> String {
         if let explicitPath {
             return explicitPath
@@ -104,6 +117,7 @@ final class KimiLocalUsageService {
             .deletingLastPathComponent()
             .lastPathComponent
         var previousSnapshotTokens = 0
+        var previousComponents = LocalUsageTokenComponents()
         var seenSnapshots: Set<String> = []
         var output: [LocalUsageEvent] = []
 
@@ -123,7 +137,8 @@ final class KimiLocalUsageService {
                 return
             }
 
-            let snapshotTotal = Self.tokenCount(from: usage)
+            let snapshotComponents = Self.tokenComponents(from: usage)
+            let snapshotTotal = snapshotComponents.totalTokens
             guard snapshotTotal > 0 else {
                 return
             }
@@ -134,7 +149,9 @@ final class KimiLocalUsageService {
             }
 
             let delta = max(0, snapshotTotal - previousSnapshotTokens)
+            let deltaComponents = snapshotComponents.delta(from: previousComponents, fallbackTotal: delta)
             previousSnapshotTokens = snapshotTotal
+            previousComponents = snapshotComponents
             guard delta > 0 else {
                 return
             }
@@ -149,7 +166,11 @@ final class KimiLocalUsageService {
                     signature: "kimi|\(sessionID)|\(messageID)|\(Int(eventAt.timeIntervalSince1970))|\(snapshotTotal)",
                     eventAt: eventAt,
                     modelID: modelID,
-                    totalTokens: delta
+                    totalTokens: delta,
+                    inputTokens: deltaComponents.inputTokens,
+                    outputTokens: deltaComponents.outputTokens,
+                    cacheReadTokens: deltaComponents.cacheReadTokens,
+                    cacheWriteTokens: deltaComponents.cacheWriteTokens
                 )
             )
         }
@@ -215,13 +236,47 @@ final class KimiLocalUsageService {
         }
     }
 
-    private static func tokenCount(from usage: [String: Any]) -> Int {
-        var total = 0
-        for value in usage.values {
-            guard let count = intValue(value) else { continue }
-            total += max(0, count)
+    private static func tokenComponents(from usage: [String: Any]) -> LocalUsageTokenComponents {
+        let input = firstInt(
+            in: usage,
+            keys: ["input_other", "input_tokens", "input"]
+        ) ?? 0
+        let output = firstInt(
+            in: usage,
+            keys: ["output", "output_tokens"]
+        ) ?? 0
+        let cacheRead = firstInt(
+            in: usage,
+            keys: ["input_cache_read", "cache_read_input_tokens"]
+        ) ?? 0
+        let cacheWrite = firstInt(
+            in: usage,
+            keys: ["input_cache_creation", "cache_creation_input_tokens"]
+        ) ?? 0
+
+        let components = LocalUsageTokenComponents(
+            inputTokens: max(0, input),
+            outputTokens: max(0, output),
+            cacheReadTokens: max(0, cacheRead),
+            cacheWriteTokens: max(0, cacheWrite)
+        )
+        if components.totalTokens > 0 {
+            return components
         }
-        return total
+
+        let fallbackTotal = usage.values.reduce(0) { partial, value in
+            partial + max(0, intValue(value) ?? 0)
+        }
+        return LocalUsageTokenComponents(outputTokens: fallbackTotal)
+    }
+
+    private static func firstInt(in usage: [String: Any], keys: [String]) -> Int? {
+        for key in keys {
+            if let value = intValue(usage[key]) {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func intValue(_ value: Any?) -> Int? {

@@ -42,11 +42,30 @@ final class SettingsWorkspacePresenterTests: XCTestCase {
         XCTAssertEqual(presentation.sections.map(\.id), ["main"])
         XCTAssertEqual(
             presentation.sections[0].items.map(\.title),
-            ["General", "Menubar", "Official", "Relay"]
+            ["Usage", "General", "Menubar", "Official", "Relay", "Buy me a coffee"]
         )
         XCTAssertEqual(
             presentation.sections[0].items.map(\.tab),
-            [.general, .menuBar, .officialProviders, .customProviders]
+            [.usageAnalytics, .general, .menuBar, .officialProviders, .customProviders, .donate]
+        )
+        XCTAssertEqual(
+            presentation.sections[0].items.map(\.icon),
+            [
+                "settings_sidebar_usage_icon",
+                "settings_sidebar_general_icon",
+                "settings_sidebar_menubar_icon",
+                "settings_sidebar_official_icon",
+                "settings_sidebar_relay_icon",
+                "settings_sidebar_donate_icon"
+            ]
+        )
+        XCTAssertEqual(
+            presentation.sections[0].items.first?.iconName(isSelected: true),
+            "settings_sidebar_usage_icon_selected"
+        )
+        XCTAssertEqual(
+            presentation.sections[0].items.last?.iconName(isSelected: true),
+            "settings_sidebar_donate_icon_selected"
         )
     }
 

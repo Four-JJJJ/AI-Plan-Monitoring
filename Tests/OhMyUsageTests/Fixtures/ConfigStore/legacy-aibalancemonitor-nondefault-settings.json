@@ -1,0 +1,60 @@
+{
+  "language": "zh-Hans",
+  "resourceMode": "background15m",
+  "launchAtLoginEnabled": false,
+  "simplifiedRelayConfig": true,
+  "showOfficialAccountEmailInMenuBar": false,
+  "statusBarProviderID": "open-legacy-golden-relay",
+  "statusBarMultiUsageEnabled": false,
+  "statusBarMultiProviderIDs": [
+    "open-legacy-golden-relay"
+  ],
+  "statusBarAppearanceMode": "followWallpaper",
+  "statusBarDisplayStyle": "iconPercent",
+  "providers": [
+    {
+      "id": "open-legacy-golden-relay",
+      "name": "Legacy Golden Relay",
+      "family": "thirdParty",
+      "type": "relay",
+      "enabled": true,
+      "pollIntervalSec": 60,
+      "threshold": {
+        "lowRemaining": 10,
+        "maxConsecutiveFailures": 2,
+        "notifyOnAuthError": true
+      },
+      "auth": {
+        "kind": "bearer",
+        "keychainService": "OhMyUsage",
+        "keychainAccount": "legacy-golden.invalid/sk-token"
+      },
+      "baseURL": "https://legacy-golden.invalid",
+      "relayConfig": {
+        "adapterID": "generic-newapi",
+        "baseURL": "https://legacy-golden.invalid",
+        "tokenChannelEnabled": true,
+        "balanceChannelEnabled": true,
+        "balanceAuth": {
+          "kind": "bearer",
+          "keychainService": "OhMyUsage",
+          "keychainAccount": "legacy-golden.invalid/auth-token"
+        },
+        "balanceCredentialMode": "manualPreferred",
+        "quotaDisplayMode": "remaining",
+        "manualOverrides": {
+          "authHeader": "Authorization",
+          "authScheme": "Bearer",
+          "userIDHeader": "New-Api-User",
+          "requestMethod": "GET",
+          "endpointPath": "/api/user/self",
+          "remainingExpression": "data.quota",
+          "usedExpression": "data.used_quota",
+          "limitExpression": "data.request_quota",
+          "successExpression": "success",
+          "unitExpression": "quota"
+        }
+      }
+    }
+  ]
+}

@@ -32,9 +32,9 @@ struct SettingsScrollableCardView<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: SettingsVisualTokens.Pane.cardContentSpacing) {
+                VStack(alignment: .leading, spacing: SettingsVisualTokens.Pane.cardContentSpacing) {
+                    VStack(alignment: .leading, spacing: SettingsVisualTokens.Pane.titleSpacing) {
                         Text(title)
                             .font(.system(size: 20, weight: .semibold))
                         Text(subtitle)
@@ -46,17 +46,17 @@ struct SettingsScrollableCardView<Content: View>: View {
                     content
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(18)
+                .padding(SettingsVisualTokens.Pane.cardPadding)
                 .background(
                     SettingsSmoothedRoundedRectangle(cornerRadius: sectionCornerRadius)
-                        .fill(sectionFillColor)
+                        .fill(Color.clear)
                 )
                 .overlay(
                     SettingsSmoothedRoundedRectangle(cornerRadius: sectionCornerRadius)
-                        .stroke(strokeColor, lineWidth: 1)
+                        .stroke(strokeColor, lineWidth: SettingsVisualTokens.Stroke.hairline)
                 )
             }
-            .padding(20)
+            .padding(SettingsVisualTokens.Pane.cardOuterPadding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .scrollIndicators(.never)
@@ -66,7 +66,7 @@ struct SettingsScrollableCardView<Content: View>: View {
         )
         .overlay(
             SettingsSmoothedRoundedRectangle(cornerRadius: shellCornerRadius)
-                .stroke(strokeColor, lineWidth: 1)
+                .stroke(strokeColor, lineWidth: SettingsVisualTokens.Stroke.hairline)
         )
         .clipShape(SettingsSmoothedRoundedRectangle(cornerRadius: shellCornerRadius))
     }
@@ -94,23 +94,23 @@ struct SettingsProviderDashboardContainerView<Sidebar: View, Detail: View>: View
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: SettingsVisualTokens.Pane.dashboardSpacing) {
             sidebar
-                .frame(width: 280)
+                .frame(width: SettingsVisualTokens.Pane.sidebarWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
 
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(20)
+        .padding(SettingsVisualTokens.Pane.shellPadding)
         .background(
             SettingsSmoothedRoundedRectangle(cornerRadius: shellCornerRadius)
                 .fill(cardBackground)
         )
         .overlay(
             SettingsSmoothedRoundedRectangle(cornerRadius: shellCornerRadius)
-                .stroke(strokeColor, lineWidth: 1)
+                .stroke(strokeColor, lineWidth: SettingsVisualTokens.Stroke.hairline)
         )
         .clipShape(SettingsSmoothedRoundedRectangle(cornerRadius: shellCornerRadius))
     }

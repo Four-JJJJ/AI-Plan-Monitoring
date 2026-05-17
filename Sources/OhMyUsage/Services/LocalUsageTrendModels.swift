@@ -30,6 +30,10 @@ struct LocalUsageTrendPoint: Codable, Equatable, Identifiable, Sendable {
     var startAt: Date
     var totalTokens: Int
     var responses: Int
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var cacheReadTokens: Int = 0
+    var cacheWriteTokens: Int = 0
 }
 
 struct LocalUsageModelBreakdown: Codable, Equatable, Identifiable, Sendable {
@@ -37,11 +41,19 @@ struct LocalUsageModelBreakdown: Codable, Equatable, Identifiable, Sendable {
     var modelID: String
     var totalTokens: Int
     var responses: Int
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var cacheReadTokens: Int = 0
+    var cacheWriteTokens: Int = 0
 }
 
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     var totalTokens: Int
     var responses: Int
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var cacheReadTokens: Int = 0
+    var cacheWriteTokens: Int = 0
     var byModel: [LocalUsageModelBreakdown]
 
     static let empty = LocalUsagePeriodSummary(totalTokens: 0, responses: 0, byModel: [])
@@ -78,6 +90,61 @@ struct LocalUsageEvent: Equatable, Sendable {
     var eventAt: Date
     var modelID: String
     var totalTokens: Int
+    var inputTokens: Int
+    var outputTokens: Int
+    var cacheReadTokens: Int
+    var cacheWriteTokens: Int
+
+    init(
+        signature: String,
+        eventAt: Date,
+        modelID: String,
+        totalTokens: Int? = nil,
+        inputTokens: Int = 0,
+        outputTokens: Int = 0,
+        cacheReadTokens: Int = 0,
+        cacheWriteTokens: Int = 0
+    ) {
+        self.signature = signature
+        self.eventAt = eventAt
+        self.modelID = modelID
+        self.inputTokens = max(0, inputTokens)
+        self.outputTokens = max(0, outputTokens)
+        self.cacheReadTokens = max(0, cacheReadTokens)
+        self.cacheWriteTokens = max(0, cacheWriteTokens)
+        self.totalTokens = max(
+            0,
+            totalTokens ?? (self.inputTokens + self.outputTokens + self.cacheReadTokens + self.cacheWriteTokens)
+        )
+    }
+}
+
+struct LocalUsageTokenComponents: Equatable, Sendable {
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var cacheReadTokens: Int = 0
+    var cacheWriteTokens: Int = 0
+
+    var totalTokens: Int {
+        inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+    }
+
+    func delta(from previous: LocalUsageTokenComponents, fallbackTotal: Int) -> LocalUsageTokenComponents {
+        let input = max(0, inputTokens - previous.inputTokens)
+        let output = max(0, outputTokens - previous.outputTokens)
+        let cacheRead = max(0, cacheReadTokens - previous.cacheReadTokens)
+        let cacheWrite = max(0, cacheWriteTokens - previous.cacheWriteTokens)
+        let componentTotal = input + output + cacheRead + cacheWrite
+        if componentTotal == 0, fallbackTotal > 0 {
+            return LocalUsageTokenComponents(outputTokens: fallbackTotal)
+        }
+        return LocalUsageTokenComponents(
+            inputTokens: input,
+            outputTokens: output,
+            cacheReadTokens: cacheRead,
+            cacheWriteTokens: cacheWrite
+        )
+    }
 }
 
 enum LocalUsageSummaryBuilder {
@@ -162,7 +229,11 @@ enum LocalUsageSummaryBuilder {
                 id: "h-\(Int(hourStart.timeIntervalSince1970))",
                 startAt: hourStart,
                 totalTokens: accumulator.totalTokens,
-                responses: accumulator.responses
+                responses: accumulator.responses,
+                inputTokens: accumulator.inputTokens,
+                outputTokens: accumulator.outputTokens,
+                cacheReadTokens: accumulator.cacheReadTokens,
+                cacheWriteTokens: accumulator.cacheWriteTokens
             )
         }
     }
@@ -181,7 +252,11 @@ enum LocalUsageSummaryBuilder {
                 id: "d-\(Int(dayStart.timeIntervalSince1970))",
                 startAt: dayStart,
                 totalTokens: accumulator.totalTokens,
-                responses: accumulator.responses
+                responses: accumulator.responses,
+                inputTokens: accumulator.inputTokens,
+                outputTokens: accumulator.outputTokens,
+                cacheReadTokens: accumulator.cacheReadTokens,
+                cacheWriteTokens: accumulator.cacheWriteTokens
             )
         }
     }
@@ -207,7 +282,11 @@ private extension LocalUsageTrendPoint {
             id: point.id,
             startAt: point.startAt,
             totalTokens: point.totalTokens,
-            responses: point.responses
+            responses: point.responses,
+            inputTokens: point.inputTokens,
+            outputTokens: point.outputTokens,
+            cacheReadTokens: point.cacheReadTokens,
+            cacheWriteTokens: point.cacheWriteTokens
         )
     }
 }
@@ -217,6 +296,10 @@ private extension LocalUsagePeriodSummary {
         self.init(
             totalTokens: summary.totalTokens,
             responses: summary.responses,
+            inputTokens: summary.inputTokens,
+            outputTokens: summary.outputTokens,
+            cacheReadTokens: summary.cacheReadTokens,
+            cacheWriteTokens: summary.cacheWriteTokens,
             byModel: summary.byModel.map(LocalUsageModelBreakdown.init(codex:))
         )
     }
@@ -227,7 +310,11 @@ private extension LocalUsageModelBreakdown {
         self.init(
             modelID: value.modelID,
             totalTokens: value.totalTokens,
-            responses: value.responses
+            responses: value.responses,
+            inputTokens: value.inputTokens,
+            outputTokens: value.outputTokens,
+            cacheReadTokens: value.cacheReadTokens,
+            cacheWriteTokens: value.cacheWriteTokens
         )
     }
 }
@@ -264,14 +351,21 @@ private extension LocalUsageTrendDiagnosticsSource {
 private struct PeriodAccumulator {
     var totalTokens = 0
     var responses = 0
-    var byModel: [String: (tokens: Int, responses: Int)] = [:]
+    var inputTokens = 0
+    var outputTokens = 0
+    var cacheReadTokens = 0
+    var cacheWriteTokens = 0
+    var byModel: [String: ModelAccumulator] = [:]
 
     mutating func consume(event: LocalUsageEvent) {
         totalTokens += event.totalTokens
         responses += 1
-        var model = byModel[event.modelID, default: (tokens: 0, responses: 0)]
-        model.tokens += event.totalTokens
-        model.responses += 1
+        inputTokens += event.inputTokens
+        outputTokens += event.outputTokens
+        cacheReadTokens += event.cacheReadTokens
+        cacheWriteTokens += event.cacheWriteTokens
+        var model = byModel[event.modelID, default: ModelAccumulator()]
+        model.consume(event: event)
         byModel[event.modelID] = model
     }
 
@@ -279,8 +373,12 @@ private struct PeriodAccumulator {
         let models = byModel.map { key, value in
             LocalUsageModelBreakdown(
                 modelID: key,
-                totalTokens: value.tokens,
-                responses: value.responses
+                totalTokens: value.totalTokens,
+                responses: value.responses,
+                inputTokens: value.inputTokens,
+                outputTokens: value.outputTokens,
+                cacheReadTokens: value.cacheReadTokens,
+                cacheWriteTokens: value.cacheWriteTokens
             )
         }
         .sorted { lhs, rhs in
@@ -296,7 +394,29 @@ private struct PeriodAccumulator {
         return LocalUsagePeriodSummary(
             totalTokens: totalTokens,
             responses: responses,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            cacheReadTokens: cacheReadTokens,
+            cacheWriteTokens: cacheWriteTokens,
             byModel: models
         )
+    }
+}
+
+private struct ModelAccumulator {
+    var totalTokens = 0
+    var responses = 0
+    var inputTokens = 0
+    var outputTokens = 0
+    var cacheReadTokens = 0
+    var cacheWriteTokens = 0
+
+    mutating func consume(event: LocalUsageEvent) {
+        totalTokens += event.totalTokens
+        responses += 1
+        inputTokens += event.inputTokens
+        outputTokens += event.outputTokens
+        cacheReadTokens += event.cacheReadTokens
+        cacheWriteTokens += event.cacheWriteTokens
     }
 }

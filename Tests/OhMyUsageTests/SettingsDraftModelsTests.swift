@@ -2,6 +2,12 @@ import XCTest
 @testable import OhMyUsage
 
 final class SettingsDraftModelsTests: XCTestCase {
+    func testSettingsNavigationStateDefaultsToUsageAnalyticsTab() {
+        let state = SettingsNavigationState()
+
+        XCTAssertEqual(state.selectedSettingsTab, .usageAnalytics)
+    }
+
     func testSettingsNavigationStateKeepsProviderSelectionInSync() {
         var state = SettingsNavigationState()
 
@@ -95,6 +101,31 @@ final class SettingsDraftModelsTests: XCTestCase {
         XCTAssertNil(state.selectedPresetID)
     }
 
+    func testSettingsRuntimeStateKeepsRelayTitleEditorsMutuallyExclusive() {
+        var state = SettingsRuntimeState()
+
+        state.beginNewRelaySiteTitleEdit(originalValue: "Draft Relay")
+
+        XCTAssertTrue(state.editingNewRelaySiteName)
+        XCTAssertNil(state.editingRelayProviderID)
+        XCTAssertEqual(state.relayTitleEditOriginalValue, "Draft Relay")
+
+        state.beginRelayProviderTitleEdit(
+            providerID: "relay.demo",
+            originalValue: "Demo Relay"
+        )
+
+        XCTAssertFalse(state.editingNewRelaySiteName)
+        XCTAssertEqual(state.editingRelayProviderID, "relay.demo")
+        XCTAssertEqual(state.relayTitleEditOriginalValue, "Demo Relay")
+
+        state.clearRelayTitleEditingState()
+
+        XCTAssertFalse(state.editingNewRelaySiteName)
+        XCTAssertNil(state.editingRelayProviderID)
+        XCTAssertEqual(state.relayTitleEditOriginalValue, "")
+    }
+
     func testRelayDraftSeedsGenericNewAPIDefaults() {
         let provider = ProviderDescriptor.makeOpenRelay(
             name: "Demo Relay",
@@ -116,6 +147,162 @@ final class SettingsDraftModelsTests: XCTestCase {
         XCTAssertEqual(draft.endpointPath, "/api/user/self")
         XCTAssertEqual(draft.remainingJSONPath, "data.quota")
         XCTAssertEqual(draft.unit, "quota")
+    }
+
+    func testRelaySettingsDraftSeedPreservesGenericNewAPIDefaults() {
+        let provider = ProviderDescriptor.makeOpenRelay(
+            name: "Demo Relay",
+            baseURL: "https://relay.example.com",
+            preferredAdapterID: "generic-newapi"
+        )
+
+        let seed = RelaySettingsDraftSeed(provider: provider)
+
+        XCTAssertEqual(seed.providerID, provider.id)
+        XCTAssertEqual(seed.name, "Demo Relay")
+        XCTAssertEqual(seed.baseURL, "https://relay.example.com")
+        XCTAssertEqual(seed.preferredAdapterID, "generic-newapi")
+        XCTAssertFalse(seed.tokenUsageEnabled)
+        XCTAssertTrue(seed.accountEnabled)
+        XCTAssertEqual(seed.authHeader, "Authorization")
+        XCTAssertEqual(seed.authScheme, "Bearer")
+        XCTAssertEqual(seed.userIDHeader, "New-Api-User")
+        XCTAssertEqual(seed.endpointPath, "/api/user/self")
+        XCTAssertEqual(seed.remainingJSONPath, "data.quota")
+        XCTAssertEqual(seed.unit, "quota")
+    }
+
+    func testRelayDescriptorResolverUsesInjectedRegistryForViewConfig() {
+        let manifest = RelayAdapterManifest(
+            id: "draft-template",
+            displayName: "Draft Relay",
+            match: RelayAdapterMatch(
+                hostPatterns: ["relay.draft.test"],
+                defaultDisplayName: "Draft Relay",
+                defaultTokenChannelEnabled: false,
+                defaultBalanceChannelEnabled: true
+            ),
+            authStrategies: [.init(kind: .savedBearer)],
+            balanceRequest: RelayRequestManifest(
+                method: "POST",
+                path: "/draft/balance",
+                bodyJSON: #"{"includeUsage":true}"#,
+                userID: "42",
+                userIDHeader: "X-User-ID",
+                authHeader: "X-Token",
+                authScheme: "Token"
+            ),
+            extract: RelayExtractManifest(
+                success: "ok",
+                remaining: "payload.remaining",
+                used: "payload.used",
+                limit: "payload.limit",
+                unit: "credits"
+            )
+        )
+        let resolver = RelayProviderDescriptorResolver(
+            registry: RelayAdapterRegistry(builtInManifests: [RelayAdapterRegistry.genericManifest, manifest])
+        )
+        let provider = ProviderDescriptor(
+            id: "relay-draft",
+            name: "Draft Relay",
+            family: .thirdParty,
+            type: .relay,
+            enabled: true,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(kind: .bearer, keychainService: "DraftService", keychainAccount: "relay.draft.test/sk-token"),
+            baseURL: "https://relay.draft.test",
+            relayConfig: RelayProviderConfig(
+                baseURL: "https://relay.draft.test",
+                tokenChannelEnabled: false,
+                balanceChannelEnabled: true,
+                balanceAuth: AuthConfig(kind: .bearer, keychainService: "DraftService", keychainAccount: "relay.draft.test/system-token")
+            )
+        )
+
+        let resolvedManifest = resolver.manifest(for: provider)
+        let viewConfig = resolver.viewConfig(for: provider)
+
+        XCTAssertEqual(resolvedManifest?.id, "draft-template")
+        XCTAssertEqual(viewConfig?.tokenUsageEnabled, false)
+        XCTAssertEqual(viewConfig?.accountBalance?.auth.keychainAccount, "relay.draft.test/system-token")
+        XCTAssertEqual(viewConfig?.accountBalance?.authHeader, "X-Token")
+        XCTAssertEqual(viewConfig?.accountBalance?.authScheme, "Token")
+        XCTAssertEqual(viewConfig?.accountBalance?.requestMethod, "POST")
+        XCTAssertEqual(viewConfig?.accountBalance?.requestBodyJSON, #"{"includeUsage":true}"#)
+        XCTAssertEqual(viewConfig?.accountBalance?.endpointPath, "/draft/balance")
+        XCTAssertEqual(viewConfig?.accountBalance?.userID, "42")
+        XCTAssertEqual(viewConfig?.accountBalance?.userIDHeader, "X-User-ID")
+        XCTAssertEqual(viewConfig?.accountBalance?.remainingJSONPath, "payload.remaining")
+        XCTAssertEqual(viewConfig?.accountBalance?.usedJSONPath, "payload.used")
+        XCTAssertEqual(viewConfig?.accountBalance?.limitJSONPath, "payload.limit")
+        XCTAssertEqual(viewConfig?.accountBalance?.successJSONPath, "ok")
+        XCTAssertEqual(viewConfig?.accountBalance?.unit, "credits")
+    }
+
+    func testRelaySettingsDraftSeedUsesInjectedResolverForTemplateDefaults() {
+        let manifest = RelayAdapterManifest(
+            id: "draft-template",
+            displayName: "Draft Relay",
+            match: RelayAdapterMatch(
+                hostPatterns: ["relay.draft.test"],
+                defaultDisplayName: "Draft Relay",
+                defaultTokenChannelEnabled: true,
+                defaultBalanceChannelEnabled: false
+            ),
+            authStrategies: [.init(kind: .savedBearer)],
+            balanceRequest: RelayRequestManifest(
+                method: "POST",
+                path: "/draft/balance",
+                bodyJSON: #"{"includeUsage":true}"#,
+                userID: "42",
+                userIDHeader: "X-User-ID",
+                authHeader: "X-Token",
+                authScheme: "Token"
+            ),
+            extract: RelayExtractManifest(
+                success: "ok",
+                remaining: "payload.remaining",
+                used: "payload.used",
+                limit: "payload.limit",
+                unit: "credits"
+            )
+        )
+        let resolver = RelayProviderDescriptorResolver(
+            registry: RelayAdapterRegistry(builtInManifests: [RelayAdapterRegistry.genericManifest, manifest])
+        )
+        let provider = ProviderDescriptor(
+            id: "relay-draft",
+            name: "Draft Relay",
+            family: .thirdParty,
+            type: .relay,
+            enabled: true,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 10, maxConsecutiveFailures: 2, notifyOnAuthError: true),
+            auth: AuthConfig(kind: .bearer, keychainService: "DraftService", keychainAccount: "relay.draft.test/sk-token"),
+            baseURL: "https://relay.draft.test",
+            relayConfig: nil
+        )
+
+        let seed = RelaySettingsDraftSeed(
+            provider: provider,
+            adapter: RelayProviderDescriptorModelAdapter(resolver: resolver)
+        )
+
+        XCTAssertEqual(seed.preferredAdapterID, "draft-template")
+        XCTAssertTrue(seed.tokenUsageEnabled)
+        XCTAssertFalse(seed.accountEnabled)
+        XCTAssertEqual(seed.authHeader, "X-Token")
+        XCTAssertEqual(seed.authScheme, "Token")
+        XCTAssertEqual(seed.endpointPath, "/draft/balance")
+        XCTAssertEqual(seed.userID, "42")
+        XCTAssertEqual(seed.userIDHeader, "X-User-ID")
+        XCTAssertEqual(seed.remainingJSONPath, "payload.remaining")
+        XCTAssertEqual(seed.usedJSONPath, "payload.used")
+        XCTAssertEqual(seed.limitJSONPath, "payload.limit")
+        XCTAssertEqual(seed.successJSONPath, "ok")
+        XCTAssertEqual(seed.unit, "credits")
     }
 
     func testRelayProviderEditorDraftSeedsExistingProviderState() {

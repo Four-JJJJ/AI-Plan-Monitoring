@@ -52,7 +52,7 @@ extension SettingsView {
             strictSummary: strictSummary
         ) ?? strictSummary
 
-        return summary.map(localUsageTrendHasData) ?? false
+        return summary.map { LocalUsageTrendPresenter.hasData($0) } ?? false
     }
 
     func refreshOfficialUsageSectionIfNeeded(
@@ -77,9 +77,6 @@ extension SettingsView {
         let identityCacheKey = context.identityCacheKey
         let query = context.query
         let historyState = viewModel.localUsageHistoryState(for: query)
-        let chartError = historyState.isStaleFallback && historyState.summary != nil
-            ? nil
-            : historyState.error
         let strictSummary = historyState.summary
         let summary = localUsageTrendDisplaySummary(
             provider: provider,
@@ -87,16 +84,17 @@ extension SettingsView {
             identityCacheKey: identityCacheKey,
             strictSummary: strictSummary
         ) ?? strictSummary
-        let hasTrendData = summary.map(localUsageTrendHasData) ?? false
-        let chartStatus = localUsageTrendChartStatus(
-            provider: provider,
+        let trendPresentation = LocalUsageTrendPresenter.presentation(
+            providerType: provider.type,
             scope: scope,
+            historyState: historyState,
             summary: summary,
-            loading: historyState.isLoading,
-            error: chartError,
-            hasData: hasTrendData
+            localizedText: { viewModel.localizedText($0, $1) },
+            formatInteger: formattedSettingsInteger,
+            dateText: localUsageTrendDiagnosticTimeText
         )
-        let displaySummary = hasTrendData ? summary : nil
+        let chartStatus = localUsageTrendChartStatus(from: trendPresentation.chartStatus)
+        let displaySummary = trendPresentation.displaySummary
 
         VStack(alignment: .leading, spacing: 0) {
             if usesSubscriptionUsageLayout {
@@ -133,7 +131,7 @@ extension SettingsView {
                     localUsageTrendSummaryCapsule(displaySummary)
                         .padding(.top, 16)
 
-                    if let fallbackText = localUsageTrendStaleFallbackText(historyState) {
+                    if let fallbackText = trendPresentation.staleFallbackText {
                         Text(fallbackText)
                             .font(.system(size: 10, weight: .regular))
                             .foregroundStyle(Color(hex: 0xD87E3E))
@@ -142,7 +140,7 @@ extension SettingsView {
                             .padding(.top, 8)
                     }
 
-                    if let cacheStatusText = localUsageTrendCacheStatusText(historyState, summary: summary) {
+                    if let cacheStatusText = trendPresentation.cacheStatusText {
                         Text(cacheStatusText)
                             .font(.system(size: 10, weight: .regular))
                             .foregroundStyle(settingsHintColor)
@@ -633,13 +631,6 @@ extension SettingsView {
         .frame(height: 24)
     }
 
-    private func localUsageTrendEmptyHintText(for provider: ProviderDescriptor) -> String {
-        if provider.type == .gemini {
-            return viewModel.localizedText("本地趋势数据源暂不可用", "Local trend source unavailable")
-        }
-        return viewModel.localizedText("暂无趋势数据", "No trend data")
-    }
-
     private struct LocalUsageTrendContext {
         var scope: LocalUsageTrendScope
         var accountOptions: [LocalUsageTrendAccountOption]
@@ -829,6 +820,20 @@ extension SettingsView {
         .frame(height: height)
     }
 
+    private func localUsageTrendChartStatus(
+        from presentation: LocalUsageTrendStatusPresentation?
+    ) -> LocalUsageTrendChartStatus? {
+        guard let presentation else { return nil }
+        let color: Color
+        switch presentation.tone {
+        case .muted:
+            color = settingsMutedHintColor
+        case .error:
+            color = Color(hex: 0xD05757)
+        }
+        return LocalUsageTrendChartStatus(text: presentation.text, color: color)
+    }
+
     private func localUsageWeeklyTrendChart(points: [LocalUsageTrendPoint]) -> some View {
         GeometryReader { proxy in
             let metric = localUsageTrendDisplayMetric(points: points)
@@ -993,104 +998,6 @@ extension SettingsView {
         case .en:
             return "\(compact) req"
         }
-    }
-
-    private func localUsageTrendHasData(_ summary: LocalUsageSummary) -> Bool {
-        if summary.today.totalTokens > 0 || summary.today.responses > 0 { return true }
-        if summary.yesterday.totalTokens > 0 || summary.yesterday.responses > 0 { return true }
-        if summary.last30Days.totalTokens > 0 || summary.last30Days.responses > 0 { return true }
-        if summary.hourly24.contains(where: { $0.totalTokens > 0 || $0.responses > 0 }) { return true }
-        if summary.daily7.contains(where: { $0.totalTokens > 0 || $0.responses > 0 }) { return true }
-        return false
-    }
-
-    private func localUsageTrendChartStatus(
-        provider: ProviderDescriptor,
-        scope: LocalUsageTrendScope,
-        summary: LocalUsageSummary?,
-        loading: Bool,
-        error: String?,
-        hasData: Bool
-    ) -> LocalUsageTrendChartStatus? {
-        if loading {
-            return LocalUsageTrendChartStatus(
-                text: viewModel.localizedText("加载中...", "Loading..."),
-                color: settingsMutedHintColor
-            )
-        }
-        if let error, !error.isEmpty {
-            return LocalUsageTrendChartStatus(
-                text: error,
-                color: Color(hex: 0xD05757)
-            )
-        }
-        if !hasData {
-            if provider.type == .codex, scope == .currentAccount {
-                if let diagnostics = summary?.diagnostics,
-                   diagnostics.unattributedResponses > 0 || diagnostics.unattributedTokens > 0 {
-                    let unattributedResponses = formattedSettingsInteger(diagnostics.unattributedResponses)
-                    let unattributedTokens = formattedSettingsInteger(diagnostics.unattributedTokens)
-                    let text = viewModel.localizedText(
-                        "当前账号暂无可归属事件（未归属 \(unattributedResponses) 条/\(unattributedTokens) Token）",
-                        "No attributable events for current account (Unattributed \(unattributedResponses)/\(unattributedTokens) tokens)"
-                    )
-                    return LocalUsageTrendChartStatus(
-                        text: text,
-                        color: settingsMutedHintColor
-                    )
-                }
-                return LocalUsageTrendChartStatus(
-                    text: viewModel.localizedText("当前账号暂无可归属事件", "No attributable events for current account"),
-                    color: settingsMutedHintColor
-                )
-            }
-            let noDataText = provider.type == .gemini
-                ? localUsageTrendEmptyHintText(for: provider)
-                : viewModel.localizedText("暂无数据", "No data")
-            return LocalUsageTrendChartStatus(
-                text: noDataText,
-                color: settingsMutedHintColor
-            )
-        }
-        return nil
-    }
-
-    private func localUsageTrendStaleFallbackText(_ state: LocalUsageHistoryState) -> String? {
-        guard state.isStaleFallback,
-              state.summary != nil,
-              let error = localUsageTrendTrimmed(state.error) else {
-            return nil
-        }
-        return viewModel.localizedText(
-            "刷新失败，显示旧缓存：\(error)",
-            "Refresh failed, showing cached data: \(error)"
-        )
-    }
-
-    private func localUsageTrendCacheStatusText(
-        _ state: LocalUsageHistoryState,
-        summary: LocalUsageSummary?
-    ) -> String? {
-        guard let summary else { return nil }
-
-        let generatedText = localUsageTrendDiagnosticTimeText(summary.generatedAt)
-        if let checkedAt = state.lastFingerprintCheckedAt {
-            let checkedText = localUsageTrendDiagnosticTimeText(checkedAt)
-            return viewModel.localizedText(
-                "缓存已校验 \(checkedText) · 图表生成 \(generatedText)",
-                "Cache checked \(checkedText) · Chart generated \(generatedText)"
-            )
-        }
-
-        if let refreshedAt = state.lastRefreshedAt {
-            let refreshedText = localUsageTrendDiagnosticTimeText(refreshedAt)
-            return viewModel.localizedText(
-                "缓存生成 \(refreshedText) · 图表生成 \(generatedText)",
-                "Cache generated \(refreshedText) · Chart generated \(generatedText)"
-            )
-        }
-
-        return nil
     }
 
     private func localUsageWeeklyDisplayPoints(_ points: [LocalUsageTrendPoint]) -> [LocalUsageTrendPoint] {
