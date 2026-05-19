@@ -1,47 +1,47 @@
 import Foundation
 
-enum OfficialSourceMode: String, Codable, CaseIterable, Identifiable {
+public enum OfficialSourceMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case auto
     case api
     case cli
     case web
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
-enum OfficialWebMode: String, Codable, CaseIterable, Identifiable {
+public enum OfficialWebMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case disabled
     case autoImport
     case manual
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
-enum OfficialQuotaDisplayMode: String, Codable, CaseIterable, Identifiable {
+public enum OfficialQuotaDisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case remaining
     case used
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
-enum OfficialTraeValueDisplayMode: String, Codable, CaseIterable, Identifiable {
+public enum OfficialTraeValueDisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case percent
     case amount
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
-struct OfficialProviderConfig: Codable, Equatable {
-    var sourceMode: OfficialSourceMode
-    var webMode: OfficialWebMode
-    var manualCookieAccount: String?
-    var oauthAccountImportEnabled: Bool?
-    var autoDiscoveryEnabled: Bool
-    var quotaDisplayMode: OfficialQuotaDisplayMode
-    var traeValueDisplayMode: OfficialTraeValueDisplayMode?
-    var showPlanTypeInMenuBar: Bool
+public struct OfficialProviderConfig: Codable, Equatable, Sendable {
+    public var sourceMode: OfficialSourceMode
+    public var webMode: OfficialWebMode
+    public var manualCookieAccount: String?
+    public var oauthAccountImportEnabled: Bool?
+    public var autoDiscoveryEnabled: Bool
+    public var quotaDisplayMode: OfficialQuotaDisplayMode
+    public var traeValueDisplayMode: OfficialTraeValueDisplayMode?
+    public var showPlanTypeInMenuBar: Bool
 
-    init(
+    public init(
         sourceMode: OfficialSourceMode = .auto,
         webMode: OfficialWebMode = .disabled,
         manualCookieAccount: String? = nil,
@@ -72,7 +72,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         case showPlanTypeInMenuBar
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.sourceMode = try container.decodeIfPresent(OfficialSourceMode.self, forKey: .sourceMode) ?? .auto
         self.webMode = try container.decodeIfPresent(OfficialWebMode.self, forKey: .webMode) ?? .disabled
@@ -84,7 +84,7 @@ struct OfficialProviderConfig: Codable, Equatable {
         self.showPlanTypeInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showPlanTypeInMenuBar) ?? true
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(sourceMode, forKey: .sourceMode)
         try container.encode(webMode, forKey: .webMode)

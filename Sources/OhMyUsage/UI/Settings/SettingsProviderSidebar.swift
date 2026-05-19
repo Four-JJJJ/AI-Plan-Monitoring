@@ -1,4 +1,5 @@
 import AppKit
+import OhMyUsageDomain
 import SwiftUI
 import UniformTypeIdentifiers
 

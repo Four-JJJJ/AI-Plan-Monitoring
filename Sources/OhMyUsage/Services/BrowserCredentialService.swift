@@ -59,7 +59,13 @@ final class BrowserCredentialService {
         if let bearerCandidatesOverride {
             resolved = bearerCandidatesOverride(normalizedHost)
         } else {
-            resolved = storageReader.bearerTokenCandidates(host: normalizedHost)
+            let firstPass = storageReader.bearerTokenCandidates(
+                host: normalizedHost,
+                refreshPaths: false
+            )
+            resolved = firstPass.isEmpty
+                ? storageReader.bearerTokenCandidates(host: normalizedHost, refreshPaths: true)
+                : firstPass
         }
         cacheBearerCandidates(resolved, for: normalizedHost, now: now)
         return resolved
@@ -89,26 +95,28 @@ final class BrowserCredentialService {
             }
             resolved = candidate
         } else {
-            var candidate: BrowserDetectedCredential?
-            for candidateHost in hostCandidates(for: normalizedHost) {
-                if let detected = cookieService.detectCookieHeader(
-                    hostContains: candidateHost,
-                    order: nil,
-                    accessIntent: accessIntent
-                ) {
-                    candidate = BrowserDetectedCredential(value: detected.header, source: detected.source)
-                    break
-                }
+            let firstPass = detectLiveBrowserCookieHeader(
+                normalizedHost: normalizedHost,
+                accessIntent: accessIntent,
+                refreshPaths: false
+            )
+            let browserCookie = firstPass ?? detectLiveBrowserCookieHeader(
+                normalizedHost: normalizedHost,
+                accessIntent: accessIntent,
+                refreshPaths: true
+            )
+            if let browserCookie {
+                resolved = browserCookie
+            } else {
+                let kimiFirstPass = detectLiveKimiCookieHeader(
+                    normalizedHost: normalizedHost,
+                    refreshPaths: false
+                )
+                resolved = kimiFirstPass ?? detectLiveKimiCookieHeader(
+                    normalizedHost: normalizedHost,
+                    refreshPaths: true
+                )
             }
-            if candidate == nil {
-                for candidateHost in hostCandidates(for: normalizedHost) {
-                    if let detected = kimiCookieService.detectCookieHeader(host: candidateHost) {
-                        candidate = BrowserDetectedCredential(value: detected.token, source: detected.source)
-                        break
-                    }
-                }
-            }
-            resolved = candidate
         }
 
         cacheCookieHeader(resolved, for: normalizedHost, now: now)
@@ -142,23 +150,75 @@ final class BrowserCredentialService {
             }
             resolved = candidate
         } else {
-            var candidate: BrowserDetectedCredential?
-            for candidateHost in hostCandidates(for: normalizedHost) {
-                if let detected = cookieService.detectNamedCookie(
-                    name: normalizedName,
-                    hostContains: candidateHost,
-                    order: nil,
-                    accessIntent: accessIntent
-                ) {
-                    candidate = BrowserDetectedCredential(value: detected.header, source: detected.source)
-                    break
-                }
-            }
-            resolved = candidate
+            let firstPass = detectLiveNamedCookie(
+                name: normalizedName,
+                normalizedHost: normalizedHost,
+                accessIntent: accessIntent,
+                refreshPaths: false
+            )
+            resolved = firstPass ?? detectLiveNamedCookie(
+                name: normalizedName,
+                normalizedHost: normalizedHost,
+                accessIntent: accessIntent,
+                refreshPaths: true
+            )
         }
 
         cacheNamedCookie(resolved, for: cacheKey, now: now)
         return resolved
+    }
+
+    private func detectLiveBrowserCookieHeader(
+        normalizedHost: String,
+        accessIntent: BrowserCredentialAccessIntent,
+        refreshPaths: Bool
+    ) -> BrowserDetectedCredential? {
+        for candidateHost in hostCandidates(for: normalizedHost) {
+            if let detected = cookieService.detectCookieHeader(
+                hostContains: candidateHost,
+                order: nil,
+                accessIntent: accessIntent,
+                refreshPaths: refreshPaths
+            ) {
+                return BrowserDetectedCredential(value: detected.header, source: detected.source)
+            }
+        }
+        return nil
+    }
+
+    private func detectLiveKimiCookieHeader(
+        normalizedHost: String,
+        refreshPaths: Bool
+    ) -> BrowserDetectedCredential? {
+        for candidateHost in hostCandidates(for: normalizedHost) {
+            if let detected = kimiCookieService.detectCookieHeader(
+                host: candidateHost,
+                refreshPaths: refreshPaths
+            ) {
+                return BrowserDetectedCredential(value: detected.token, source: detected.source)
+            }
+        }
+        return nil
+    }
+
+    private func detectLiveNamedCookie(
+        name: String,
+        normalizedHost: String,
+        accessIntent: BrowserCredentialAccessIntent,
+        refreshPaths: Bool
+    ) -> BrowserDetectedCredential? {
+        for candidateHost in hostCandidates(for: normalizedHost) {
+            if let detected = cookieService.detectNamedCookie(
+                name: name,
+                hostContains: candidateHost,
+                order: nil,
+                accessIntent: accessIntent,
+                refreshPaths: refreshPaths
+            ) {
+                return BrowserDetectedCredential(value: detected.header, source: detected.source)
+            }
+        }
+        return nil
     }
 
     private func hostCandidates(for host: String) -> [String] {

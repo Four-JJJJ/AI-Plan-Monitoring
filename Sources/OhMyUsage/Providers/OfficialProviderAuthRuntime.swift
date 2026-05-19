@@ -5,6 +5,12 @@ struct OfficialOAuthRefreshResponse {
     let json: [String: Any]
 }
 
+struct OfficialProviderAuthRequestResult<State, Response> {
+    let state: State
+    let response: Response
+    let didRefresh: Bool
+}
+
 enum OfficialProviderAuthRuntime {
     static func urlEncodedFormData(_ fields: [String: String]) -> Data? {
         fields
@@ -42,6 +48,39 @@ enum OfficialProviderAuthRuntime {
             accessToken: accessToken,
             json: json
         )
+    }
+
+    static func requestWithExpiringCredentialRefresh<State, Response>(
+        initialState: State,
+        shouldRefresh: (State) -> Bool,
+        request: (State) async throws -> Response,
+        refresh: (State) async throws -> State
+    ) async throws -> OfficialProviderAuthRequestResult<State, Response> {
+        var state = initialState
+        var didRefresh = false
+
+        if shouldRefresh(state) {
+            state = try await refresh(state)
+            didRefresh = true
+        }
+
+        do {
+            return OfficialProviderAuthRequestResult(
+                state: state,
+                response: try await request(state),
+                didRefresh: didRefresh
+            )
+        } catch let error as ProviderError {
+            guard case .unauthorized = error else {
+                throw error
+            }
+            state = try await refresh(state)
+            return OfficialProviderAuthRequestResult(
+                state: state,
+                response: try await request(state),
+                didRefresh: true
+            )
+        }
     }
 
     static func updateJSONObjectFile(

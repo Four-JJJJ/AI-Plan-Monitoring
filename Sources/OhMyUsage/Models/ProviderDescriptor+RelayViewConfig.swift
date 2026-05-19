@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct RelayProviderDescriptorModelAdapter {
     private let manifestForProvider: (ProviderDescriptor) -> RelayAdapterManifest?

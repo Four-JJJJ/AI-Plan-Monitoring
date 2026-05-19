@@ -1,12 +1,13 @@
 import AppKit
 import OhMyUsageApplication
+import OhMyUsageDomain
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Bindable var viewModel: AppViewModel
     var onDone: (() -> Void)? = nil
-    let settingsClockController = SettingsClockController()
+    let visibleClockController = VisibleClockController()
 
     @State var relayEditorDraft = RelayProviderEditorDraft()
     @State var relayTestResultGeneration = 0

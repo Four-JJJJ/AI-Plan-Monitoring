@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct AppProviderSettingsMutationOutcome: Equatable {
     var shouldPersistAndRestart: Bool = false

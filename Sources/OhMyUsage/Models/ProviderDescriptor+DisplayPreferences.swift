@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 extension ProviderDescriptor {
     var displaysUsedQuota: Bool {

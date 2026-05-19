@@ -20,7 +20,92 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.pollTaskCount, 0)
     }
 
-    func testManualRefreshRefreshesEnabledProvidersInOrder() async throws {
+    func testRestartWithMultipleEnabledProvidersUsesSinglePollLoopTask() {
+        let first = makeProvider(id: "first", enabled: true)
+        let second = makeProvider(id: "second", enabled: true)
+        let disabled = makeProvider(id: "disabled", enabled: false)
+        let scheduler = makeScheduler(providers: [first, second, disabled])
+
+        scheduler.restart(providers: [first, second, disabled])
+
+        XCTAssertEqual(scheduler.scheduledProviderIDs, ["first", "second"])
+        XCTAssertEqual(scheduler.pollTaskCount, 1)
+
+        scheduler.stop()
+    }
+
+    func testRepeatedRestartKeepsSingleScheduledTaskAndCancelsPriorTask() async throws {
+        let provider = makeProvider(id: "poll", enabled: true)
+        let recorder = RefreshRecorder()
+        let sleepGate = BlockingSleepGate()
+        let scheduler = makeScheduler(
+            providers: [provider],
+            refreshRecorder: recorder,
+            startupJitterProvider: { 1 },
+            sleepAction: { seconds in
+                try await sleepGate.sleep(seconds)
+            }
+        )
+
+        scheduler.restart(providers: [provider])
+        try await waitUntil {
+            await sleepGate.snapshot().count == 1
+        }
+
+        scheduler.restart(providers: [provider])
+
+        XCTAssertEqual(scheduler.scheduledProviderIDs, ["poll"])
+        XCTAssertEqual(scheduler.pollTaskCount, 1)
+
+        try await waitUntil {
+            await sleepGate.snapshot().count == 2
+        }
+        await sleepGate.releaseAll()
+
+        try await waitUntil {
+            let events = await recorder.snapshot()
+            let sleeps = await sleepGate.snapshot()
+            return events.count == 1 && sleeps.count >= 3
+        }
+        let restartEvents = await recorder.snapshot()
+        XCTAssertEqual(restartEvents, ["poll:false"])
+
+        scheduler.stop()
+        await sleepGate.releaseAll()
+    }
+
+    func testRestartWithDisabledProviderRemovesScheduleAndCancelsPriorTask() async throws {
+        let enabled = makeProvider(id: "toggle", enabled: true)
+        let disabled = makeProvider(id: "toggle", enabled: false)
+        let recorder = RefreshRecorder()
+        let sleepGate = BlockingSleepGate()
+        let scheduler = makeScheduler(
+            providers: [enabled],
+            refreshRecorder: recorder,
+            startupJitterProvider: { 1 },
+            sleepAction: { seconds in
+                try await sleepGate.sleep(seconds)
+            }
+        )
+
+        scheduler.restart(providers: [enabled])
+        try await waitUntil {
+            await sleepGate.snapshot().count == 1
+        }
+
+        scheduler.restart(providers: [disabled])
+
+        XCTAssertTrue(scheduler.scheduledProviderIDs.isEmpty)
+        XCTAssertEqual(scheduler.pollTaskCount, 0)
+
+        await sleepGate.releaseAll()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [])
+    }
+
+    func testRefreshNowSkipsDisabledProvidersAndPreservesEnabledOrder() async throws {
         let first = makeProvider(id: "first", enabled: true)
         let second = makeProvider(id: "second", enabled: true)
         let disabled = makeProvider(id: "disabled", enabled: false)
@@ -30,7 +115,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
             refreshRecorder: recorder
         )
 
-        scheduler.refreshNow(providers: [first, second, disabled])
+        scheduler.refreshNow(providers: [first, disabled, second])
 
         try await waitUntil {
             await recorder.snapshot().count == 2
@@ -41,13 +126,15 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
 
     func testPollLoopUsesFailureBackoff() async throws {
         let provider = makeProvider(id: "poll", enabled: true, pollIntervalSec: 60)
-        let recorder = RefreshRecorder()
+        var events: [String] = []
         let sleepRecorder = SleepRecorder()
         let scheduler = makeScheduler(
             providers: [provider],
             failureCounts: ["poll": 1],
-            refreshRecorder: recorder,
             startupJitterProvider: { 0 },
+            refreshAction: { providerID, forceRefresh in
+                events.append("\(providerID):\(forceRefresh)")
+            },
             sleepAction: { seconds in
                 await sleepRecorder.record(seconds)
                 throw CancellationError()
@@ -57,9 +144,8 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         scheduler.restart(providers: [provider])
 
         try await waitUntil {
-            let events = await recorder.snapshot()
             let sleeps = await sleepRecorder.snapshot()
-            return events == ["poll:false"] && sleeps == [120]
+            return events == ["poll:false"] && self.timeIntervals(sleeps, approximatelyEqualTo: [120])
         }
         scheduler.stop()
     }
@@ -67,26 +153,62 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
     func testBackgroundProviderUsesConfiguredBackgroundInterval() async throws {
         let foreground = makeProvider(id: "foreground", enabled: true, pollIntervalSec: 300)
         let background = makeProvider(id: "background", enabled: true, pollIntervalSec: 300)
-        let recorder = RefreshRecorder()
-        let sleepRecorder = SleepRecorder()
+        var events: [String] = []
+        let sleepGate = BlockingSleepGate()
         let scheduler = makeScheduler(
             providers: [foreground, background],
             activeProviderIDs: ["foreground"],
-            refreshRecorder: recorder,
             startupJitterProvider: { 0 },
+            refreshAction: { providerID, forceRefresh in
+                events.append("\(providerID):\(forceRefresh)")
+            },
             sleepAction: { seconds in
-                await sleepRecorder.record(seconds)
-                throw CancellationError()
+                try await sleepGate.sleep(seconds)
             }
         )
 
         scheduler.restart(providers: [foreground, background])
 
         try await waitUntil {
-            let sleeps = await sleepRecorder.snapshot()
-            return sleeps.contains(300) && sleeps.contains(180)
+            let sleeps = await sleepGate.snapshot()
+            return Set(events) == ["foreground:false", "background:false"]
+                && events.count == 2
+                && self.timeIntervals(sleeps, approximatelyEqualTo: [180])
         }
+
+        await sleepGate.releaseAll()
+
+        try await waitUntil {
+            let sleeps = await sleepGate.snapshot()
+            return events.filter { $0 == "background:false" }.count >= 2
+                && events.contains("foreground:false")
+                && self.timeIntervals(sleeps, approximatelyEqualTo: [180, 120])
+        }
+
         scheduler.stop()
+        await sleepGate.releaseAll()
+    }
+
+    func testPollLoopDoesNotBlockOtherDueProvidersWhenOneRefreshIsStillRunning() async throws {
+        let first = makeProvider(id: "first", enabled: true, pollIntervalSec: 60)
+        let second = makeProvider(id: "second", enabled: true, pollIntervalSec: 60)
+        let refreshGate = BlockingRefreshGate()
+        let scheduler = makeScheduler(
+            providers: [first, second],
+            startupJitterProvider: { 0 },
+            refreshAction: { providerID, forceRefresh in
+                await refreshGate.refresh(providerID: providerID, forceRefresh: forceRefresh)
+            }
+        )
+
+        scheduler.restart(providers: [first, second])
+
+        try await waitUntil {
+            await refreshGate.snapshot() == ["first:false", "second:false"]
+        }
+
+        scheduler.stop()
+        await refreshGate.releaseAll()
     }
 
     func testLocalSessionSignalTriggersRefresh() async throws {
@@ -131,6 +253,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
             signalSource: FakeLocalSessionSignalSource()
         ),
         startupJitterProvider: @escaping @Sendable () -> TimeInterval = { 999 },
+        refreshAction customRefreshAction: ProviderRefreshScheduler.RefreshAction? = nil,
         sleepAction: @escaping ProviderRefreshScheduler.SleepAction = { _ in throw CancellationError() }
     ) -> ProviderRefreshScheduler {
         let currentProviders = providers
@@ -147,7 +270,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
             failureCountProvider: { providerID in
                 failureCounts[providerID, default: 0]
             },
-            refreshAction: { providerID, forceRefresh in
+            refreshAction: customRefreshAction ?? { providerID, forceRefresh in
                 await refreshRecorder.record(providerID: providerID, forceRefresh: forceRefresh)
             },
             localSessionRefreshCoordinator: localSessionRefreshCoordinator,
@@ -188,6 +311,15 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         }
         XCTFail("Timed out waiting for scheduler state")
     }
+
+    private func timeIntervals(
+        _ values: [TimeInterval],
+        approximatelyEqualTo expected: [TimeInterval],
+        accuracy: TimeInterval = 0.5
+    ) -> Bool {
+        guard values.count == expected.count else { return false }
+        return zip(values, expected).allSatisfy { abs($0 - $1) <= accuracy }
+    }
 }
 
 private actor RefreshRecorder {
@@ -211,6 +343,50 @@ private actor SleepRecorder {
 
     func snapshot() -> [TimeInterval] {
         values
+    }
+}
+
+private actor BlockingSleepGate {
+    private var values: [TimeInterval] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(_ value: TimeInterval) async throws {
+        values.append(value)
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func releaseAll() {
+        let continuations = continuations
+        self.continuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func snapshot() -> [TimeInterval] {
+        values
+    }
+}
+
+private actor BlockingRefreshGate {
+    private var events: [String] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func refresh(providerID: String, forceRefresh: Bool) async {
+        events.append("\(providerID):\(forceRefresh)")
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func releaseAll() {
+        let continuations = continuations
+        self.continuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func snapshot() -> [String] {
+        events
     }
 }
 

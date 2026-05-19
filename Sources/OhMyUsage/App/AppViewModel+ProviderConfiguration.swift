@@ -1,5 +1,6 @@
 import Foundation
 import OhMyUsageApplication
+import OhMyUsageDomain
 
 @MainActor
 extension AppViewModel {

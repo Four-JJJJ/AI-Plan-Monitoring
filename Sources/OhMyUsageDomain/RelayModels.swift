@@ -1,16 +1,16 @@
 import Foundation
 
-struct RelayProviderConfig: Codable, Equatable {
-    var adapterID: String?
-    var baseURL: String
-    var tokenChannelEnabled: Bool
-    var balanceChannelEnabled: Bool
-    var balanceAuth: AuthConfig
-    var balanceCredentialMode: RelayCredentialMode?
-    var quotaDisplayMode: OfficialQuotaDisplayMode
-    var manualOverrides: RelayManualOverride?
+public struct RelayProviderConfig: Codable, Equatable, Sendable {
+    public var adapterID: String?
+    public var baseURL: String
+    public var tokenChannelEnabled: Bool
+    public var balanceChannelEnabled: Bool
+    public var balanceAuth: AuthConfig
+    public var balanceCredentialMode: RelayCredentialMode?
+    public var quotaDisplayMode: OfficialQuotaDisplayMode
+    public var manualOverrides: RelayManualOverride?
 
-    init(
+    public init(
         adapterID: String? = nil,
         baseURL: String,
         tokenChannelEnabled: Bool = true,
@@ -41,7 +41,7 @@ struct RelayProviderConfig: Codable, Equatable {
         case manualOverrides
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.adapterID = try container.decodeIfPresent(String.self, forKey: .adapterID)
         self.baseURL = try container.decode(String.self, forKey: .baseURL)
@@ -53,7 +53,7 @@ struct RelayProviderConfig: Codable, Equatable {
         self.manualOverrides = try container.decodeIfPresent(RelayManualOverride.self, forKey: .manualOverrides)
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(adapterID, forKey: .adapterID)
         try container.encode(baseURL, forKey: .baseURL)
@@ -66,31 +66,63 @@ struct RelayProviderConfig: Codable, Equatable {
     }
 }
 
-enum RelayCredentialMode: String, Codable, CaseIterable, Identifiable {
+public enum RelayCredentialMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case manualPreferred
     case browserPreferred
     case browserOnly
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
-struct RelayManualOverride: Codable, Equatable {
-    var authHeader: String?
-    var authScheme: String?
-    var userID: String?
-    var userIDHeader: String?
-    var requestMethod: String?
-    var requestBodyJSON: String?
-    var endpointPath: String?
-    var remainingExpression: String?
-    var usedExpression: String?
-    var limitExpression: String?
-    var successExpression: String?
-    var unitExpression: String?
-    var accountLabelExpression: String?
-    var staticHeaders: [String: String]?
+public struct RelayManualOverride: Codable, Equatable, Sendable {
+    public var authHeader: String?
+    public var authScheme: String?
+    public var userID: String?
+    public var userIDHeader: String?
+    public var requestMethod: String?
+    public var requestBodyJSON: String?
+    public var endpointPath: String?
+    public var remainingExpression: String?
+    public var usedExpression: String?
+    public var limitExpression: String?
+    public var successExpression: String?
+    public var unitExpression: String?
+    public var accountLabelExpression: String?
+    public var staticHeaders: [String: String]?
 
-    var isEmpty: Bool {
+    public init(
+        authHeader: String? = nil,
+        authScheme: String? = nil,
+        userID: String? = nil,
+        userIDHeader: String? = nil,
+        requestMethod: String? = nil,
+        requestBodyJSON: String? = nil,
+        endpointPath: String? = nil,
+        remainingExpression: String? = nil,
+        usedExpression: String? = nil,
+        limitExpression: String? = nil,
+        successExpression: String? = nil,
+        unitExpression: String? = nil,
+        accountLabelExpression: String? = nil,
+        staticHeaders: [String: String]? = nil
+    ) {
+        self.authHeader = authHeader
+        self.authScheme = authScheme
+        self.userID = userID
+        self.userIDHeader = userIDHeader
+        self.requestMethod = requestMethod
+        self.requestBodyJSON = requestBodyJSON
+        self.endpointPath = endpointPath
+        self.remainingExpression = remainingExpression
+        self.usedExpression = usedExpression
+        self.limitExpression = limitExpression
+        self.successExpression = successExpression
+        self.unitExpression = unitExpression
+        self.accountLabelExpression = accountLabelExpression
+        self.staticHeaders = staticHeaders
+    }
+
+    public var isEmpty: Bool {
         authHeader == nil &&
         authScheme == nil &&
         userID == nil &&
@@ -108,7 +140,7 @@ struct RelayManualOverride: Codable, Equatable {
     }
 }
 
-enum RelayAuthStrategyKind: String, Codable, CaseIterable {
+public enum RelayAuthStrategyKind: String, Codable, CaseIterable, Sendable {
     case savedBearer
     case browserBearer
     case savedCookieHeader
@@ -117,23 +149,23 @@ enum RelayAuthStrategyKind: String, Codable, CaseIterable {
     case customHeader
 }
 
-struct RelayAuthStrategy: Codable, Equatable {
-    var kind: RelayAuthStrategyKind
-    var cookieName: String?
+public struct RelayAuthStrategy: Codable, Equatable, Sendable {
+    public var kind: RelayAuthStrategyKind
+    public var cookieName: String?
 
-    init(kind: RelayAuthStrategyKind, cookieName: String? = nil) {
+    public init(kind: RelayAuthStrategyKind, cookieName: String? = nil) {
         self.kind = kind
         self.cookieName = cookieName
     }
 }
 
-struct RelayAdapterMatch: Codable, Equatable {
-    var hostPatterns: [String]
-    var defaultDisplayName: String?
-    var defaultTokenChannelEnabled: Bool
-    var defaultBalanceChannelEnabled: Bool
+public struct RelayAdapterMatch: Codable, Equatable, Sendable {
+    public var hostPatterns: [String]
+    public var defaultDisplayName: String?
+    public var defaultTokenChannelEnabled: Bool
+    public var defaultBalanceChannelEnabled: Bool
 
-    init(
+    public init(
         hostPatterns: [String],
         defaultDisplayName: String? = nil,
         defaultTokenChannelEnabled: Bool = true,
@@ -146,7 +178,7 @@ struct RelayAdapterMatch: Codable, Equatable {
     }
 }
 
-enum RelayRequiredInputKind: String, Codable, CaseIterable {
+public enum RelayRequiredInputKind: String, Codable, CaseIterable, Sendable {
     case displayName
     case baseURL
     case quotaAuth
@@ -154,25 +186,25 @@ enum RelayRequiredInputKind: String, Codable, CaseIterable {
     case userID
 }
 
-struct RelaySetupManifest: Codable, Equatable {
-    struct LocalizedText: Codable, Equatable {
-        var zhHans: String?
-        var en: String?
+public struct RelaySetupManifest: Codable, Equatable, Sendable {
+    public struct LocalizedText: Codable, Equatable, Sendable {
+        public var zhHans: String?
+        public var en: String?
 
-        init(zhHans: String? = nil, en: String? = nil) {
+        public init(zhHans: String? = nil, en: String? = nil) {
             self.zhHans = zhHans
             self.en = en
         }
     }
 
-    var recommendedBaseURL: String?
-    var requiredInputs: [RelayRequiredInputKind]
-    var quotaAuthHint: LocalizedText?
-    var balanceAuthHint: LocalizedText?
-    var userIDHint: LocalizedText?
-    var diagnosticHints: LocalizedText?
+    public var recommendedBaseURL: String?
+    public var requiredInputs: [RelayRequiredInputKind]
+    public var quotaAuthHint: LocalizedText?
+    public var balanceAuthHint: LocalizedText?
+    public var userIDHint: LocalizedText?
+    public var diagnosticHints: LocalizedText?
 
-    init(
+    public init(
         recommendedBaseURL: String? = nil,
         requiredInputs: [RelayRequiredInputKind] = [],
         quotaAuthHint: LocalizedText? = nil,
@@ -189,17 +221,17 @@ struct RelaySetupManifest: Codable, Equatable {
     }
 }
 
-struct RelayRequestManifest: Codable, Equatable {
-    var method: String
-    var path: String
-    var bodyJSON: String?
-    var headers: [String: String]?
-    var userID: String?
-    var userIDHeader: String?
-    var authHeader: String?
-    var authScheme: String?
+public struct RelayRequestManifest: Codable, Equatable, Sendable {
+    public var method: String
+    public var path: String
+    public var bodyJSON: String?
+    public var headers: [String: String]?
+    public var userID: String?
+    public var userIDHeader: String?
+    public var authHeader: String?
+    public var authScheme: String?
 
-    init(
+    public init(
         method: String = "GET",
         path: String,
         bodyJSON: String? = nil,
@@ -220,12 +252,12 @@ struct RelayRequestManifest: Codable, Equatable {
     }
 }
 
-struct RelayTokenRequestManifest: Codable, Equatable {
-    var usagePath: String
-    var subscriptionPath: String?
-    var billingUsagePath: String?
+public struct RelayTokenRequestManifest: Codable, Equatable, Sendable {
+    public var usagePath: String
+    public var subscriptionPath: String?
+    public var billingUsagePath: String?
 
-    init(
+    public init(
         usagePath: String = "/api/usage/token/",
         subscriptionPath: String? = "/v1/dashboard/billing/subscription",
         billingUsagePath: String? = "/v1/dashboard/billing/usage"
@@ -236,15 +268,15 @@ struct RelayTokenRequestManifest: Codable, Equatable {
     }
 }
 
-struct RelayExtractManifest: Codable, Equatable {
-    var success: String?
-    var remaining: String
-    var used: String?
-    var limit: String?
-    var unit: String?
-    var accountLabel: String?
+public struct RelayExtractManifest: Codable, Equatable, Sendable {
+    public var success: String?
+    public var remaining: String
+    public var used: String?
+    public var limit: String?
+    public var unit: String?
+    public var accountLabel: String?
 
-    init(
+    public init(
         success: String? = nil,
         remaining: String,
         used: String? = nil,
@@ -261,25 +293,31 @@ struct RelayExtractManifest: Codable, Equatable {
     }
 }
 
-enum RelayPostprocessID: String, Codable, Equatable {
+public enum RelayPostprocessID: String, Codable, Equatable, Sendable {
     case quotaDisplayStatus
 }
 
-struct RelayAdapterManifest: Codable, Equatable, Identifiable {
-    var id: String
-    var displayName: String
-    var match: RelayAdapterMatch
-    var setup: RelaySetupManifest?
-    var authStrategies: [RelayAuthStrategy]
-    var displayMode: RelayDisplayMode
-    var supportsBrowserFallback: Bool
-    var supportsSeparateBalanceAuth: Bool
-    var balanceRequest: RelayRequestManifest
-    var tokenRequest: RelayTokenRequestManifest?
-    var extract: RelayExtractManifest
-    var postprocessID: RelayPostprocessID?
+public enum RelayDisplayMode: String, Codable, Equatable, Sendable {
+    case balance
+    case quotaPercent
+    case hybrid
+}
 
-    init(
+public struct RelayAdapterManifest: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var displayName: String
+    public var match: RelayAdapterMatch
+    public var setup: RelaySetupManifest?
+    public var authStrategies: [RelayAuthStrategy]
+    public var displayMode: RelayDisplayMode
+    public var supportsBrowserFallback: Bool
+    public var supportsSeparateBalanceAuth: Bool
+    public var balanceRequest: RelayRequestManifest
+    public var tokenRequest: RelayTokenRequestManifest?
+    public var extract: RelayExtractManifest
+    public var postprocessID: RelayPostprocessID?
+
+    public init(
         id: String,
         displayName: String,
         match: RelayAdapterMatch,
@@ -322,7 +360,7 @@ struct RelayAdapterManifest: Codable, Equatable, Identifiable {
         case postprocessID
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         displayName = try container.decode(String.self, forKey: .displayName)

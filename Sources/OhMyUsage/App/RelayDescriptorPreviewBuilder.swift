@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct RelayDescriptorPreviewBuilder {
     func build(draft: RelaySettingsDraft, providers: [ProviderDescriptor]) -> ProviderDescriptor? {

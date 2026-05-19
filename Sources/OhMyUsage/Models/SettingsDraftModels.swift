@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 enum ProviderGroup: String, CaseIterable, Identifiable {
     case official

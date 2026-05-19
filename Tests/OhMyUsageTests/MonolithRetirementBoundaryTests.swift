@@ -1,5 +1,7 @@
 import Foundation
+import OhMyUsageDomain
 import XCTest
+@testable import OhMyUsage
 
 final class MonolithRetirementBoundaryTests: XCTestCase {
     func testCoordinatorsAndPresentersDoNotDependOnAppViewModelNestedDisplayTypes() throws {
@@ -64,7 +66,16 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
         let modelCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderMetadataCatalog.swift")
         let relayCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/OfficialRelayMetadataCatalog.swift")
         let typeCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderTypeMetadataCatalog.swift")
+        let presentationCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderPresentationMetadataCatalog.swift")
+        let settingsCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderSettingsMetadataCatalog.swift")
+        let capabilityCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderCapabilityMetadataCatalog.swift")
+        let relayIconCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/RelayIconMetadataCatalog.swift")
+        let officialRelayMetadataURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+OfficialRelayMetadata.swift")
         let catalogSource = try String(contentsOf: modelCatalogURL, encoding: .utf8)
+        let settingsCatalogSource = try String(contentsOf: settingsCatalogURL, encoding: .utf8)
+        let capabilityCatalogSource = try String(contentsOf: capabilityCatalogURL, encoding: .utf8)
+        let relayIconCatalogSource = try String(contentsOf: relayIconCatalogURL, encoding: .utf8)
+        let officialRelayMetadataSource = try String(contentsOf: officialRelayMetadataURL, encoding: .utf8)
         let catalogLineCount = catalogSource.split(separator: "\n", omittingEmptySubsequences: false).count
 
         XCTAssertLessThanOrEqual(
@@ -88,6 +99,61 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
             FileManager.default.fileExists(atPath: typeCatalogURL.path),
             "Provider type metadata should live in ProviderTypeMetadataCatalog"
         )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: presentationCatalogURL.path),
+            "Provider presentation metadata should live in ProviderPresentationMetadataCatalog"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: settingsCatalogURL.path),
+            "Provider settings metadata should live in ProviderSettingsMetadataCatalog"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: capabilityCatalogURL.path),
+            "Provider capabilities metadata should live in ProviderCapabilityMetadataCatalog"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: relayIconCatalogURL.path),
+            "Relay icon override metadata should live in RelayIconMetadataCatalog"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("private static func credentialFields"),
+            "ProviderMetadataCatalog should not own credential field derivation"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("private static func relayIconOverrideName"),
+            "ProviderMetadataCatalog should not own relay icon override matching"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("private static func displayName"),
+            "ProviderMetadataCatalog should not own provider presentation display names"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("private static func iconName"),
+            "ProviderMetadataCatalog should not own provider presentation icons"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("private static func fallbackIcon"),
+            "ProviderMetadataCatalog should not own provider presentation fallback icons"
+        )
+        XCTAssertFalse(
+            officialRelayMetadataSource.contains("ProviderMetadataCatalog.officialRelay"),
+            "ProviderDescriptor+OfficialRelayMetadata should query OfficialRelayMetadataCatalog directly"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("ProviderCapabilities("),
+            "ProviderMetadataCatalog should delegate capability construction"
+        )
+        XCTAssertFalse(
+            catalogSource.contains("ProviderSettingsSpec("),
+            "ProviderMetadataCatalog should delegate settings spec construction"
+        )
+        XCTAssertTrue(settingsCatalogSource.contains("static func settingsSpec(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(settingsCatalogSource.contains("static func supportedOfficialSourceModes(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(settingsCatalogSource.contains("static func supportedOfficialWebModes(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(settingsCatalogSource.contains("static func supportsOfficialBearerCredentialInput(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(settingsCatalogSource.contains("credentialFields(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(capabilityCatalogSource.contains("static func capabilities(for provider: ProviderDescriptor)"))
+        XCTAssertTrue(relayIconCatalogSource.contains("static func iconOverrideName(for provider: ProviderDescriptor)"))
     }
 
     func testProviderModelsDoesNotOwnAppConfigDefinition() throws {
@@ -128,6 +194,75 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
         XCTAssertTrue(authHelpers.contains("func normalizedCredentialServiceName"))
     }
 
+    func testProviderConfigurationDomainMigrationKeepsRuntimeAndPolicyRedLinesInExecutable() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let domainURL = rootURL.appendingPathComponent("Sources/OhMyUsageDomain")
+        let executableModelsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models")
+        let executableServicesURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Services")
+
+        let domainValueFiles = [
+            "AuthModels.swift",
+            "OfficialProviderConfigModels.swift",
+            "RelayModels.swift",
+            "OpenRelayProviderConfigModels.swift"
+        ]
+        for fileName in domainValueFiles {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: domainURL.appendingPathComponent(fileName).path),
+                "Stage 1 pure provider configuration value objects should live in OhMyUsageDomain/\(fileName)"
+            )
+        }
+
+        let executableModelRedLines = [
+            "AuthConfig+CredentialHelpers.swift",
+            "ProviderModels.swift",
+            "ProviderDescriptor+Defaults.swift",
+            "ProviderDescriptor+OfficialDefaults.swift",
+            "ProviderDescriptor+RelayDefaults.swift",
+            "ProviderDefaultCatalog.swift",
+            "OfficialProviderDefaultCatalog.swift",
+            "OfficialRelayProviderDefaultCatalog.swift",
+            "RelayProviderDefaultCatalog.swift",
+            "ProviderDescriptor+Normalization.swift",
+            "ProviderDescriptor+LegacyRelayMigration.swift",
+            "ProviderDescriptor+RelayViewConfig.swift",
+            "ProviderDescriptor+OfficialRelayMetadata.swift",
+            "SettingsDraftModels.swift",
+            "AppConfigModels.swift"
+        ]
+        for fileName in executableModelRedLines {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: executableModelsURL.appendingPathComponent(fileName).path),
+                "\(fileName) should remain in the executable target boundary"
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: domainURL.appendingPathComponent(fileName).path),
+                "\(fileName) should not move into OhMyUsageDomain during Stage 1"
+            )
+        }
+
+        let executableServiceRedLines = [
+            "ProviderFactory.swift",
+            "ProviderFactoryRegistry.swift",
+            "ProviderDefinitionRegistry.swift"
+        ]
+        for fileName in executableServiceRedLines {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: executableServicesURL.appendingPathComponent(fileName).path),
+                "\(fileName) should remain in the executable services boundary"
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: domainURL.appendingPathComponent(fileName).path),
+                "\(fileName) should not move into OhMyUsageDomain during Stage 1"
+            )
+        }
+
+        let authHelpersURL = executableModelsURL.appendingPathComponent("AuthConfig+CredentialHelpers.swift")
+        let authHelpers = try String(contentsOf: authHelpersURL, encoding: .utf8)
+        XCTAssertTrue(authHelpers.contains("normalizedCredentialServiceName"))
+        XCTAssertTrue(authHelpers.contains("withFallback"))
+    }
+
     func testProviderModelsDoesNotOwnDefaultProviderConstructors() throws {
         let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let providerModelsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderModels.swift")
@@ -149,6 +284,114 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
         let defaults = try String(contentsOf: defaultsURL, encoding: .utf8)
         XCTAssertTrue(defaults.contains("defaultOfficialCodex"))
         XCTAssertTrue(defaults.contains("defaultOpenAilinyu"))
+    }
+
+    func testProviderDescriptorDefaultsStayAsFacadesOverDefaultCatalogs() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let defaultsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+Defaults.swift")
+        let officialDefaultsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+OfficialDefaults.swift")
+        let relayDefaultsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+RelayDefaults.swift")
+        let providerCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDefaultCatalog.swift")
+        let officialCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/OfficialProviderDefaultCatalog.swift")
+        let officialRelayCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/OfficialRelayProviderDefaultCatalog.swift")
+        let relayCatalogURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/RelayProviderDefaultCatalog.swift")
+        let appConfigURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/AppConfigModels.swift")
+
+        for catalogURL in [providerCatalogURL, officialCatalogURL, officialRelayCatalogURL, relayCatalogURL] {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: catalogURL.path),
+                "\(catalogURL.lastPathComponent) should own focused provider default construction or policy"
+            )
+        }
+
+        let defaults = try String(contentsOf: defaultsURL, encoding: .utf8)
+        let officialDefaults = try String(contentsOf: officialDefaultsURL, encoding: .utf8)
+        let relayDefaults = try String(contentsOf: relayDefaultsURL, encoding: .utf8)
+        let providerCatalog = try String(contentsOf: providerCatalogURL, encoding: .utf8)
+        let officialCatalog = try String(contentsOf: officialCatalogURL, encoding: .utf8)
+        let officialRelayCatalog = try String(contentsOf: officialRelayCatalogURL, encoding: .utf8)
+        let relayCatalog = try String(contentsOf: relayCatalogURL, encoding: .utf8)
+        let appConfigModels = try String(contentsOf: appConfigURL, encoding: .utf8)
+
+        XCTAssertFalse(defaults.contains("ProviderDescriptor("))
+        XCTAssertFalse(defaults.contains("OfficialRelayMetadataCatalog.metadata"))
+        XCTAssertFalse(officialDefaults.contains("switch type"))
+        XCTAssertFalse(relayDefaults.contains("RelayProviderDescriptorModelAdapter.live"))
+        XCTAssertFalse(relayDefaults.contains("URLComponents("))
+
+        XCTAssertTrue(providerCatalog.contains("enum ProviderDefaultCatalog"))
+        XCTAssertTrue(providerCatalog.contains("allDefaultProviders"))
+        XCTAssertTrue(providerCatalog.contains("OfficialProviderDefaultCatalog.codex()"))
+        XCTAssertTrue(officialCatalog.contains("enum OfficialProviderDefaultCatalog"))
+        XCTAssertTrue(officialCatalog.contains("static func config(for type: ProviderType)"))
+        XCTAssertTrue(officialCatalog.contains("switch type"))
+        XCTAssertTrue(officialRelayCatalog.contains("enum OfficialRelayProviderDefaultCatalog"))
+        XCTAssertTrue(officialRelayCatalog.contains("OfficialRelayMetadataCatalog.metadata(forProviderID:"))
+        XCTAssertTrue(relayCatalog.contains("enum RelayProviderDefaultCatalog"))
+        XCTAssertTrue(relayCatalog.contains("RelayProviderDescriptorModelAdapter.live"))
+        XCTAssertTrue(relayCatalog.contains("URLComponents("))
+        XCTAssertTrue(appConfigModels.contains("ProviderDefaultCatalog.allDefaultProviders"))
+    }
+
+    func testDefaultProviderCatalogPreservesDefaultOrderAndCredentialAccounts() {
+        let providers = AppConfig.default.providers
+
+        XCTAssertEqual(
+            providers.map(\.id),
+            [
+                "codex-official",
+                "claude-official",
+                "gemini-official",
+                "copilot-official",
+                "microsoft-copilot-official",
+                "zai-official",
+                "amp-official",
+                "cursor-official",
+                "jetbrains-official",
+                "kiro-official",
+                "windsurf-official",
+                "kimi-official",
+                "moonshot-official",
+                "minimax-official",
+                "deepseek-official",
+                "xiaomi-mimo-official",
+                "trae-official",
+                "openrouter-credits-official",
+                "openrouter-api-official",
+                "ollama-cloud-official",
+                "opencode-go-official"
+            ]
+        )
+
+        let providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0) })
+        XCTAssertEqual(providersByID["trae-official"]?.auth.keychainAccount, "official/trae/cloud-ide-jwt")
+        XCTAssertEqual(providersByID["openrouter-credits-official"]?.auth.keychainAccount, "official/openrouter/credits-api-key")
+        XCTAssertEqual(providersByID["openrouter-api-official"]?.auth.keychainAccount, "official/openrouter/api-key")
+        XCTAssertEqual(providersByID["opencode-go-official"]?.auth.keychainAccount, "official/opencode-go/workspace-id")
+
+        for providerID in ["moonshot-official", "minimax-official", "deepseek-official", "xiaomi-mimo-official"] {
+            let provider = providersByID[providerID]
+            let metadata = OfficialRelayMetadataCatalog.metadata(forProviderID: providerID)
+            XCTAssertEqual(provider?.name, metadata?.displayName)
+            XCTAssertEqual(provider?.baseURL, metadata?.baseURL)
+            XCTAssertEqual(provider?.auth.keychainAccount, metadata?.keychainAccount)
+            XCTAssertEqual(provider?.relayConfig?.adapterID, metadata?.defaultAdapterID)
+        }
+    }
+
+    func testCursorProviderUsesSharedOfficialAuthRuntime() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cursorProviderURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Providers/CursorProvider.swift")
+        let cursorProvider = try String(contentsOf: cursorProviderURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            cursorProvider.contains("OfficialProviderAuthRuntime.requestWithExpiringCredentialRefresh"),
+            "CursorProvider should reuse the shared official auth refresh/retry runtime instead of owning another hand-rolled loop"
+        )
+        XCTAssertFalse(
+            cursorProvider.contains("catch let error as ProviderError"),
+            "CursorProvider should not keep a bespoke unauthorized refresh retry loop after adopting OfficialProviderAuthRuntime"
+        )
     }
 
     func testProviderModelsDoesNotOwnProviderDefaultConfigurationHelpers() throws {
@@ -193,7 +436,8 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
         let metadataURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+OfficialRelayMetadata.swift")
         let metadata = try String(contentsOf: metadataURL, encoding: .utf8)
         XCTAssertTrue(metadata.contains("isOfficialRelayProvider"))
-        XCTAssertTrue(metadata.contains("ProviderMetadataCatalog.officialRelayDefaultProviderIDs"))
+        XCTAssertTrue(metadata.contains("OfficialRelayMetadataCatalog.defaultProviderOrder"))
+        XCTAssertFalse(metadata.contains("ProviderMetadataCatalog.officialRelay"))
     }
 
     func testProviderModelsDoesNotOwnRelayDefaultAndOverrideMigrationHelpers() throws {
@@ -290,11 +534,55 @@ final class MonolithRetirementBoundaryTests: XCTestCase {
         )
 
         let normalizationURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptor+Normalization.swift")
+        let normalizerURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/ProviderDescriptorNormalizer.swift")
         let normalization = try String(contentsOf: normalizationURL, encoding: .utf8)
+        let normalizer = try String(contentsOf: normalizerURL, encoding: .utf8)
         XCTAssertTrue(normalization.contains("func normalized()"))
-        XCTAssertTrue(normalization.contains("normalizedOfficialProvider"))
-        XCTAssertTrue(normalization.contains("normalizedRelayProvider"))
-        XCTAssertTrue(normalization.contains("normalizedKimiProvider"))
+        XCTAssertTrue(normalization.contains("ProviderDescriptorNormalizer.normalized(self)"))
+        for strategyMethod in [
+            "normalizedOfficialProvider",
+            "normalizedRelayProvider",
+            "normalizedKimiProvider",
+            "normalizedRelayConfig"
+        ] {
+            XCTAssertFalse(
+                normalization.contains(strategyMethod),
+                "ProviderDescriptor+Normalization.swift should stay as a facade and not own \(strategyMethod)"
+            )
+            XCTAssertTrue(
+                normalizer.contains(strategyMethod),
+                "ProviderDescriptorNormalizer.swift should own \(strategyMethod)"
+            )
+        }
+    }
+
+    func testAppConfigSiteDefaultsMigrationStaysAsFacadeOverFocusedMigrator() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let migrationURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/AppConfig+SiteDefaultsMigration.swift")
+        let migratorURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models/AppConfigSiteDefaultsMigrator.swift")
+        let migration = try String(contentsOf: migrationURL, encoding: .utf8)
+        let migrator = try String(contentsOf: migratorURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: migratorURL.path),
+            "AppConfig site defaults migration strategy should live in AppConfigSiteDefaultsMigrator.swift"
+        )
+        XCTAssertTrue(migration.contains("func migratedWithSiteDefaults() -> AppConfig"))
+        XCTAssertTrue(migration.contains("AppConfigSiteDefaultsMigrator.migrated(self)"))
+        for strategyMethod in [
+            "migrateOfficialRelayProvidersToStableIDs",
+            "mergedOfficialRelayProvider",
+            "migratedSiteDefaults"
+        ] {
+            XCTAssertFalse(
+                migration.contains(strategyMethod),
+                "AppConfig+SiteDefaultsMigration.swift should stay as a facade and not own \(strategyMethod)"
+            )
+            XCTAssertTrue(
+                migrator.contains(strategyMethod),
+                "AppConfigSiteDefaultsMigrator.swift should own \(strategyMethod)"
+            )
+        }
     }
 
     func testSettingsDraftModelsDelegateRelaySeedDerivation() throws {

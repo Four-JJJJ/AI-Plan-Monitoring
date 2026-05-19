@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
@@ -55,18 +56,19 @@ final class KimiOfficialProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func loadFromAPI() async throws -> UsageSnapshot {
-        var credentials = try loadCredentials()
-        if needsRefresh(credentials.expiresAt) {
-            credentials = try await refresh(credentials: credentials)
-        }
-
-        do {
-            return try await requestSnapshot(accessToken: credentials.accessToken)
-        } catch let error as ProviderError {
-            guard case .unauthorized = error else { throw error }
-            credentials = try await refresh(credentials: credentials)
-            return try await requestSnapshot(accessToken: credentials.accessToken)
-        }
+        let result = try await OfficialProviderAuthRuntime.requestWithExpiringCredentialRefresh(
+            initialState: try loadCredentials(),
+            shouldRefresh: { [self] credentials in
+                needsRefresh(credentials.expiresAt)
+            },
+            request: { [self] credentials in
+                try await requestSnapshot(accessToken: credentials.accessToken)
+            },
+            refresh: { [self] credentials in
+                try await refresh(credentials: credentials)
+            }
+        )
+        return result.response
     }
 
     private func requestSnapshot(accessToken: String) async throws -> UsageSnapshot {

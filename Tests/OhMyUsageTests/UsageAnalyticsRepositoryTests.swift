@@ -4,8 +4,18 @@ import XCTest
 @testable import OhMyUsage
 
 final class UsageAnalyticsRepositoryTests: XCTestCase {
-    func testUsageAnalyticsFilterDefaultsToAllRange() {
-        XCTAssertEqual(UsageAnalyticsFilter().range, .all)
+    override func setUp() {
+        super.setUp()
+        UsageAnalyticsRepository.clearSourceFingerprintCacheForTesting()
+    }
+
+    override func tearDown() {
+        UsageAnalyticsRepository.clearSourceFingerprintCacheForTesting()
+        super.tearDown()
+    }
+
+    func testUsageAnalyticsFilterDefaultsToLast30DaysRange() {
+        XCTAssertEqual(UsageAnalyticsFilter().range, .last30Days)
     }
 
     func testApplicationTargetOwnsUsageAnalyticsAggregation() throws {
@@ -114,7 +124,133 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         )
     }
 
-    func testRepositorySourceFingerprintTracksCCSwitchDatabaseChanges() throws {
+    func testRepositorySourceFingerprintReusesLocalProviderWithinTTLForNormalizedClaudeDirs() throws {
+        var now = try fixedDate("2026-05-16T12:00:00Z")
+        var ccSwitchCallCount = 0
+        var localProviderCallCount = 0
+        let repository = UsageAnalyticsRepository(
+            ccSwitchReader: CCSwitchUsageLogReader(databasePath: "/tmp/missing-cc-switch-\(UUID().uuidString).db"),
+            nowProvider: { now },
+            ccSwitchSourceFingerprintProvider: { _ in
+                ccSwitchCallCount += 1
+                return Self.fileFingerprint(root: "/tmp/cc-switch-\(ccSwitchCallCount).db", seed: ccSwitchCallCount)
+            },
+            localSourceFingerprintProvider: { claudeDirs in
+                localProviderCallCount += 1
+                let modificationTime = Date(timeIntervalSince1970: TimeInterval(localProviderCallCount))
+                return UsageAnalyticsRepository.CachedLocalSourceFingerprint(
+                    codex: UsageAnalyticsFileFingerprint(
+                        roots: ["/tmp/codex-\(localProviderCallCount)"],
+                        fileCount: localProviderCallCount,
+                        totalSize: UInt64(localProviderCallCount),
+                        latestModificationTime: modificationTime
+                    ),
+                    claude: UsageAnalyticsFileFingerprint(
+                        roots: claudeDirs,
+                        fileCount: localProviderCallCount,
+                        totalSize: UInt64(localProviderCallCount),
+                        latestModificationTime: modificationTime
+                    ),
+                    kimi: UsageAnalyticsFileFingerprint(
+                        roots: ["/tmp/kimi-\(localProviderCallCount)"],
+                        fileCount: localProviderCallCount,
+                        totalSize: UInt64(localProviderCallCount),
+                        latestModificationTime: modificationTime
+                    )
+                )
+            }
+        )
+
+        let first = repository.sourceFingerprint(claudeAllConfigDirs: ["/tmp/claude-a", "/tmp/claude-b"])
+
+        now = now.addingTimeInterval(30)
+        let second = repository.sourceFingerprint(claudeAllConfigDirs: [" /tmp/claude-b ", "/tmp/claude-a"])
+        XCTAssertNotEqual(second.ccSwitch, first.ccSwitch)
+        XCTAssertEqual(second.codex, first.codex)
+        XCTAssertEqual(second.claude, first.claude)
+        XCTAssertEqual(second.kimi, first.kimi)
+        XCTAssertEqual(ccSwitchCallCount, 2)
+        XCTAssertEqual(localProviderCallCount, 1)
+
+        _ = repository.sourceFingerprint(claudeAllConfigDirs: ["/tmp/claude-c"])
+        XCTAssertEqual(localProviderCallCount, 2)
+
+        now = now.addingTimeInterval(31)
+        let expired = repository.sourceFingerprint(claudeAllConfigDirs: ["/tmp/claude-b", "/tmp/claude-a"])
+        XCTAssertNotEqual(expired.codex, first.codex)
+        XCTAssertNotEqual(expired.claude, first.claude)
+        XCTAssertNotEqual(expired.kimi, first.kimi)
+        XCTAssertEqual(localProviderCallCount, 3)
+    }
+
+    func testRepositorySourceFingerprintReadsCCSwitchForEachReaderWithoutLocalCacheKeyCollision() throws {
+        let now = try fixedDate("2026-05-16T12:00:00Z")
+        var ccSwitchProviderCallCount = 0
+        var localProviderCallCount = 0
+        let localProvider: UsageAnalyticsRepository.LocalSourceFingerprintProvider = { _ in
+            localProviderCallCount += 1
+            return Self.localSourceFingerprint(seed: localProviderCallCount)
+        }
+        let firstDatabasePath = "/tmp/missing-cc-switch-\(UUID().uuidString)-a.db"
+        let secondDatabasePath = "/tmp/missing-cc-switch-\(UUID().uuidString)-b.db"
+        let firstRepository = UsageAnalyticsRepository(
+            ccSwitchReader: CCSwitchUsageLogReader(databasePath: firstDatabasePath),
+            nowProvider: { now },
+            ccSwitchSourceFingerprintProvider: { reader in
+                ccSwitchProviderCallCount += 1
+                return Self.fileFingerprint(root: reader.sourceFingerprintCacheIdentity, seed: ccSwitchProviderCallCount)
+            },
+            localSourceFingerprintProvider: localProvider
+        )
+        let secondRepository = UsageAnalyticsRepository(
+            ccSwitchReader: CCSwitchUsageLogReader(databasePath: secondDatabasePath),
+            nowProvider: { now },
+            ccSwitchSourceFingerprintProvider: { reader in
+                ccSwitchProviderCallCount += 1
+                return Self.fileFingerprint(root: reader.sourceFingerprintCacheIdentity, seed: ccSwitchProviderCallCount)
+            },
+            localSourceFingerprintProvider: localProvider
+        )
+
+        let first = firstRepository.sourceFingerprint(claudeAllConfigDirs: [])
+        let second = secondRepository.sourceFingerprint(claudeAllConfigDirs: [])
+
+        XCTAssertEqual(first.ccSwitch.roots, [firstDatabasePath])
+        XCTAssertEqual(second.ccSwitch.roots, [secondDatabasePath])
+        XCTAssertEqual(ccSwitchProviderCallCount, 2)
+        XCTAssertEqual(localProviderCallCount, 1)
+    }
+
+    func testRepositorySourceFingerprintRefreshesLocalFingerprintAfterCacheTTL() throws {
+        var now = try fixedDate("2026-05-16T12:00:00Z")
+        var localProviderCallCount = 0
+        let repository = UsageAnalyticsRepository(
+            ccSwitchReader: CCSwitchUsageLogReader(databasePath: "/tmp/missing-cc-switch-\(UUID().uuidString).db"),
+            nowProvider: { now },
+            ccSwitchSourceFingerprintProvider: { _ in Self.fileFingerprint(root: "/tmp/cc-switch.db", seed: 1) },
+            localSourceFingerprintProvider: { _ in
+                localProviderCallCount += 1
+                return Self.localSourceFingerprint(seed: localProviderCallCount)
+            }
+        )
+        let first = repository.sourceFingerprint(claudeAllConfigDirs: [])
+
+        let cached = repository.sourceFingerprint(claudeAllConfigDirs: [])
+        XCTAssertEqual(cached.codex, first.codex)
+        XCTAssertEqual(cached.claude, first.claude)
+        XCTAssertEqual(cached.kimi, first.kimi)
+        XCTAssertEqual(localProviderCallCount, 1)
+
+        now = now.addingTimeInterval(61)
+        let second = repository.sourceFingerprint(claudeAllConfigDirs: [])
+
+        XCTAssertNotEqual(first.codex, second.codex)
+        XCTAssertNotEqual(first.claude, second.claude)
+        XCTAssertNotEqual(first.kimi, second.kimi)
+        XCTAssertEqual(localProviderCallCount, 2)
+    }
+
+    func testRepositorySourceFingerprintRefreshesCCSwitchWithinLocalCacheTTL() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("usage-analytics-fingerprint-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -122,16 +258,22 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         let databaseURL = root.appendingPathComponent("cc-switch.db")
         try Data("first".utf8).write(to: databaseURL)
 
+        var now = try fixedDate("2026-05-16T12:00:00Z")
         let repository = UsageAnalyticsRepository(
-            ccSwitchReader: CCSwitchUsageLogReader(databasePath: databaseURL.path)
+            ccSwitchReader: CCSwitchUsageLogReader(databasePath: databaseURL.path),
+            nowProvider: { now }
         )
         let first = repository.sourceFingerprint(claudeAllConfigDirs: [])
 
         Thread.sleep(forTimeInterval: 0.01)
         try Data("second-version".utf8).write(to: databaseURL)
+        now = now.addingTimeInterval(30)
         let second = repository.sourceFingerprint(claudeAllConfigDirs: [])
 
         XCTAssertNotEqual(first.ccSwitch, second.ccSwitch)
+        XCTAssertEqual(first.codex, second.codex)
+        XCTAssertEqual(first.claude, second.claude)
+        XCTAssertEqual(first.kimi, second.kimi)
     }
 
     func testSnapshotDeduplicatesBySourcePriorityAndBuildsProviderAndModelStats() throws {
@@ -478,6 +620,23 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
             modelID: "gpt-5.5",
             requestID: UUID().uuidString,
             totals: UsageMetricTotals(requestCount: 1, successCount: 1, outputTokens: totalTokens)
+        )
+    }
+
+    private static func fileFingerprint(root: String, seed: Int) -> UsageAnalyticsFileFingerprint {
+        UsageAnalyticsFileFingerprint(
+            roots: [root],
+            fileCount: seed,
+            totalSize: UInt64(seed),
+            latestModificationTime: Date(timeIntervalSince1970: TimeInterval(seed))
+        )
+    }
+
+    private static func localSourceFingerprint(seed: Int) -> UsageAnalyticsRepository.CachedLocalSourceFingerprint {
+        UsageAnalyticsRepository.CachedLocalSourceFingerprint(
+            codex: fileFingerprint(root: "/tmp/codex-\(seed)", seed: seed),
+            claude: fileFingerprint(root: "/tmp/claude-\(seed)", seed: seed),
+            kimi: fileFingerprint(root: "/tmp/kimi-\(seed)", seed: seed)
         )
     }
 }

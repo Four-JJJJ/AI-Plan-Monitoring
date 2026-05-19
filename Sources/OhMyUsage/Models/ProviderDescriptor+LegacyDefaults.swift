@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 extension ProviderDescriptor {
     // Legacy migration/test fixtures only. New code should create third-party relays

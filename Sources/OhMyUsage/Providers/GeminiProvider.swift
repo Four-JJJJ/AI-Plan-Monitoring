@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class GeminiProvider: UsageProvider, @unchecked Sendable {
@@ -65,18 +66,23 @@ final class GeminiProvider: UsageProvider, @unchecked Sendable {
             break
         }
 
-        var credentials = try loadCredentials()
-        if needsRefresh(credentials.expiresAt) {
-            credentials = try await refresh(credentials: credentials)
-        }
-
-        do {
-            return try await requestSnapshot(accessToken: credentials.accessToken, settings: settings, credentials: credentials)
-        } catch let error as ProviderError {
-            guard case .unauthorized = error else { throw error }
-            credentials = try await refresh(credentials: credentials)
-            return try await requestSnapshot(accessToken: credentials.accessToken, settings: settings, credentials: credentials)
-        }
+        let result = try await OfficialProviderAuthRuntime.requestWithExpiringCredentialRefresh(
+            initialState: try loadCredentials(),
+            shouldRefresh: { [self] credentials in
+                needsRefresh(credentials.expiresAt)
+            },
+            request: { [self] credentials in
+                try await requestSnapshot(
+                    accessToken: credentials.accessToken,
+                    settings: settings,
+                    credentials: credentials
+                )
+            },
+            refresh: { [self] credentials in
+                try await refresh(credentials: credentials)
+            }
+        )
+        return result.response
     }
 
     private func requestSnapshot(

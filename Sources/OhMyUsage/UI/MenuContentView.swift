@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import AppKit
 import SwiftUI
 import OhMyUsageApplication
@@ -19,6 +20,7 @@ struct MenuContentView: View {
     @State private var onboardingDiscoveryInFlight = false
     @State private var cardsContentHeight: CGFloat = 0
     @State private var clockTask: Task<Void, Never>?
+    private let clockController = VisibleClockController()
 
     // MARK: - Menubar 视觉 Token（改这里可全局影响首页样式）
     // menubar 面板外层背景。
@@ -411,27 +413,25 @@ struct MenuContentView: View {
     }
 
     private func restartClockIfNeeded() {
-        stopClock()
-        guard viewModel.menuPanelVisible else { return }
-        tickClock()
-        clockTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(RuntimeDiagnosticsLimits.menuClockIntervalSeconds))
-                guard !Task.isCancelled else { break }
-                tickClock()
-            }
+        clockController.restartClockIfNeeded(
+            isVisible: viewModel.menuPanelVisible,
+            existingTask: &clockTask,
+            intervalSeconds: RuntimeDiagnosticsLimits.menuClockIntervalSeconds
+        ) { referenceDate in
+            tickClock(referenceDate: referenceDate)
         }
     }
 
     private func stopClock() {
-        clockTask?.cancel()
-        clockTask = nil
+        clockController.stopClock(existingTask: &clockTask)
     }
 
     private func tickClock(referenceDate: Date = Date()) {
-        now = referenceDate
-        if viewModel.shouldShowPermissionGuide {
-            viewModel.refreshPermissionStatusesIfNeeded(referenceDate: referenceDate)
+        clockController.tick(referenceDate: referenceDate) { resolvedDate in
+            now = resolvedDate
+            if viewModel.shouldShowPermissionGuide {
+                viewModel.refreshPermissionStatusesIfNeeded(referenceDate: resolvedDate)
+            }
         }
     }
 

@@ -36,6 +36,7 @@ let package = Package(
         .target(
             name: "OhMyUsageFeatures",
             dependencies: [
+                "OhMyUsageDomain",
                 "OhMyUsageApplication",
                 "OhMyUsagePresentation"
             ]
@@ -43,6 +44,7 @@ let package = Package(
         .target(
             name: "OhMyUsageBootstrap",
             dependencies: [
+                "OhMyUsageDomain",
                 "OhMyUsageApplication",
                 "OhMyUsageFeatures",
                 "OhMyUsagePresentation"

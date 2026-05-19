@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 final class LegacyConfigImporter {
     private enum LegacyConfigLoadResult {

@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import SwiftUI
 
 extension SettingsView {

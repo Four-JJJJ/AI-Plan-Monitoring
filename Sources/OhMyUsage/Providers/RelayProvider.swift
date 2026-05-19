@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class RelayProvider: UsageProvider, @unchecked Sendable {

@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import XCTest
 @testable import OhMyUsage
 
@@ -40,6 +41,27 @@ final class ProviderDefinitionRegistryTests: XCTestCase {
         XCTAssertTrue(definition.capabilities.supportsBalance)
         XCTAssertFalse(definition.capabilities.usesPercentageMenuCard)
         XCTAssertTrue(definition.settingsSpec.credentialFields.isEmpty)
+    }
+
+    func testCredentialFieldsStayStableForRepresentativeProviderKinds() {
+        let cases: [(provider: ProviderDescriptor, fields: [CredentialFieldKind])] = [
+            (.defaultOfficialClaude(), [.manualCookie]),
+            (.defaultOfficialTrae(), [.traeAuthorization]),
+            (.defaultOfficialOpenRouterAPI(), [.bearerToken]),
+            (.defaultOfficialOpenRouterCredits(), [.bearerToken]),
+            (.defaultOfficialOpenCodeGo(), [.opencodeWorkspaceID, .opencodeManualCookie]),
+            (.makeOpenRelay(name: "Relay X", baseURL: "https://relay.example.com"), [])
+        ]
+
+        for item in cases {
+            let definition = ProviderDefinitionRegistry.definition(for: item.provider)
+
+            XCTAssertEqual(
+                definition.settingsSpec.credentialFields.map(\.kind),
+                item.fields,
+                item.provider.id
+            )
+        }
     }
 
     func testDefinitionsPreserveProviderOrder() {
@@ -180,6 +202,93 @@ final class ProviderDefinitionRegistryTests: XCTestCase {
             XCTAssertEqual(metadata.presentation.displayName, item.name)
             XCTAssertEqual(metadata.presentation.iconName, item.icon)
             XCTAssertEqual(ProviderDescriptor.officialRelayDefaultProviderID(adapterID: item.provider.officialRelayAdapterID ?? ""), item.id)
+        }
+    }
+
+    func testOfficialRelayPresentationIconsStayStable() {
+        let cases: [(provider: ProviderDescriptor, icon: String)] = [
+            (.defaultOfficialMoonshot(), "menu_kimi_icon"),
+            (.defaultOfficialMiniMax(), "menu_minimax_icon"),
+            (.defaultOfficialDeepSeek(), "menu_deepseek_icon"),
+            (.defaultOfficialXiaomiMIMO(), "menu_mimo_icon")
+        ]
+
+        for item in cases {
+            XCTAssertEqual(
+                ProviderDefinitionRegistry.presentation(for: item.provider).iconName,
+                item.icon,
+                item.provider.id
+            )
+        }
+    }
+
+    func testUnofficialRelayPresentationIconOverridesStayStable() {
+        let cases: [(provider: ProviderDescriptor, icon: String)] = [
+            (
+                .makeOpenRelay(
+                    name: "Relay X",
+                    baseURL: "https://proxy.example.com",
+                    preferredAdapterID: "moonshot"
+                ),
+                "menu_kimi_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "Kimi Relay",
+                    baseURL: "https://proxy.example.com",
+                    preferredAdapterID: "generic"
+                ),
+                "menu_kimi_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "Relay X",
+                    baseURL: "https://deepseek.proxy.example.com",
+                    preferredAdapterID: "generic"
+                ),
+                "menu_deepseek_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "Relay X",
+                    baseURL: "https://proxy.example.com",
+                    preferredAdapterID: "xiaomimimo-token-plan"
+                ),
+                "menu_mimo_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "MIMO Relay",
+                    baseURL: "https://proxy.example.com",
+                    preferredAdapterID: "generic"
+                ),
+                "menu_mimo_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "Relay X",
+                    baseURL: "https://proxy.example.com",
+                    preferredAdapterID: "minimax"
+                ),
+                "menu_minimax_icon"
+            ),
+            (
+                .makeOpenRelay(
+                    name: "Relay X",
+                    baseURL: "https://minimaxi.proxy.example.com",
+                    preferredAdapterID: "generic"
+                ),
+                "menu_minimax_icon"
+            )
+        ]
+
+        for item in cases {
+            XCTAssertFalse(item.provider.isOfficialRelayProvider, item.provider.name)
+            XCTAssertEqual(
+                ProviderDefinitionRegistry.presentation(for: item.provider).iconName,
+                item.icon,
+                item.provider.name
+            )
         }
     }
 

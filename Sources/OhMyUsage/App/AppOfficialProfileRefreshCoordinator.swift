@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import OhMyUsageApplication
 import Foundation
 

@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class CursorProvider: UsageProvider, @unchecked Sendable {
@@ -26,18 +27,19 @@ final class CursorProvider: UsageProvider, @unchecked Sendable {
             throw ProviderError.unavailable("Cursor 官方来源当前仅支持 API 检测")
         }
 
-        var auth = try loadAuth()
-        if let expiresAt = JWTInspector.expirationDate(auth.accessToken), expiresAt <= Date() {
-            auth = try await refresh(auth: auth)
-        }
-
-        do {
-            return try await requestSnapshot(auth: auth)
-        } catch let error as ProviderError {
-            guard case .unauthorized = error else { throw error }
-            auth = try await refresh(auth: auth)
-            return try await requestSnapshot(auth: auth)
-        }
+        let result = try await OfficialProviderAuthRuntime.requestWithExpiringCredentialRefresh(
+            initialState: try loadAuth(),
+            shouldRefresh: { auth in
+                JWTInspector.expirationDate(auth.accessToken).map { $0 <= Date() } ?? false
+            },
+            request: { auth in
+                try await self.requestSnapshot(auth: auth)
+            },
+            refresh: { auth in
+                try await self.refresh(auth: auth)
+            }
+        )
+        return result.response
     }
 
     private func requestSnapshot(auth: CursorAuth) async throws -> UsageSnapshot {

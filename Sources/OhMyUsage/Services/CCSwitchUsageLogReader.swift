@@ -63,16 +63,39 @@ struct CCSwitchUsageReadResult: Equatable, Sendable {
     var diagnostics: [String]
 }
 
+struct CCSwitchUsageLogReaderStreamEvent: Equatable, Sendable {
+    enum Source: Equatable, Sendable {
+        case proxyRequestLogs
+        case dailyRollups
+    }
+
+    enum Phase: Equatable, Sendable {
+        case rowRead
+        case recordMapped
+    }
+
+    var source: Source
+    var phase: Phase
+    var ordinal: Int
+}
+
 final class CCSwitchUsageLogReader: @unchecked Sendable {
     private let databasePath: String
     private let fileManager: FileManager
+    private let streamObserver: ((CCSwitchUsageLogReaderStreamEvent) -> Void)?
 
     init(
         databasePath: String = "\(NSHomeDirectory())/.cc-switch/cc-switch.db",
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        streamObserver: ((CCSwitchUsageLogReaderStreamEvent) -> Void)? = nil
     ) {
         self.databasePath = (databasePath as NSString).expandingTildeInPath
         self.fileManager = fileManager
+        self.streamObserver = streamObserver
+    }
+
+    var sourceFingerprintCacheIdentity: String {
+        (databasePath as NSString).standardizingPath
     }
 
     func readUsageLogs(since: Date, until: Date) -> CCSwitchUsageReadResult {
@@ -111,7 +134,11 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
 
     func sourceFingerprint() -> LocalUsageSourceFingerprint {
         LocalUsageSourceFingerprintBuilder.fingerprint(
-            roots: [databasePath],
+            roots: [
+                databasePath,
+                "\(databasePath)-wal",
+                "\(databasePath)-shm"
+            ],
             fileManager: fileManager,
             includeFile: { _ in true }
         )
@@ -133,54 +160,56 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
         """
 
         var output: [CCSwitchUsageRecord] = []
-        for row in rows(
+        forEachRow(
             database: database,
             query: query,
-            columnCount: 12,
+            source: .proxyRequestLogs,
             bind: { statement in
                 sqlite3_bind_double(statement, 1, since.timeIntervalSince1970)
                 sqlite3_bind_double(statement, 2, until.timeIntervalSince1970)
-            }
-        ) {
-            guard let eventAt = Self.dateFromEpoch(row.int64(9)),
-                  eventAt >= since,
-                  eventAt < until else {
-                continue
-            }
-            let providerID = row.string(1) ?? "unknown"
-            let appType = row.string(2) ?? "unknown"
-            let dataSource = row.string(10)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let source: CCSwitchUsageSource = (dataSource == "session" || Self.isSessionPlaceholder(providerID))
-                ? .session
-                : .proxy
-            let cacheRead = row.int(6)
-            let input = Self.freshInputTokens(
-                appType: appType,
-                rawInputTokens: row.int(4),
-                cacheReadTokens: cacheRead
-            )
-            let statusCode = row.int(8)
-            output.append(
-                CCSwitchUsageRecord(
-                    requestID: row.string(0) ?? UUID().uuidString,
-                    source: source,
-                    eventAt: eventAt,
+            },
+            body: { row, rowOrdinal in
+                guard let eventAt = Self.dateFromEpoch(row.int64(9)),
+                      eventAt >= since,
+                      eventAt < until else {
+                    return
+                }
+                let providerID = row.string(1) ?? "unknown"
+                let appType = row.string(2) ?? "unknown"
+                let dataSource = row.string(10)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let source: CCSwitchUsageSource = (dataSource == "session" || Self.isSessionPlaceholder(providerID))
+                    ? .session
+                    : .proxy
+                let cacheRead = row.int(6)
+                let input = Self.freshInputTokens(
                     appType: appType,
-                    providerID: providerID,
-                    providerName: Self.providerName(
-                        providerID: providerID,
-                        configuredName: row.string(11)
-                    ),
-                    modelID: row.string(3) ?? "unknown",
-                    requestCount: 1,
-                    successCount: (200..<400).contains(statusCode) ? 1 : 0,
-                    inputTokens: input,
-                    outputTokens: row.int(5),
-                    cacheReadTokens: cacheRead,
-                    cacheWriteTokens: row.int(7)
+                    rawInputTokens: row.int(4),
+                    cacheReadTokens: cacheRead
                 )
-            )
-        }
+                let statusCode = row.int(8)
+                output.append(
+                    CCSwitchUsageRecord(
+                        requestID: row.string(0) ?? UUID().uuidString,
+                        source: source,
+                        eventAt: eventAt,
+                        appType: appType,
+                        providerID: providerID,
+                        providerName: Self.providerName(
+                            providerID: providerID,
+                            configuredName: row.string(11)
+                        ),
+                        modelID: row.string(3) ?? "unknown",
+                        requestCount: 1,
+                        successCount: (200..<400).contains(statusCode) ? 1 : 0,
+                        inputTokens: input,
+                        outputTokens: row.int(5),
+                        cacheReadTokens: cacheRead,
+                        cacheWriteTokens: row.int(7)
+                    )
+                )
+                notifyStreamEvent(source: .proxyRequestLogs, phase: .recordMapped, ordinal: rowOrdinal)
+            }
+        )
         return output
     }
 
@@ -201,48 +230,50 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
         """
 
         var output: [CCSwitchUsageRecord] = []
-        for row in rows(
+        forEachRow(
             database: database,
             query: query,
-            columnCount: 11,
+            source: .dailyRollups,
             bind: { statement in
                 sqlite3_bind_text(statement, 1, startDay, -1, sqliteTransient)
                 sqlite3_bind_text(statement, 2, endDay, -1, sqliteTransient)
-            }
-        ) {
-            guard let eventAt = Self.dateFromRollupDay(row.string(0)),
-                  eventAt >= since,
-                  eventAt < until else {
-                continue
-            }
-            let appType = row.string(1) ?? "unknown"
-            let providerID = row.string(2) ?? "unknown"
-            let cacheRead = row.int(8)
-            output.append(
-                CCSwitchUsageRecord(
-                    requestID: "rollup|\(row.string(0) ?? "")|\(appType)|\(providerID)|\(row.string(3) ?? "unknown")",
-                    source: .dailyRollup,
-                    eventAt: eventAt,
-                    appType: appType,
-                    providerID: providerID,
-                    providerName: Self.providerName(
-                        providerID: providerID,
-                        configuredName: row.string(10)
-                    ),
-                    modelID: row.string(3) ?? "unknown",
-                    requestCount: row.int(4),
-                    successCount: row.int(5),
-                    inputTokens: Self.freshInputTokens(
+            },
+            body: { row, rowOrdinal in
+                guard let eventAt = Self.dateFromRollupDay(row.string(0)),
+                      eventAt >= since,
+                      eventAt < until else {
+                    return
+                }
+                let appType = row.string(1) ?? "unknown"
+                let providerID = row.string(2) ?? "unknown"
+                let cacheRead = row.int(8)
+                output.append(
+                    CCSwitchUsageRecord(
+                        requestID: "rollup|\(row.string(0) ?? "")|\(appType)|\(providerID)|\(row.string(3) ?? "unknown")",
+                        source: .dailyRollup,
+                        eventAt: eventAt,
                         appType: appType,
-                        rawInputTokens: row.int(6),
-                        cacheReadTokens: cacheRead
-                    ),
-                    outputTokens: row.int(7),
-                    cacheReadTokens: cacheRead,
-                    cacheWriteTokens: row.int(9)
+                        providerID: providerID,
+                        providerName: Self.providerName(
+                            providerID: providerID,
+                            configuredName: row.string(10)
+                        ),
+                        modelID: row.string(3) ?? "unknown",
+                        requestCount: row.int(4),
+                        successCount: row.int(5),
+                        inputTokens: Self.freshInputTokens(
+                            appType: appType,
+                            rawInputTokens: row.int(6),
+                            cacheReadTokens: cacheRead
+                        ),
+                        outputTokens: row.int(7),
+                        cacheReadTokens: cacheRead,
+                        cacheWriteTokens: row.int(9)
+                    )
                 )
-            )
-        }
+                notifyStreamEvent(source: .dailyRollups, phase: .recordMapped, ordinal: rowOrdinal)
+            }
+        )
         return output
     }
 
@@ -258,29 +289,37 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
         return sqlite3_step(statement) == SQLITE_ROW
     }
 
-    private func rows(
+    private func forEachRow(
         database: OpaquePointer,
         query: String,
-        columnCount: Int32,
-        bind: ((OpaquePointer?) -> Void)? = nil
-    ) -> [SQLiteRow] {
+        source: CCSwitchUsageLogReaderStreamEvent.Source,
+        bind: ((OpaquePointer?) -> Void)? = nil,
+        body: (SQLiteRow, Int) -> Void
+    ) {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return []
+            return
         }
         defer { sqlite3_finalize(statement) }
         bind?(statement)
 
-        var output: [SQLiteRow] = []
+        var rowOrdinal = 0
         while sqlite3_step(statement) == SQLITE_ROW {
-            var values: [SQLiteValue] = []
-            for index in 0..<columnCount {
-                values.append(SQLiteValue(statement: statement, index: index))
-            }
-            output.append(SQLiteRow(values: values))
+            rowOrdinal += 1
+            notifyStreamEvent(source: source, phase: .rowRead, ordinal: rowOrdinal)
+            body(SQLiteRow(statement: statement), rowOrdinal)
         }
-        return output
+    }
+
+    private func notifyStreamEvent(
+        source: CCSwitchUsageLogReaderStreamEvent.Source,
+        phase: CCSwitchUsageLogReaderStreamEvent.Phase,
+        ordinal: Int
+    ) {
+        streamObserver?(
+            CCSwitchUsageLogReaderStreamEvent(source: source, phase: phase, ordinal: ordinal)
+        )
     }
 
     private static func createdAtEpochSecondsExpression(_ column: String) -> String {
@@ -365,38 +404,27 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
 }
 
 private struct SQLiteRow {
-    var values: [SQLiteValue]
+    var statement: OpaquePointer?
 
     func string(_ index: Int) -> String? {
-        guard values.indices.contains(index) else { return nil }
-        return values[index].string
+        guard let statement, containsColumn(at: index),
+              let pointer = sqlite3_column_text(statement, Int32(index)) else {
+            return nil
+        }
+        return String(cString: pointer)
     }
 
     func int(_ index: Int) -> Int {
-        guard values.indices.contains(index) else { return 0 }
-        return values[index].int
+        max(0, Int(int64(index)))
     }
 
     func int64(_ index: Int) -> Int64 {
-        guard values.indices.contains(index) else { return 0 }
-        return values[index].int64
-    }
-}
-
-private struct SQLiteValue {
-    var string: String?
-    var int64: Int64
-
-    init(statement: OpaquePointer?, index: Int32) {
-        if let pointer = sqlite3_column_text(statement, index) {
-            self.string = String(cString: pointer)
-        } else {
-            self.string = nil
-        }
-        self.int64 = sqlite3_column_int64(statement, index)
+        guard let statement, containsColumn(at: index) else { return 0 }
+        return sqlite3_column_int64(statement, Int32(index))
     }
 
-    var int: Int {
-        max(0, Int(int64))
+    private func containsColumn(at index: Int) -> Bool {
+        guard let statement else { return false }
+        return index >= 0 && index < Int(sqlite3_column_count(statement))
     }
 }

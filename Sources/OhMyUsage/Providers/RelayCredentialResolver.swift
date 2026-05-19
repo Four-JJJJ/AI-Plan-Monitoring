@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct RelayRawTokenCandidate {
     let token: String

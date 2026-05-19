@@ -116,7 +116,7 @@ extension SettingsView {
     }
 
     func restartSettingsClockIfNeeded() {
-        settingsClockController.restartClockIfNeeded(
+        visibleClockController.restartClockIfNeeded(
             isVisible: viewModel.settingsWindowVisible,
             existingTask: &runtimeState.settingsClockTask
         ) { referenceDate in
@@ -125,11 +125,11 @@ extension SettingsView {
     }
 
     func stopSettingsClock() {
-        settingsClockController.stopClock(existingTask: &runtimeState.settingsClockTask)
+        visibleClockController.stopClock(existingTask: &runtimeState.settingsClockTask)
     }
 
     func tickSettingsClock(referenceDate: Date = Date()) {
-        settingsClockController.tick(referenceDate: referenceDate) { resolvedDate in
+        visibleClockController.tick(referenceDate: referenceDate) { resolvedDate in
             runtimeState.settingsNow = resolvedDate
         }
     }

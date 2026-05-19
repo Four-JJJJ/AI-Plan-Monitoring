@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 extension ProviderDescriptor {
     static func looksLikeGenericDefaultOverride(_ override: RelayManualOverride?) -> Bool {

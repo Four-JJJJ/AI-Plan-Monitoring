@@ -73,29 +73,7 @@ struct AppConfig: Codable, Equatable {
     static let `default` = AppConfig(
         language: .zhHans,
         resourceMode: .background5Minutes,
-        providers: [
-            .defaultOfficialCodex(),
-            .defaultOfficialClaude(),
-            .defaultOfficialGemini(),
-            .defaultOfficialCopilot(),
-            .defaultOfficialMicrosoftCopilot(),
-            .defaultOfficialZai(),
-            .defaultOfficialAmp(),
-            .defaultOfficialCursor(),
-            .defaultOfficialJetBrains(),
-            .defaultOfficialKiro(),
-            .defaultOfficialWindsurf(),
-            .defaultOfficialKimi(),
-            .defaultOfficialMoonshot(),
-            .defaultOfficialMiniMax(),
-            .defaultOfficialDeepSeek(),
-            .defaultOfficialXiaomiMIMO(),
-            .defaultOfficialTrae(),
-            .defaultOfficialOpenRouterCredits(),
-            .defaultOfficialOpenRouterAPI(),
-            .defaultOfficialOllamaCloud(),
-            .defaultOfficialOpenCodeGo()
-        ]
+        providers: ProviderDefaultCatalog.allDefaultProviders
     )
 
     private enum CodingKeys: String, CodingKey {

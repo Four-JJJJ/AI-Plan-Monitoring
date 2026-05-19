@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 import XCTest
 @testable import OhMyUsage

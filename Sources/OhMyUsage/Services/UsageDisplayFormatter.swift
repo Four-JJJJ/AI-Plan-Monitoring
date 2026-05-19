@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import OhMyUsageDomain
 
 enum LocalTrendDisplayMetric: String, CaseIterable, Sendable {
     case tokens

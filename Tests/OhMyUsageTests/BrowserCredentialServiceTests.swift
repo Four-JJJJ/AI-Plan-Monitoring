@@ -44,6 +44,89 @@ final class BrowserCredentialServiceTests: XCTestCase {
         XCTAssertEqual(header, "a=1; b=2")
     }
 
+    func testCookiePathEnumerationIsCachedWithinTTL() {
+        var now = Date(timeIntervalSince1970: 2_000)
+        var enumerationCount = 0
+        let reader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            now: { now },
+            cookiePathEnumerator: { browser, includeSafariBinaryCookies in
+                XCTAssertEqual(browser, .chrome)
+                XCTAssertFalse(includeSafariBinaryCookies)
+                enumerationCount += 1
+                return ["/tmp/chrome/Profile 1/Network/Cookies"]
+            }
+        )
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 1/Network/Cookies"]
+        )
+        now = now.addingTimeInterval(10)
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 1/Network/Cookies"]
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
+    func testCookiePathEnumerationRefreshesAfterTTL() {
+        var now = Date(timeIntervalSince1970: 2_000)
+        var enumerationCount = 0
+        let reader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            now: { now },
+            cookiePathEnumerator: { _, _ in
+                enumerationCount += 1
+                return ["/tmp/chrome/Profile \(enumerationCount)/Network/Cookies"]
+            }
+        )
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 1/Network/Cookies"]
+        )
+
+        now = now.addingTimeInterval(31)
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 2/Network/Cookies"]
+        )
+        XCTAssertEqual(enumerationCount, 2)
+    }
+
+    func testCookiePathEnumerationCacheSeparatesSafariBinaryCookieDimension() {
+        var enumerationKeys: [String] = []
+        let reader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            cookiePathEnumerator: { browser, includeSafariBinaryCookies in
+                enumerationKeys.append("\(browser.rawValue):\(includeSafariBinaryCookies)")
+                return includeSafariBinaryCookies
+                    ? ["/tmp/safari/Cookies.sqlite", "/tmp/safari/Cookies.binarycookies"]
+                    : ["/tmp/safari/Cookies.sqlite"]
+            }
+        )
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .safari),
+            ["/tmp/safari/Cookies.sqlite"]
+        )
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .safari, includeSafariBinaryCookies: true),
+            ["/tmp/safari/Cookies.binarycookies", "/tmp/safari/Cookies.sqlite"]
+        )
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .safari),
+            ["/tmp/safari/Cookies.sqlite"]
+        )
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .safari, includeSafariBinaryCookies: true),
+            ["/tmp/safari/Cookies.binarycookies", "/tmp/safari/Cookies.sqlite"]
+        )
+        XCTAssertEqual(enumerationKeys, ["safari:false", "safari:true"])
+    }
+
     func testBearerCandidatesUsesShortLivedCacheForSameHost() {
         var lookupCount = 0
         let service = BrowserCredentialService(
@@ -142,6 +225,281 @@ final class BrowserCredentialServiceTests: XCTestCase {
         XCTAssertEqual(lookupCount, 1)
     }
 
+    func testBearerStoragePathEnumerationIsCachedWithinTTLAcrossLiveIntents() throws {
+        let storageDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "b", count: 32))"
+        )
+        defer { try? FileManager.default.removeItem(at: storageDirectory.deletingLastPathComponent()) }
+
+        var enumerationCount = 0
+        let storageReader = BrowserStorageCredentialReader(
+            browserOrder: [.chrome],
+            storagePathCacheTTL: 30,
+            storagePathEnumerator: { browser in
+                XCTAssertEqual(browser, .chrome)
+                enumerationCount += 1
+                return [storageDirectory.path]
+            }
+        )
+        let service = BrowserCredentialService(
+            storageReader: storageReader,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(
+                host: "hongmacc.com",
+                accessIntent: .interactiveImport
+            ),
+            [BrowserDetectedCredential(value: "sk-\(String(repeating: "b", count: 32))", source: "auto:Chrome:localStorage")]
+        )
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(
+                host: "hongmacc.com",
+                accessIntent: .authRecovery
+            ),
+            [BrowserDetectedCredential(value: "sk-\(String(repeating: "b", count: 32))", source: "auto:Chrome:localStorage")]
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
+    func testBearerStoragePathEnumerationRefreshesAfterTTL() throws {
+        let firstDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "c", count: 32))"
+        )
+        let secondDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "d", count: 32))"
+        )
+        defer { try? FileManager.default.removeItem(at: firstDirectory.deletingLastPathComponent()) }
+        defer { try? FileManager.default.removeItem(at: secondDirectory.deletingLastPathComponent()) }
+
+        var now = Date(timeIntervalSince1970: 1_000)
+        var enumerationCount = 0
+        let storageReader = BrowserStorageCredentialReader(
+            browserOrder: [.chrome],
+            storagePathCacheTTL: 30,
+            now: { now },
+            storagePathEnumerator: { _ in
+                enumerationCount += 1
+                return enumerationCount == 1 ? [firstDirectory.path] : [secondDirectory.path]
+            }
+        )
+        let service = BrowserCredentialService(
+            storageReader: storageReader,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "hongmacc.com").map(\.value),
+            ["sk-\(String(repeating: "c", count: 32))"]
+        )
+
+        now = now.addingTimeInterval(31)
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "hongmacc.com").map(\.value),
+            ["sk-\(String(repeating: "d", count: 32))"]
+        )
+        XCTAssertEqual(enumerationCount, 2)
+    }
+
+    func testInteractiveBearerLookupRefreshesCachedEmptyStoragePaths() throws {
+        let storageDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "e", count: 32))"
+        )
+        defer { try? FileManager.default.removeItem(at: storageDirectory.deletingLastPathComponent()) }
+
+        var enumerationCount = 0
+        let storageReader = BrowserStorageCredentialReader(
+            browserOrder: [.chrome],
+            storagePathCacheTTL: 30,
+            storagePathEnumerator: { _ in
+                enumerationCount += 1
+                return enumerationCount == 1 ? [] : [storageDirectory.path]
+            }
+        )
+
+        XCTAssertTrue(storageReader.bearerTokenCandidates(host: "hongmacc.com").isEmpty)
+
+        let service = BrowserCredentialService(
+            storageReader: storageReader,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(
+                host: "hongmacc.com",
+                accessIntent: .interactiveImport
+            ).map(\.value),
+            ["sk-\(String(repeating: "e", count: 32))"]
+        )
+        XCTAssertEqual(enumerationCount, 2)
+    }
+
+    func testBackgroundBearerLookupDoesNotRefreshCachedEmptyStoragePaths() throws {
+        let storageDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "f", count: 32))"
+        )
+        defer { try? FileManager.default.removeItem(at: storageDirectory.deletingLastPathComponent()) }
+
+        var enumerationCount = 0
+        let storageReader = BrowserStorageCredentialReader(
+            browserOrder: [.chrome],
+            storagePathCacheTTL: 30,
+            storagePathEnumerator: { _ in
+                enumerationCount += 1
+                return enumerationCount == 1 ? [] : [storageDirectory.path]
+            }
+        )
+
+        XCTAssertTrue(storageReader.bearerTokenCandidates(host: "hongmacc.com").isEmpty)
+
+        let service = BrowserCredentialService(
+            storageReader: storageReader,
+            cacheTTL: 0
+        )
+
+        XCTAssertTrue(
+            service.detectBearerTokenCandidates(
+                host: "hongmacc.com",
+                accessIntent: .background
+            ).isEmpty
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
+    func testInteractiveCookieHeaderLookupRefreshesCachedEmptyCookiePaths() throws {
+        let databasePath = try makeCookieDatabase(
+            sql: """
+            CREATE TABLE cookies (name TEXT, value TEXT, host TEXT);
+            INSERT INTO cookies VALUES ('session', 'ok', '.refresh.example.invalid');
+            """
+        )
+        defer { try? FileManager.default.removeItem(atPath: databasePath) }
+
+        var enumerationCount = 0
+        let cookieReader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            cookiePathEnumerator: { browser, includeSafariBinaryCookies in
+                XCTAssertEqual(browser, .chrome)
+                XCTAssertTrue(includeSafariBinaryCookies)
+                enumerationCount += 1
+                return enumerationCount == 1 ? [] : [databasePath]
+            }
+        )
+
+        XCTAssertTrue(
+            cookieReader.candidateCookiePaths(
+                for: .chrome,
+                includeSafariBinaryCookies: true
+            ).isEmpty
+        )
+
+        let cookieService = BrowserCookieService(cookieReader: cookieReader, browserOrder: [.chrome])
+        let service = BrowserCredentialService(
+            cookieService: cookieService,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectCookieHeader(
+                host: "refresh.example.invalid",
+                accessIntent: .interactiveImport
+            )?.value,
+            "session=ok"
+        )
+        XCTAssertEqual(enumerationCount, 2)
+    }
+
+    func testInteractiveNamedCookieLookupRefreshesCachedEmptyCookiePaths() throws {
+        let databasePath = try makeCookieDatabase(
+            sql: """
+            CREATE TABLE cookies (name TEXT, value TEXT, host TEXT);
+            INSERT INTO cookies VALUES ('sessionKey', 'plain-token', '.named-refresh.example.invalid');
+            """
+        )
+        defer { try? FileManager.default.removeItem(atPath: databasePath) }
+
+        var enumerationCount = 0
+        let cookieReader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            cookiePathEnumerator: { browser, includeSafariBinaryCookies in
+                XCTAssertEqual(browser, .chrome)
+                XCTAssertTrue(includeSafariBinaryCookies)
+                enumerationCount += 1
+                return enumerationCount == 1 ? [] : [databasePath]
+            }
+        )
+
+        XCTAssertTrue(
+            cookieReader.candidateCookiePaths(
+                for: .chrome,
+                includeSafariBinaryCookies: true
+            ).isEmpty
+        )
+
+        let cookieService = BrowserCookieService(cookieReader: cookieReader, browserOrder: [.chrome])
+        let service = BrowserCredentialService(
+            cookieService: cookieService,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectNamedCookie(
+                name: "sessionKey",
+                host: "named-refresh.example.invalid",
+                accessIntent: .authRecovery
+            )?.value,
+            "sessionKey=plain-token"
+        )
+        XCTAssertEqual(enumerationCount, 2)
+    }
+
+    func testBackgroundCookieHeaderLookupDoesNotRefreshCachedEmptyCookiePaths() throws {
+        let databasePath = try makeCookieDatabase(
+            sql: """
+            CREATE TABLE cookies (name TEXT, value TEXT, host TEXT);
+            INSERT INTO cookies VALUES ('session', 'ok', '.background-refresh.example.invalid');
+            """
+        )
+        defer { try? FileManager.default.removeItem(atPath: databasePath) }
+
+        var enumerationCount = 0
+        let cookieReader = BrowserCookieDatabaseReader(
+            cookiePathCacheTTL: 30,
+            cookiePathEnumerator: { _, _ in
+                enumerationCount += 1
+                return enumerationCount == 1 ? [] : [databasePath]
+            }
+        )
+
+        XCTAssertTrue(
+            cookieReader.candidateCookiePaths(
+                for: .chrome,
+                includeSafariBinaryCookies: true
+            ).isEmpty
+        )
+
+        let cookieService = BrowserCookieService(cookieReader: cookieReader, browserOrder: [.chrome])
+        let service = BrowserCredentialService(
+            cookieService: cookieService,
+            cacheTTL: 0
+        )
+
+        XCTAssertNil(
+            service.detectCookieHeader(
+                host: "background-refresh.example.invalid",
+                accessIntent: .background
+            )
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
     func testBrowserStorageCredentialReaderFindsBearerCandidatesInHostStorage() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OhMyUsageTests", isDirectory: true)
@@ -166,6 +524,21 @@ final class BrowserCredentialServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(candidates, [BrowserDetectedCredential(value: token, source: "test:localStorage")])
+    }
+
+    private func makeBearerStorageDirectory(host: String, token: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OhMyUsageTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("leveldb", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let text = "_https://\(host) auth_token Bearer \(token)"
+        try text.write(
+            to: directory.appendingPathComponent("000003.log"),
+            atomically: true,
+            encoding: .isoLatin1
+        )
+        return directory
     }
 
     private func makeCookieDatabase(sql: String) throws -> String {

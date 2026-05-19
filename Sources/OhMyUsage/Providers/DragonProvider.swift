@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class DragonProvider: UsageProvider, @unchecked Sendable {

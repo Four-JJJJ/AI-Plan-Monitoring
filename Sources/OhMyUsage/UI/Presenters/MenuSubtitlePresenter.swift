@@ -1,5 +1,6 @@
 import OhMyUsageApplication
 import Foundation
+import OhMyUsageDomain
 
 enum MenuSubtitlePresenter {
     static func officialAccountSubtitle(

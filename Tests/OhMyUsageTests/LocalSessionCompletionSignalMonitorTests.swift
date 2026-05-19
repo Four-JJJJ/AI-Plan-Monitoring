@@ -47,6 +47,50 @@ final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.latestCodexCompletionAt(), try fixedDate("2026-04-20T10:02:00Z"))
     }
 
+    func testCodexSignalSkipsSQLiteProbeWhenLogSnapshotIsUnchanged() throws {
+        let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
+        try createLogsTable(at: databasePath)
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-20T10:02:00Z").timeIntervalSince1970),
+            body: #"event.name="codex.sse_event" event.kind=response.completed model=gpt-5.4"#,
+            at: databasePath
+        )
+
+        let monitor = LocalSessionCompletionSignalMonitor(
+            codexLogsPath: databasePath,
+            claudeProjectsRoot: temporaryDirectory.path
+        )
+
+        XCTAssertEqual(monitor.latestCodexCompletionAt(), try fixedDate("2026-04-20T10:02:00Z"))
+        XCTAssertEqual(monitor.latestCodexCompletionAt(), try fixedDate("2026-04-20T10:02:00Z"))
+        XCTAssertEqual(monitor.diagnostics.codexSQLiteProbeCount, 1)
+        XCTAssertEqual(monitor.diagnostics.codexCacheHitCount, 1)
+    }
+
+    func testCodexSignalReprobesWhenSQLiteWALSnapshotChanges() throws {
+        let databasePath = temporaryDirectory.appendingPathComponent("logs_2.sqlite").path
+        try createLogsTable(at: databasePath)
+        try insertLog(
+            ts: Int(try fixedDate("2026-04-20T10:02:00Z").timeIntervalSince1970),
+            body: #"event.name="codex.sse_event" event.kind=response.completed model=gpt-5.4"#,
+            at: databasePath
+        )
+
+        let monitor = LocalSessionCompletionSignalMonitor(
+            codexLogsPath: databasePath,
+            claudeProjectsRoot: temporaryDirectory.path
+        )
+
+        XCTAssertEqual(monitor.latestCodexCompletionAt(), try fixedDate("2026-04-20T10:02:00Z"))
+
+        let walPath = "\(databasePath)-wal"
+        try Data("wal-version-1".utf8).write(to: URL(fileURLWithPath: walPath))
+
+        XCTAssertEqual(monitor.latestCodexCompletionAt(), try fixedDate("2026-04-20T10:02:00Z"))
+        XCTAssertEqual(monitor.diagnostics.codexSQLiteProbeCount, 2)
+        XCTAssertEqual(monitor.diagnostics.codexCacheHitCount, 0)
+    }
+
     func testClaudeSignalFindsLatestAssistantUsageEvent() throws {
         let projectsRoot = temporaryDirectory.appendingPathComponent("projects", isDirectory: true)
         try FileManager.default.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
@@ -260,6 +304,70 @@ final class LocalSessionCompletionSignalMonitorTests: XCTestCase {
         )
 
         XCTAssertEqual(monitor.latestClaudeCompletionAt(), try fixedDate("2026-04-20T10:00:00Z"))
+    }
+
+    func testClaudeSignalTracksAndScansOnlyMostRecentFilesWithinCap() throws {
+        let projectsRoot = temporaryDirectory.appendingPathComponent("projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
+
+        for index in 0..<5 {
+            let relativePath = "workspace-\(index)/session-\(index).jsonl"
+            try writeJSONL(
+                root: projectsRoot,
+                relativePath: relativePath,
+                lines: [
+                    jsonLine([
+                        "type": "assistant",
+                        "timestamp": String(format: "2026-04-20T10:%02d:00Z", index),
+                        "message": [
+                            "id": "m-\(index)",
+                            "usage": [
+                                "input_tokens": 10 + index,
+                                "output_tokens": 5
+                            ]
+                        ]
+                    ])
+                ]
+            )
+            let fileURL = projectsRoot.appendingPathComponent(relativePath)
+            try setModificationDate(
+                try fixedDate(String(format: "2026-04-20T10:%02d:00Z", index)),
+                forFile: fileURL.path
+            )
+        }
+
+        let oldestFile = projectsRoot.appendingPathComponent("workspace-0/session-0.jsonl")
+        try writeJSONL(
+            root: projectsRoot,
+            relativePath: "workspace-0/session-0.jsonl",
+            lines: [
+                jsonLine([
+                    "type": "assistant",
+                    "timestamp": "2026-04-20T11:00:00Z",
+                    "message": [
+                        "id": "m-oldest-has-latest-signal",
+                        "usage": [
+                            "input_tokens": 1,
+                            "output_tokens": 1
+                        ]
+                    ]
+                ])
+            ]
+        )
+        try setModificationDate(try fixedDate("2026-04-20T10:00:00Z"), forFile: oldestFile.path)
+
+        let monitor = LocalSessionCompletionSignalMonitor(
+            codexLogsPath: temporaryDirectory.appendingPathComponent("missing.sqlite").path,
+            claudeProjectsRoot: projectsRoot.path,
+            claudeRecentFileWindow: 30 * 24 * 60 * 60,
+            claudeMaxTrackedFiles: 2
+        )
+
+        XCTAssertEqual(monitor.latestClaudeCompletionAt(), try fixedDate("2026-04-20T10:04:00Z"))
+        XCTAssertEqual(monitor.diagnostics.lastClaudeCandidateFileCount, 5)
+        XCTAssertEqual(monitor.diagnostics.lastClaudeTrackedFileCount, 2)
+        XCTAssertEqual(monitor.diagnostics.lastClaudeParsedFileCount, 2)
+        XCTAssertEqual(monitor.diagnostics.lastClaudeCachedFileSkipCount, 0)
     }
 
     func testClaudeSignalSkipsOversizedJSONLLineAndContinuesParsing() throws {

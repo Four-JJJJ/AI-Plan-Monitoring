@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct AppCredentialMutationOutcome: Equatable {
     var didPersistCredential: Bool = false

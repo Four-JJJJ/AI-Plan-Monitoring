@@ -2,17 +2,37 @@ import Foundation
 
 @MainActor
 final class UsageAnalyticsRefreshCoordinator {
-    private let repository: UsageAnalyticsRepository
+    typealias SourceFingerprintLoader = @Sendable (_ claudeAllConfigDirs: [String]) -> UsageAnalyticsSourceFingerprint
+    typealias SnapshotLoader = @Sendable (
+        _ filter: UsageAnalyticsFilter,
+        _ claudeAllConfigDirs: [String]
+    ) -> UsageAnalyticsSnapshot
+
+    private let sourceFingerprintLoader: SourceFingerprintLoader
+    private let snapshotLoader: SnapshotLoader
     private let cacheStore: UsageAnalyticsSnapshotCacheStore
+    private let nowProvider: () -> Date
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration = 0
 
     init(
         repository: UsageAnalyticsRepository = UsageAnalyticsRepository(),
-        cacheStore: UsageAnalyticsSnapshotCacheStore = UsageAnalyticsSnapshotCacheStore()
+        cacheStore: UsageAnalyticsSnapshotCacheStore = UsageAnalyticsSnapshotCacheStore(),
+        nowProvider: @escaping () -> Date = Date.init,
+        sourceFingerprintLoader: SourceFingerprintLoader? = nil,
+        snapshotLoader: SnapshotLoader? = nil
     ) {
-        self.repository = repository
         self.cacheStore = cacheStore
+        self.nowProvider = nowProvider
+        self.sourceFingerprintLoader = sourceFingerprintLoader ?? { claudeAllConfigDirs in
+            repository.sourceFingerprint(claudeAllConfigDirs: claudeAllConfigDirs)
+        }
+        self.snapshotLoader = snapshotLoader ?? { filter, claudeAllConfigDirs in
+            repository.snapshot(
+                filter: filter,
+                claudeAllConfigDirs: claudeAllConfigDirs
+            )
+        }
     }
 
     func refreshUsageAnalyticsIfNeeded(
@@ -23,7 +43,6 @@ final class UsageAnalyticsRefreshCoordinator {
         onSnapshotChange: @escaping @MainActor (UsageAnalyticsSnapshot) -> Void,
         onLoadingChange: @escaping @MainActor (Bool) -> Void
     ) {
-        let now = Date()
         let cachedEntry = cacheStore.entry(for: filter)
         let hasCachedSnapshot = cachedEntry?.snapshot != nil
 
@@ -33,34 +52,24 @@ final class UsageAnalyticsRefreshCoordinator {
             onSnapshotChange(UsageAnalyticsSnapshot.empty(filter: filter))
         }
 
-        if !force,
-           hasCachedSnapshot,
-           cacheStore.isEntryTemporallyFresh(
-               for: filter,
-               now: now,
-               calendar: .current
-           ),
-           !cacheStore.shouldProbeFingerprint(for: filter, now: now) {
-            onLoadingChange(false)
-            return
-        }
-
         refreshTask?.cancel()
         refreshGeneration += 1
         let generation = refreshGeneration
-        let repository = repository
         let cacheStore = cacheStore
+        let sourceFingerprintLoader = sourceFingerprintLoader
+        let snapshotLoader = snapshotLoader
+        let nowProvider = nowProvider
         onLoadingChange(force || !hasCachedSnapshot)
 
         refreshTask = Task { @MainActor [weak self] in
             let fingerprint = await Task.detached(priority: .utility) {
-                repository.sourceFingerprint(claudeAllConfigDirs: claudeAllConfigDirs)
+                sourceFingerprintLoader(claudeAllConfigDirs)
             }.value
 
             guard !Task.isCancelled else { return }
             guard let self, generation == self.refreshGeneration else { return }
 
-            let validationDate = Date()
+            let validationDate = nowProvider()
             if !force,
                let entry = cacheStore.entry(for: filter),
                entry.sourceFingerprint == fingerprint,
@@ -84,10 +93,7 @@ final class UsageAnalyticsRefreshCoordinator {
             }
 
             let snapshot = await Task.detached(priority: .utility) {
-                self.repository.snapshot(
-                    filter: filter,
-                    claudeAllConfigDirs: claudeAllConfigDirs
-                )
+                snapshotLoader(filter, claudeAllConfigDirs)
             }.value
 
             guard !Task.isCancelled else { return }

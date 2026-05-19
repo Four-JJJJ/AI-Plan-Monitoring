@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import AppKit
 import SwiftUI
 
@@ -58,13 +59,15 @@ final class StatusBarController: NSObject {
         let foregroundStyle = resolvedForegroundStyle(for: button.window?.screen)
         statusBarAppearanceController.updateRenderedForegroundStyle(foregroundStyle)
         let entries = statusDisplayEntries(foregroundStyle: foregroundStyle)
-        statusItemController.render(
+        let didRenderStatusItem = statusItemController.render(
             entries: entries,
             style: viewModel.statusBarDisplayStyle,
             foregroundStyle: foregroundStyle,
             fallbackImage: appStatusImage
         )
-        updatePopoverContentSizeIfNeeded()
+        if didRenderStatusItem || menuPanelController.isShown {
+            updatePopoverContentSizeIfNeeded()
+        }
     }
 
     @objc

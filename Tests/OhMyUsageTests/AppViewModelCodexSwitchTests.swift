@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import AppKit
 import Foundation
 import XCTest

@@ -107,7 +107,7 @@ The goal is to keep future work on the extracted seams instead of pushing logic 
 - Shared settings-only view primitives belong in [SettingsSharedTypes.swift](../Sources/OhMyUsage/UI/Settings/SettingsSharedTypes.swift) and [SettingsSharedHelpers.swift](../Sources/OhMyUsage/UI/Settings/SettingsSharedHelpers.swift) instead of the root facade file.
 - Settings window lifecycle helpers belong in:
   - [SettingsWindowAppearanceController.swift](../Sources/OhMyUsage/UI/Settings/SettingsWindowAppearanceController.swift)
-  - [SettingsClockController.swift](../Sources/OhMyUsage/UI/Settings/SettingsClockController.swift)
+  - [VisibleClockController.swift](../Sources/OhMyUsageApplication/VisibleClockController.swift)
 - Keep common presentation logic in presenters when it can be pure and tested.
 
 ### 4. Keep menu and status presentation on presenters

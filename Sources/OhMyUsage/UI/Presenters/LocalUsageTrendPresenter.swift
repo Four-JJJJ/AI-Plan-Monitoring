@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 enum LocalUsageTrendStatusTone: Equatable, Sendable {
     case muted

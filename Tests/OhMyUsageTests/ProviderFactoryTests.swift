@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import XCTest
 import OhMyUsageProviders
 @testable import OhMyUsage
@@ -5,13 +6,36 @@ import OhMyUsageProviders
 final class ProviderFactoryTests: XCTestCase {
     func testFactoryMapsRepresentativeProviderTypes() {
         let factory = ProviderFactory(keychain: makeTestKeychain())
+        let cases: [(provider: ProviderDescriptor, expectedType: UsageProvider.Type)] = [
+            (.defaultOfficialCodex(), CodexProvider.self),
+            (.defaultOfficialClaude(), ClaudeProvider.self),
+            (.defaultOfficialGemini(), GeminiProvider.self),
+            (.defaultOfficialCopilot(), CopilotProvider.self),
+            (.defaultOfficialMicrosoftCopilot(), MicrosoftCopilotProvider.self),
+            (.defaultOfficialZai(), ZaiProvider.self),
+            (.defaultOfficialAmp(), AmpProvider.self),
+            (.defaultOfficialCursor(), CursorProvider.self),
+            (.defaultOfficialJetBrains(), JetBrainsProvider.self),
+            (.defaultOfficialKiro(), KiroProvider.self),
+            (.defaultOfficialWindsurf(), WindsurfProvider.self),
+            (.defaultOfficialTrae(), TraeProvider.self),
+            (.defaultOfficialOpenRouterCredits(), OpenRouterProvider.self),
+            (.defaultOfficialOpenRouterAPI(), OpenRouterProvider.self),
+            (.defaultOfficialOllamaCloud(), OllamaCloudProvider.self),
+            (.defaultOfficialOpenCodeGo(), OpenCodeGoProvider.self),
+            (.relayProvider(type: .relay), RelayProvider.self),
+            (.relayProvider(type: .open), RelayProvider.self),
+            (.relayProvider(type: .dragon), RelayProvider.self),
+            (.defaultOfficialKimi(), KimiSmartProvider.self)
+        ]
 
-        XCTAssertTrue(factory.makeProvider(for: .defaultOfficialCodex()) is CodexProvider)
-        XCTAssertTrue(factory.makeProvider(for: .defaultOfficialClaude()) is ClaudeProvider)
-        XCTAssertTrue(factory.makeProvider(for: .defaultOfficialTrae()) is TraeProvider)
-        XCTAssertTrue(factory.makeProvider(for: .defaultOfficialOpenRouterAPI()) is OpenRouterProvider)
-        XCTAssertTrue(factory.makeProvider(for: .defaultOpenAilinyu()) is RelayProvider)
-        XCTAssertTrue(factory.makeProvider(for: .defaultOfficialKimi()) is KimiSmartProvider)
+        XCTAssertEqual(cases.map(\.provider.type), ProviderType.allCases)
+        for item in cases {
+            XCTAssertTrue(
+                type(of: factory.makeProvider(for: item.provider)) == item.expectedType,
+                "\(item.provider.type) should map to \(item.expectedType)"
+            )
+        }
     }
 
     func testTraeProviderUsesInjectedBrowserCredentialService() throws {
@@ -49,19 +73,19 @@ final class ProviderFactoryTests: XCTestCase {
             registry: ProviderFactoryRegistry(makers: Dictionary(
                 uniqueKeysWithValues: ProviderType.allCases.map { type in
                     (type, { descriptor, _ in
-                    StubUsageProvider(
-                        descriptor: descriptor,
-                        snapshot: UsageSnapshot(
-                            source: descriptor.id,
-                            status: .ok,
-                            remaining: 30,
-                            used: 70,
-                            limit: 100,
-                            unit: "tokens",
-                            updatedAt: Date(timeIntervalSince1970: 123),
-                            note: "ok"
+                        StubUsageProvider(
+                            descriptor: descriptor,
+                            snapshot: UsageSnapshot(
+                                source: descriptor.id,
+                                status: .ok,
+                                remaining: 30,
+                                used: 70,
+                                limit: 100,
+                                unit: "tokens",
+                                updatedAt: Date(timeIntervalSince1970: 123),
+                                note: "ok"
+                            )
                         )
-                    )
                     } as ProviderFactoryRegistry.Maker)
                 }
             ))
@@ -74,6 +98,21 @@ final class ProviderFactoryTests: XCTestCase {
         XCTAssertEqual(snapshot.used, 70)
         XCTAssertEqual(snapshot.limit, 100)
         XCTAssertEqual(snapshot.capturedAtUnixSeconds, 123)
+    }
+}
+
+private extension ProviderDescriptor {
+    static func relayProvider(type: ProviderType) -> ProviderDescriptor {
+        ProviderDescriptor(
+            id: "\(type.rawValue)-test",
+            name: "\(type.rawValue) test",
+            type: type,
+            enabled: true,
+            pollIntervalSec: 60,
+            threshold: AlertRule(lowRemaining: 20, maxConsecutiveFailures: 3, notifyOnAuthError: true),
+            auth: .none,
+            baseURL: "https://relay.example.com"
+        )
     }
 }
 

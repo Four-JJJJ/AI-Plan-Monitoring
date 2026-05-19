@@ -15,15 +15,21 @@ final class KimiBrowserCookieService {
         self.storageReader = BrowserStorageCredentialReader(fileManager: fileManager)
     }
 
-    func detectKimiAuthToken(order: [KimiBrowserKind]) -> KimiDetectedToken? {
+    func detectKimiAuthToken(order: [KimiBrowserKind], refreshPaths: Bool = false) -> KimiDetectedToken? {
         for browser in order {
-            if let token = tokenFromBrowser(browser, cookieName: "kimi-auth", hostContains: "kimi.com") {
+            if let token = tokenFromBrowser(
+                browser,
+                cookieName: "kimi-auth",
+                hostContains: "kimi.com",
+                refreshPaths: refreshPaths
+            ) {
                 return KimiDetectedToken(token: token, source: browserLabel(browser))
             }
             if let token = storageReader.bearerTokenCandidates(
                 for: browser,
                 hostCandidates: ["www.kimi.com", "kimi.com"],
-                source: "\(browserLabel(browser)):localStorage"
+                source: "\(browserLabel(browser)):localStorage",
+                refreshPaths: refreshPaths
             ).first {
                 return KimiDetectedToken(token: token.value, source: token.source)
             }
@@ -31,10 +37,14 @@ final class KimiBrowserCookieService {
         return nil
     }
 
-    func detectCookieHeader(host: String, order: [KimiBrowserKind]? = nil) -> KimiDetectedToken? {
+    func detectCookieHeader(
+        host: String,
+        order: [KimiBrowserKind]? = nil,
+        refreshPaths: Bool = false
+    ) -> KimiDetectedToken? {
         let actualOrder = order ?? browserOrderDefault
         for browser in actualOrder {
-            for path in cookieReader.candidateCookiePaths(for: browser) {
+            for path in cookieReader.candidateCookiePaths(for: browser, bypassCache: refreshPaths) {
                 if let header = cookieReader.cookieHeader(fromDatabaseAt: path, browser: browser, hostContains: host),
                    !header.isEmpty {
                     return KimiDetectedToken(token: header, source: "\(browserLabel(browser)):cookie")
@@ -44,8 +54,13 @@ final class KimiBrowserCookieService {
         return nil
     }
 
-    private func tokenFromBrowser(_ browser: KimiBrowserKind, cookieName: String, hostContains: String) -> String? {
-        for path in cookieReader.candidateCookiePaths(for: browser) {
+    private func tokenFromBrowser(
+        _ browser: KimiBrowserKind,
+        cookieName: String,
+        hostContains: String,
+        refreshPaths: Bool
+    ) -> String? {
+        for path in cookieReader.candidateCookiePaths(for: browser, bypassCache: refreshPaths) {
             if let token = cookieReader.namedCookieValue(fromDatabaseAt: path, browser: browser, cookieName: cookieName, hostContains: hostContains) {
                 return token
             }

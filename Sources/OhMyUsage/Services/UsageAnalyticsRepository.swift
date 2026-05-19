@@ -1,18 +1,75 @@
 import Foundation
 
 final class UsageAnalyticsRepository: @unchecked Sendable {
+    typealias CCSwitchSourceFingerprintProvider = (_ ccSwitchReader: CCSwitchUsageLogReader) -> UsageAnalyticsFileFingerprint
+    typealias LocalSourceFingerprintProvider = (
+        _ claudeAllConfigDirs: [String]
+    ) -> CachedLocalSourceFingerprint
+
+    struct CachedLocalSourceFingerprint: Equatable, Sendable {
+        var codex: UsageAnalyticsFileFingerprint
+        var claude: UsageAnalyticsFileFingerprint
+        var kimi: UsageAnalyticsFileFingerprint
+    }
+
+    private final class LocalSourceFingerprintCache: @unchecked Sendable {
+        private struct Entry {
+            var fingerprint: CachedLocalSourceFingerprint
+            var checkedAt: Date
+        }
+
+        private let ttl: TimeInterval
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+
+        init(ttl: TimeInterval) {
+            self.ttl = ttl
+        }
+
+        func fingerprint(for key: String, now: Date) -> CachedLocalSourceFingerprint? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let entry = entries[key] else { return nil }
+            guard now.timeIntervalSince(entry.checkedAt) < ttl else {
+                entries.removeValue(forKey: key)
+                return nil
+            }
+            return entry.fingerprint
+        }
+
+        func store(_ fingerprint: CachedLocalSourceFingerprint, for key: String, now: Date) {
+            lock.lock()
+            entries[key] = Entry(fingerprint: fingerprint, checkedAt: now)
+            lock.unlock()
+        }
+
+        func removeAll() {
+            lock.lock()
+            entries.removeAll()
+            lock.unlock()
+        }
+    }
+
+    private static let localSourceFingerprintCache = LocalSourceFingerprintCache(ttl: 60)
+
     private let ccSwitchReader: CCSwitchUsageLogReader
     private let calendar: Calendar
     private let nowProvider: () -> Date
+    private let ccSwitchSourceFingerprintProvider: CCSwitchSourceFingerprintProvider
+    private let localSourceFingerprintProvider: LocalSourceFingerprintProvider
 
     init(
         ccSwitchReader: CCSwitchUsageLogReader = CCSwitchUsageLogReader(),
         calendar: Calendar = .current,
-        nowProvider: @escaping () -> Date = Date.init
+        nowProvider: @escaping () -> Date = Date.init,
+        ccSwitchSourceFingerprintProvider: @escaping CCSwitchSourceFingerprintProvider = UsageAnalyticsRepository.defaultCCSwitchSourceFingerprint,
+        localSourceFingerprintProvider: @escaping LocalSourceFingerprintProvider = UsageAnalyticsRepository.defaultLocalSourceFingerprint
     ) {
         self.ccSwitchReader = ccSwitchReader
         self.calendar = calendar
         self.nowProvider = nowProvider
+        self.ccSwitchSourceFingerprintProvider = ccSwitchSourceFingerprintProvider
+        self.localSourceFingerprintProvider = localSourceFingerprintProvider
     }
 
     func snapshot(
@@ -46,18 +103,28 @@ final class UsageAnalyticsRepository: @unchecked Sendable {
     }
 
     func sourceFingerprint(claudeAllConfigDirs: [String] = []) -> UsageAnalyticsSourceFingerprint {
-        UsageAnalyticsSourceFingerprint(
-            ccSwitch: usageAnalyticsFileFingerprint(from: ccSwitchReader.sourceFingerprint()),
-            codex: usageAnalyticsFileFingerprint(
-                from: LocalUsageSourceFingerprintBuilder.codexFingerprint(scope: .allAccounts)
-            ),
-            claude: usageAnalyticsFileFingerprint(from: LocalUsageSourceFingerprintBuilder.claudeFingerprint(
-                scope: .allAccounts,
-                currentConfigDir: nil,
-                allConfigDirs: claudeAllConfigDirs
-            )),
-            kimi: usageAnalyticsFileFingerprint(from: LocalUsageSourceFingerprintBuilder.kimiFingerprint())
+        let now = nowProvider()
+        let ccSwitch = ccSwitchSourceFingerprintProvider(ccSwitchReader)
+        let cacheKey = Self.localSourceFingerprintCacheKey(
+            claudeAllConfigDirs: claudeAllConfigDirs
         )
+        let localFingerprint: CachedLocalSourceFingerprint
+        if let cached = Self.localSourceFingerprintCache.fingerprint(for: cacheKey, now: now) {
+            localFingerprint = cached
+        } else {
+            localFingerprint = localSourceFingerprintProvider(claudeAllConfigDirs)
+            Self.localSourceFingerprintCache.store(localFingerprint, for: cacheKey, now: now)
+        }
+        return UsageAnalyticsSourceFingerprint(
+            ccSwitch: ccSwitch,
+            codex: localFingerprint.codex,
+            claude: localFingerprint.claude,
+            kimi: localFingerprint.kimi
+        )
+    }
+
+    static func clearSourceFingerprintCacheForTesting() {
+        localSourceFingerprintCache.removeAll()
     }
 
     private func readLocalRecords(
@@ -155,7 +222,41 @@ final class UsageAnalyticsRepository: @unchecked Sendable {
         )
     }
 
-    private func usageAnalyticsFileFingerprint(
+    private static func defaultCCSwitchSourceFingerprint(
+        ccSwitchReader: CCSwitchUsageLogReader
+    ) -> UsageAnalyticsFileFingerprint {
+        usageAnalyticsFileFingerprint(from: ccSwitchReader.sourceFingerprint())
+    }
+
+    private static func defaultLocalSourceFingerprint(
+        claudeAllConfigDirs: [String]
+    ) -> CachedLocalSourceFingerprint {
+        CachedLocalSourceFingerprint(
+            codex: usageAnalyticsFileFingerprint(
+                from: LocalUsageSourceFingerprintBuilder.codexFingerprint(scope: .allAccounts)
+            ),
+            claude: usageAnalyticsFileFingerprint(from: LocalUsageSourceFingerprintBuilder.claudeFingerprint(
+                scope: .allAccounts,
+                currentConfigDir: nil,
+                allConfigDirs: claudeAllConfigDirs
+            )),
+            kimi: usageAnalyticsFileFingerprint(from: LocalUsageSourceFingerprintBuilder.kimiFingerprint())
+        )
+    }
+
+    private static func localSourceFingerprintCacheKey(
+        claudeAllConfigDirs: [String]
+    ) -> String {
+        let normalizedDirs = Set(claudeAllConfigDirs.compactMap { dir -> String? in
+            let trimmed = dir.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let expanded = (trimmed as NSString).expandingTildeInPath
+            return (expanded as NSString).standardizingPath
+        })
+        return "claude=\(normalizedDirs.sorted().joined(separator: "\u{1F}"))"
+    }
+
+    private static func usageAnalyticsFileFingerprint(
         from fingerprint: LocalUsageSourceFingerprint
     ) -> UsageAnalyticsFileFingerprint {
         UsageAnalyticsFileFingerprint(

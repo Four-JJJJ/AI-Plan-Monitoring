@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 struct ClaudeStatusBarDisplaySelectionOutcome: Equatable {

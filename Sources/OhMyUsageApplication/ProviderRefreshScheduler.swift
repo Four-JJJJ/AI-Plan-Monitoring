@@ -117,7 +117,13 @@ package final class ProviderRefreshScheduler {
     private let startupJitterProvider: @Sendable () -> TimeInterval
     private let sleepAction: SleepAction
     private let config: ProviderRefreshSchedulerConfig
-    private var pollTasks: [String: Task<Void, Never>] = [:]
+    private var pollLoopTask: Task<Void, Never>?
+    private var pollRunID: UUID?
+    private var scheduledProviderIDsStorage: Set<String> = []
+    private var providerOrderStorage: [String] = []
+    private var nextDueAtStorage: [String: Date] = [:]
+    private var inFlightRefreshTasks: [String: Task<Void, Never>] = [:]
+    private var logicalNowStorage = Date()
     private var localSessionMonitorTask: Task<Void, Never>?
 
     package init(
@@ -145,19 +151,37 @@ package final class ProviderRefreshScheduler {
     }
 
     package var pollTaskCount: Int {
-        pollTasks.count
+        scheduledProviderIDsStorage.isEmpty ? 0 : 1
     }
 
     package var scheduledProviderIDs: Set<String> {
-        Set(pollTasks.keys)
+        scheduledProviderIDsStorage
     }
 
     package func restart(providers: [ProviderRefreshScheduleDescriptor]) {
         stop()
 
-        for provider in providers where provider.isEnabled {
-            pollTasks[provider.id] = Task { @MainActor [weak self] in
-                await self?.pollLoop(providerID: provider.id)
+        var seenProviderIDs = Set<String>()
+        let enabledProviderIDs = providers.compactMap { provider -> String? in
+            guard provider.isEnabled, seenProviderIDs.insert(provider.id).inserted else {
+                return nil
+            }
+            return provider.id
+        }
+
+        let runID = UUID()
+        let logicalNow = Date()
+        pollRunID = runID
+        logicalNowStorage = logicalNow
+        providerOrderStorage = enabledProviderIDs
+        scheduledProviderIDsStorage = Set(enabledProviderIDs)
+        nextDueAtStorage = Dictionary(uniqueKeysWithValues: enabledProviderIDs.map { providerID in
+            let jitterSeconds = max(0, startupJitterProvider())
+            return (providerID, logicalNow.addingTimeInterval(jitterSeconds))
+        })
+        if !enabledProviderIDs.isEmpty {
+            pollLoopTask = Task { @MainActor [weak self] in
+                await self?.pollLoop(runID: runID)
             }
         }
 
@@ -165,8 +189,15 @@ package final class ProviderRefreshScheduler {
     }
 
     package func stop() {
-        pollTasks.values.forEach { $0.cancel() }
-        pollTasks.removeAll()
+        pollLoopTask?.cancel()
+        pollLoopTask = nil
+        pollRunID = nil
+        scheduledProviderIDsStorage.removeAll()
+        providerOrderStorage.removeAll()
+        nextDueAtStorage.removeAll()
+        logicalNowStorage = Date()
+        inFlightRefreshTasks.values.forEach { $0.cancel() }
+        inFlightRefreshTasks.removeAll()
         localSessionMonitorTask?.cancel()
         localSessionMonitorTask = nil
     }
@@ -183,36 +214,121 @@ package final class ProviderRefreshScheduler {
         }
     }
 
-    private func pollLoop(providerID: String) async {
-        let startupJitterSeconds = startupJitterProvider()
-        if startupJitterSeconds > 0 {
-            do {
-                try await sleepAction(startupJitterSeconds)
-            } catch {
+    private func pollLoop(runID: UUID) async {
+        while !Task.isCancelled, pollRunID == runID {
+            logicalNowStorage = max(logicalNowStorage, Date())
+            providerOrderStorage = providerOrderStorage.filter { providerID in
+                guard let descriptor = descriptorProvider(providerID), descriptor.isEnabled else {
+                    nextDueAtStorage.removeValue(forKey: providerID)
+                    scheduledProviderIDsStorage.remove(providerID)
+                    inFlightRefreshTasks[providerID]?.cancel()
+                    inFlightRefreshTasks.removeValue(forKey: providerID)
+                    return false
+                }
+                return true
+            }
+            let activeProviderIDSet = Set(providerOrderStorage)
+            nextDueAtStorage = nextDueAtStorage.filter { activeProviderIDSet.contains($0.key) }
+
+            guard !nextDueAtStorage.isEmpty, !providerOrderStorage.isEmpty else {
+                pollLoopTask = nil
                 return
             }
+
+            guard let earliestDueAt = nextDueAtStorage.values.min() else {
+                pollLoopTask = nil
+                return
+            }
+
+            let sleepSeconds = max(0, earliestDueAt.timeIntervalSince(logicalNowStorage))
+            if sleepSeconds > 0 {
+                do {
+                    try await sleepAction(sleepSeconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                logicalNowStorage = max(Date(), earliestDueAt)
+                continue
+            }
+
+            let dueProviderIDs = providerOrderStorage.filter { providerID in
+                guard inFlightRefreshTasks[providerID] == nil,
+                      let dueAt = nextDueAtStorage[providerID] else {
+                    return false
+                }
+                return dueAt <= logicalNowStorage
+            }
+
+            for providerID in dueProviderIDs {
+                guard !Task.isCancelled else { return }
+                guard let descriptor = descriptorProvider(providerID), descriptor.isEnabled else {
+                    nextDueAtStorage.removeValue(forKey: providerID)
+                    scheduledProviderIDsStorage.remove(providerID)
+                    continue
+                }
+
+                startPollRefresh(
+                    providerID: providerID,
+                    descriptor: descriptor,
+                    runID: runID,
+                    startedAt: logicalNowStorage
+                )
+            }
+
+            if dueProviderIDs.isEmpty {
+                do {
+                    try await sleepAction(1)
+                } catch {
+                    return
+                }
+                continue
+            }
+
+            // Let fast refreshes write back their real backoff before the loop computes the next sleep.
+            await Task.yield()
+            await Task.yield()
         }
+    }
 
-        while !Task.isCancelled {
-            guard let descriptor = descriptorProvider(providerID), descriptor.isEnabled else {
-                return
-            }
+    private func startPollRefresh(
+        providerID: String,
+        descriptor: ProviderRefreshScheduleDescriptor,
+        runID: UUID,
+        startedAt: Date
+    ) {
+        guard inFlightRefreshTasks[providerID] == nil else { return }
 
+        let placeholderInterval = TimeInterval(pollBaseInterval(for: descriptor))
+        nextDueAtStorage[providerID] = startedAt.addingTimeInterval(placeholderInterval)
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
             await refreshAction(providerID, false)
-
-            let failureCount = failureCountProvider(providerID)
-            let baseInterval = pollBaseInterval(for: descriptor)
-            let delay = TimeInterval(BackoffPolicy.delaySeconds(
-                baseInterval: baseInterval,
-                consecutiveFailures: failureCount
-            ))
-
-            do {
-                try await sleepAction(delay)
-            } catch {
-                return
-            }
+            finishPollRefresh(providerID: providerID, runID: runID)
         }
+        inFlightRefreshTasks[providerID] = task
+    }
+
+    private func finishPollRefresh(providerID: String, runID: UUID) {
+        guard pollRunID == runID else { return }
+        inFlightRefreshTasks.removeValue(forKey: providerID)
+
+        guard let descriptor = descriptorProvider(providerID), descriptor.isEnabled else {
+            nextDueAtStorage.removeValue(forKey: providerID)
+            scheduledProviderIDsStorage.remove(providerID)
+            providerOrderStorage.removeAll { $0 == providerID }
+            return
+        }
+
+        let failureCount = failureCountProvider(providerID)
+        let baseInterval = pollBaseInterval(for: descriptor)
+        let delay = TimeInterval(BackoffPolicy.delaySeconds(
+            baseInterval: baseInterval,
+            consecutiveFailures: failureCount
+        ))
+        let refreshedAt = max(logicalNowStorage, Date())
+        nextDueAtStorage[providerID] = refreshedAt.addingTimeInterval(delay)
     }
 
     private func restartLocalSessionSignalMonitor(providers: [ProviderRefreshScheduleDescriptor]) {

@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 extension AuthConfig {
     func withFallback(service: String, account: String?) -> AuthConfig {

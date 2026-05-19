@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct RelayProviderDescriptorResolver {
     private let registry: RelayAdapterRegistry

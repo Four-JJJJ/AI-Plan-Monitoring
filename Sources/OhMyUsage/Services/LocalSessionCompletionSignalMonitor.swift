@@ -2,6 +2,24 @@ import Foundation
 import OhMyUsageApplication
 import SQLite3
 
+struct LocalSessionCompletionSignalDiagnostics: Equatable, Sendable {
+    var codexSQLiteProbeCount = 0
+    var codexCacheHitCount = 0
+    var claudeEnumerationCount = 0
+    var claudeThrottleHitCount = 0
+    var lastClaudeCandidateFileCount = 0
+    var lastClaudeTrackedFileCount = 0
+    var lastClaudeParsedFileCount = 0
+    var lastClaudeCachedFileSkipCount = 0
+
+    mutating func resetClaudeLastScan() {
+        lastClaudeCandidateFileCount = 0
+        lastClaudeTrackedFileCount = 0
+        lastClaudeParsedFileCount = 0
+        lastClaudeCachedFileSkipCount = 0
+    }
+}
+
 final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSource {
     private struct ClaudeFileState {
         var modifiedAtRef: TimeInterval
@@ -23,10 +41,11 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
     private let claudeEnumerationInterval: TimeInterval
     private let claudeMaxTrackedFiles: Int
     private var claudeFileStates: [String: ClaudeFileState] = [:]
-    private var lastCodexLogsSnapshot: LocalUsageFileSnapshot?
+    private var lastCodexLogsSnapshot: [LocalUsageFileSnapshot]?
     private var cachedCodexLatestCompletionAt: Date?
     private var lastClaudeEnumerationAt: Date?
     private var cachedClaudeLatestCompletionAt: Date?
+    private(set) var diagnostics = LocalSessionCompletionSignalDiagnostics()
 
     init(
         fileManager: FileManager = .default,
@@ -47,22 +66,17 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
     }
 
     func latestCodexCompletionAt() -> Date? {
-        let logsURL = URL(fileURLWithPath: codexLogsPath)
-        guard fileManager.fileExists(atPath: codexLogsPath),
-              let values = try? logsURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+        guard let fileSnapshot = codexLogSnapshots() else {
             lastCodexLogsSnapshot = nil
             cachedCodexLatestCompletionAt = nil
             return nil
         }
-        let fileSnapshot = LocalUsageFileSnapshot(
-            path: codexLogsPath,
-            fileSize: UInt64(max(0, values.fileSize ?? 0)),
-            modifiedAtRef: values.contentModificationDate?.timeIntervalSinceReferenceDate
-        )
         if fileSnapshot == lastCodexLogsSnapshot {
+            diagnostics.codexCacheHitCount += 1
             return cachedCodexLatestCompletionAt
         }
         lastCodexLogsSnapshot = fileSnapshot
+        diagnostics.codexSQLiteProbeCount += 1
 
         let query = """
         SELECT ts
@@ -122,20 +136,47 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
         return parsed
     }
 
+    private func codexLogSnapshots() -> [LocalUsageFileSnapshot]? {
+        guard fileManager.fileExists(atPath: codexLogsPath),
+              let primary = fileSnapshot(path: codexLogsPath) else {
+            return nil
+        }
+
+        let sidecars = ["\(codexLogsPath)-wal", "\(codexLogsPath)-shm"]
+            .compactMap { fileSnapshot(path: $0) }
+        return ([primary] + sidecars).sorted { $0.path < $1.path }
+    }
+
+    private func fileSnapshot(path: String) -> LocalUsageFileSnapshot? {
+        guard fileManager.fileExists(atPath: path) else { return nil }
+        let url = URL(fileURLWithPath: path)
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+            return nil
+        }
+        return LocalUsageFileSnapshot(
+            path: path,
+            fileSize: UInt64(max(0, values.fileSize ?? 0)),
+            modifiedAtRef: values.contentModificationDate?.timeIntervalSinceReferenceDate
+        )
+    }
+
     func latestClaudeCompletionAt() -> Date? {
         guard fileManager.fileExists(atPath: claudeProjectsRoot) else {
             claudeFileStates.removeAll()
             lastClaudeEnumerationAt = nil
             cachedClaudeLatestCompletionAt = nil
+            diagnostics.resetClaudeLastScan()
             return nil
         }
 
         let now = nowProvider()
         if let lastClaudeEnumerationAt,
            now.timeIntervalSince(lastClaudeEnumerationAt) < claudeEnumerationInterval {
+            diagnostics.claudeThrottleHitCount += 1
             return cachedClaudeLatestCompletionAt
         }
         lastClaudeEnumerationAt = now
+        diagnostics.claudeEnumerationCount += 1
 
         let cutoff = nowProvider().addingTimeInterval(-claudeRecentFileWindow)
         guard let enumerator = fileManager.enumerator(
@@ -143,11 +184,13 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
+            diagnostics.resetClaudeLastScan()
             return cachedClaudeLatestCompletionAt
         }
 
-        var candidates: [ClaudeCandidateFile] = []
-        candidates.reserveCapacity(128)
+        var candidateFileCount = 0
+        var trackedCandidates: [ClaudeCandidateFile] = []
+        trackedCandidates.reserveCapacity(claudeMaxTrackedFiles)
 
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension.lowercased() == "jsonl" else {
@@ -161,31 +204,31 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             }
 
             let path = fileURL.path
-            candidates.append(
+            candidateFileCount += 1
+            insertTrackedClaudeCandidate(
                 ClaudeCandidateFile(
                     path: path,
                     modifiedAtRef: modifiedAt.timeIntervalSinceReferenceDate,
                     fileSize: UInt64(max(0, values.fileSize ?? 0))
-                )
+                ),
+                into: &trackedCandidates
             )
         }
 
-        let trackedCandidates = candidates
-            .sorted { lhs, rhs in
-                if lhs.modifiedAtRef != rhs.modifiedAtRef {
-                    return lhs.modifiedAtRef > rhs.modifiedAtRef
-                }
-                return lhs.path < rhs.path
-            }
-            .prefix(claudeMaxTrackedFiles)
+        diagnostics.lastClaudeCandidateFileCount = candidateFileCount
+        diagnostics.lastClaudeTrackedFileCount = trackedCandidates.count
+        diagnostics.lastClaudeParsedFileCount = 0
+        diagnostics.lastClaudeCachedFileSkipCount = 0
         let visiblePaths = Set(trackedCandidates.map(\.path))
 
         for candidate in trackedCandidates {
             if let cached = claudeFileStates[candidate.path],
                cached.modifiedAtRef == candidate.modifiedAtRef,
                cached.fileSize == candidate.fileSize {
+                diagnostics.lastClaudeCachedFileSkipCount += 1
                 continue
             }
+            diagnostics.lastClaudeParsedFileCount += 1
             let parsed = Self.latestClaudeAssistantUsageTimestamp(filePath: candidate.path)
             claudeFileStates[candidate.path] = ClaudeFileState(
                 modifiedAtRef: candidate.modifiedAtRef,
@@ -199,6 +242,27 @@ final class LocalSessionCompletionSignalMonitor: LocalSessionCompletionSignalSou
             Self.maxDate(partial, state.latestSignalAt)
         }
         return cachedClaudeLatestCompletionAt
+    }
+
+    private func insertTrackedClaudeCandidate(
+        _ candidate: ClaudeCandidateFile,
+        into trackedCandidates: inout [ClaudeCandidateFile]
+    ) {
+        trackedCandidates.append(candidate)
+        trackedCandidates.sort(by: Self.isNewerClaudeCandidate)
+        if trackedCandidates.count > claudeMaxTrackedFiles {
+            trackedCandidates.removeLast(trackedCandidates.count - claudeMaxTrackedFiles)
+        }
+    }
+
+    private static func isNewerClaudeCandidate(
+        _ lhs: ClaudeCandidateFile,
+        than rhs: ClaudeCandidateFile
+    ) -> Bool {
+        if lhs.modifiedAtRef != rhs.modifiedAtRef {
+            return lhs.modifiedAtRef > rhs.modifiedAtRef
+        }
+        return lhs.path < rhs.path
     }
 
     private static func latestClaudeAssistantUsageTimestamp(filePath: String) -> Date? {

@@ -33,26 +33,26 @@ extension ProviderDescriptor {
     }
 
     static var officialRelayDefaultProviderIDs: Set<String> {
-        ProviderMetadataCatalog.officialRelayDefaultProviderIDs
+        Set(OfficialRelayMetadataCatalog.defaultProviderOrder)
     }
 
     static var officialRelayDefaultProviderOrder: [String] {
-        ProviderMetadataCatalog.officialRelayDefaultProviderOrder
+        OfficialRelayMetadataCatalog.defaultProviderOrder
     }
 
     static func officialRelayDefaultProviderID(adapterID: String) -> String? {
-        ProviderMetadataCatalog.officialRelayDefaultProviderID(adapterID: adapterID)
+        OfficialRelayMetadataCatalog.metadata(forAdapterID: adapterID)?.providerID
     }
 
     static func officialRelayDisplayName(adapterID: String) -> String? {
-        ProviderMetadataCatalog.officialRelayDisplayName(adapterID: adapterID)
+        OfficialRelayMetadataCatalog.metadata(forAdapterID: adapterID)?.displayName
     }
 
     static func officialRelayDefaultBaseURL(adapterID: String) -> String? {
-        ProviderMetadataCatalog.officialRelayDefaultBaseURL(adapterID: adapterID)
+        OfficialRelayMetadataCatalog.metadata(forAdapterID: adapterID)?.baseURL
     }
 
     static func officialRelayIconName(adapterID: String) -> String? {
-        ProviderMetadataCatalog.officialRelayIconName(adapterID: adapterID)
+        OfficialRelayMetadataCatalog.metadata(forAdapterID: adapterID)?.iconName
     }
 }

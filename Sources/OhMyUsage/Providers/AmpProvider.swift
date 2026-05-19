@@ -1,3 +1,4 @@
+import OhMyUsageDomain
 import Foundation
 
 final class AmpProvider: UsageProvider, @unchecked Sendable {

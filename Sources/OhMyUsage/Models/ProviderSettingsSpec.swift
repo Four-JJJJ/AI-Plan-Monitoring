@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 enum CredentialFieldKind: String, Equatable {
     case bearerToken

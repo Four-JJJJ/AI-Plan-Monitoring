@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct ProviderTypeMetadata {
     var displayName: String

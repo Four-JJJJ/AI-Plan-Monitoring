@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct ProviderDescriptor: Codable, Equatable, Identifiable {
     var id: String

@@ -64,8 +64,8 @@ final class ArchitectureTargetBoundaryTests: XCTestCase {
             "OhMyUsageProviders": ["OhMyUsageDomain"],
             "OhMyUsageApplication": ["OhMyUsageDomain"],
             "OhMyUsagePresentation": ["OhMyUsageDomain"],
-            "OhMyUsageFeatures": ["OhMyUsageApplication", "OhMyUsagePresentation"],
-            "OhMyUsageBootstrap": ["OhMyUsageApplication", "OhMyUsageFeatures", "OhMyUsagePresentation"]
+            "OhMyUsageFeatures": ["OhMyUsageDomain", "OhMyUsageApplication", "OhMyUsagePresentation"],
+            "OhMyUsageBootstrap": ["OhMyUsageDomain", "OhMyUsageApplication", "OhMyUsageFeatures", "OhMyUsagePresentation"]
         ]
 
         let nonExecutableTargets = targets.values.filter { $0.kind == .regular }
@@ -243,7 +243,17 @@ final class ArchitectureTargetBoundaryTests: XCTestCase {
         let requiredResponsibilityFiles: [(directory: String, files: Set<String>)] = [
             (
                 "Sources/OhMyUsageDomain",
-                ["UsageProviderIdentity.swift", "UsageQuotaSnapshot.swift"]
+                [
+                    "AuthModels.swift",
+                    "OfficialProviderConfigModels.swift",
+                    "OpenRelayProviderConfigModels.swift",
+                    "ProviderFamily.swift",
+                    "ProviderType.swift",
+                    "RelayModels.swift",
+                    "UsageProviderIdentity.swift",
+                    "UsageQuotaSnapshot.swift",
+                    "UsageSnapshot.swift"
+                ]
             ),
             (
                 "Sources/OhMyUsageInfrastructure",
@@ -299,6 +309,27 @@ final class ArchitectureTargetBoundaryTests: XCTestCase {
             capturedAtUnixSeconds: 1_700_000_000
         )
         let request = UsageRefreshRequest(providerID: providerID, forceRefresh: true)
+        let providerType = ProviderType.codex
+        let quotaWindow = UsageQuotaWindow(
+            id: "session",
+            title: "5h",
+            remainingPercent: 75,
+            usedPercent: 25,
+            resetAt: Date(timeIntervalSince1970: 1_700_000_100),
+            kind: .session
+        )
+        let usageSnapshot = UsageSnapshot(
+            source: "codex-official",
+            status: .ok,
+            remaining: 75,
+            used: 25,
+            limit: 100,
+            unit: "%",
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            note: "ok",
+            quotaWindows: [quotaWindow],
+            sourceLabel: "API"
+        )
         let summary = UsageProviderSummaryViewState(
             providerID: providerID,
             title: "Codex",
@@ -308,11 +339,208 @@ final class ArchitectureTargetBoundaryTests: XCTestCase {
         let compositionRoot = OhMyUsageCompositionRoot(featureAssembly: featureAssembly)
 
         XCTAssertEqual(request.providerID, providerID)
+        XCTAssertEqual(providerType.rawValue, "codex")
         XCTAssertEqual(snapshot.remaining, 75)
+        XCTAssertEqual(usageSnapshot.quotaWindows.first?.resetSource, .official)
+        XCTAssertEqual(usageSnapshot.quotaWindows.first?.confidence, .confirmed)
         XCTAssertEqual(summary.usageRatio, 0.25)
         XCTAssertEqual(
             compositionRoot.makeUsageSummaryViewState(providerID: providerID, title: "Codex", snapshot: snapshot),
             summary
         )
+    }
+
+    func testProviderConfigurationValueObjectsAreOwnedByDomainTarget() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let domainURL = rootURL.appendingPathComponent("Sources/OhMyUsageDomain")
+        let executableModelsURL = rootURL.appendingPathComponent("Sources/OhMyUsage/Models")
+
+        let expectedDomainFiles = [
+            "AuthModels.swift",
+            "OfficialProviderConfigModels.swift",
+            "RelayModels.swift",
+            "OpenRelayProviderConfigModels.swift"
+        ]
+        for fileName in expectedDomainFiles {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: domainURL.appendingPathComponent(fileName).path),
+                "Stage 1 provider configuration value objects should live in OhMyUsageDomain/\(fileName)"
+            )
+
+            let legacyExecutableModelURL = executableModelsURL.appendingPathComponent(fileName)
+            if FileManager.default.fileExists(atPath: legacyExecutableModelURL.path) {
+                let source = try String(contentsOf: legacyExecutableModelURL, encoding: .utf8)
+                for ownedTypeDefinition in [
+                    "enum AuthKind",
+                    "struct AuthConfig",
+                    "struct AlertRule",
+                    "enum OfficialSourceMode",
+                    "enum OfficialWebMode",
+                    "enum OfficialQuotaDisplayMode",
+                    "enum OfficialTraeValueDisplayMode",
+                    "struct OfficialProviderConfig",
+                    "struct RelayProviderConfig",
+                    "enum RelayCredentialMode",
+                    "struct RelayManualOverride",
+                    "enum RelayAuthStrategyKind",
+                    "struct RelayAuthStrategy",
+                    "struct RelayAdapterMatch",
+                    "enum RelayRequiredInputKind",
+                    "struct RelaySetupManifest",
+                    "struct RelayRequestManifest",
+                    "struct RelayTokenRequestManifest",
+                    "struct RelayExtractManifest",
+                    "enum RelayPostprocessID",
+                    "struct RelayAdapterManifest",
+                    "struct OpenProviderConfig",
+                    "struct RelayAccountBalanceConfig"
+                ] {
+                    XCTAssertFalse(
+                        source.contains(ownedTypeDefinition),
+                        "Legacy executable model file \(fileName) may be absent or exist only as a compatibility shim; it must not own \(ownedTypeDefinition)"
+                    )
+                }
+            }
+        }
+
+        let credential = AuthConfig(
+            kind: .bearer,
+            keychainService: "manual-service",
+            keychainAccount: "account@example.com"
+        )
+        let alertRule = AlertRule(
+            lowRemaining: 12.5,
+            maxConsecutiveFailures: 3,
+            notifyOnAuthError: true
+        )
+        let officialConfig = OfficialProviderConfig(
+            sourceMode: .web,
+            webMode: .manual,
+            manualCookieAccount: "manual-cookie",
+            oauthAccountImportEnabled: false,
+            autoDiscoveryEnabled: false,
+            quotaDisplayMode: .used,
+            traeValueDisplayMode: .amount,
+            showPlanTypeInMenuBar: false
+        )
+        let manualOverride = try JSONDecoder().decode(
+            RelayManualOverride.self,
+            from: Data(
+                """
+                {
+                  "authHeader": "Authorization",
+                  "authScheme": "Bearer",
+                  "userID": "u-1",
+                  "userIDHeader": "X-User",
+                  "requestMethod": "POST",
+                  "requestBodyJSON": "{\\"range\\":\\"month\\"}",
+                  "endpointPath": "/api/quota",
+                  "remainingExpression": "$.remaining",
+                  "usedExpression": "$.used",
+                  "limitExpression": "$.limit",
+                  "successExpression": "$.ok",
+                  "unitExpression": "$.unit",
+                  "accountLabelExpression": "$.account",
+                  "staticHeaders": { "X-Test": "1" }
+                }
+                """.utf8
+            )
+        )
+        let relayConfig = RelayProviderConfig(
+            adapterID: "new-api",
+            baseURL: "https://relay.example.com",
+            tokenChannelEnabled: false,
+            balanceChannelEnabled: true,
+            balanceAuth: credential,
+            balanceCredentialMode: .browserPreferred,
+            quotaDisplayMode: .used,
+            manualOverrides: manualOverride
+        )
+        let adapterManifest = RelayAdapterManifest(
+            id: "new-api",
+            displayName: "New API",
+            match: RelayAdapterMatch(hostPatterns: ["relay.example.com"], defaultDisplayName: "Relay"),
+            setup: RelaySetupManifest(requiredInputs: [.displayName, .baseURL, .balanceAuth]),
+            authStrategies: [RelayAuthStrategy(kind: .savedBearer)],
+            displayMode: .hybrid,
+            supportsBrowserFallback: false,
+            supportsSeparateBalanceAuth: true,
+            balanceRequest: RelayRequestManifest(path: "/api/quota"),
+            tokenRequest: RelayTokenRequestManifest(),
+            extract: RelayExtractManifest(remaining: "$.remaining", used: "$.used", limit: "$.limit"),
+            postprocessID: .quotaDisplayStatus
+        )
+        let openProviderConfig = try JSONDecoder().decode(
+            OpenProviderConfig.self,
+            from: Data(
+                """
+                {
+                  "tokenUsageEnabled": true,
+                  "accountBalance": {
+                    "enabled": true,
+                    "auth": {
+                      "kind": "bearer",
+                      "keychainService": "manual-service",
+                      "keychainAccount": "account@example.com"
+                    },
+                    "authHeader": "Authorization",
+                    "authScheme": "Bearer",
+                    "requestMethod": "GET",
+                    "endpointPath": "/dashboard/billing/credit_grants",
+                    "userIDHeader": "New-Api-User",
+                    "remainingJSONPath": "$.total_available",
+                    "usedJSONPath": "$.total_used",
+                    "limitJSONPath": "$.total_granted",
+                    "successJSONPath": "$.success",
+                    "unit": "USD"
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(credential.kind, .bearer)
+        XCTAssertEqual(alertRule.maxConsecutiveFailures, 3)
+        XCTAssertEqual(officialConfig.sourceMode, .web)
+        XCTAssertEqual(relayConfig.balanceCredentialMode, .browserPreferred)
+        XCTAssertEqual(relayConfig.manualOverrides?.staticHeaders?["X-Test"], "1")
+        XCTAssertEqual(adapterManifest.displayMode, .hybrid)
+        XCTAssertEqual(openProviderConfig.accountBalance?.unit, "USD")
+    }
+
+    func testDomainTargetDoesNotOwnProviderRuntimeOrConfigurationPolicy() throws {
+        let rootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let domainURL = rootURL.appendingPathComponent("Sources/OhMyUsageDomain")
+        let domainFiles = try swiftFiles(in: domainURL)
+
+        let forbiddenPolicyFragments = [
+            "ProviderDescriptor",
+            "ProviderFactory",
+            "ProviderDefinitionRegistry",
+            "SettingsDraft",
+            "struct AppConfig",
+            "migratedWithSiteDefaults",
+            "normalizedCredentialServiceName",
+            "defaultOfficialConfig",
+            "defaultRelayConfig",
+            "defaultOfficialCodex",
+            "relayViewConfig",
+            "officialRelayDefaultProviderIDs",
+            "Bundle.module",
+            "Keychain",
+            "LAContext",
+            "NSApplication",
+            "View"
+        ]
+
+        for sourceFile in domainFiles {
+            let source = try String(contentsOf: sourceFile, encoding: .utf8)
+            for fragment in forbiddenPolicyFragments {
+                XCTAssertFalse(
+                    source.contains(fragment),
+                    "\(relativePath(for: sourceFile, rootURL: rootURL)) should keep \(fragment) out of OhMyUsageDomain"
+                )
+            }
+        }
     }
 }

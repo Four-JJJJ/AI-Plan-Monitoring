@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 final class RelayAdapterRegistry: @unchecked Sendable {
     static let shared = RelayAdapterRegistry()

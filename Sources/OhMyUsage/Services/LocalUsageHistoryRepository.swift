@@ -1,5 +1,6 @@
 import Foundation
 import OhMyUsageApplication
+import OhMyUsageDomain
 
 struct LocalUsageHistoryQuery: Codable, Equatable, Hashable, Sendable {
     var providerType: ProviderType

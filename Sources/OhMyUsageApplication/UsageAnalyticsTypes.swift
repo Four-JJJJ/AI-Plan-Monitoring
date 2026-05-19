@@ -82,7 +82,7 @@ public struct UsageAnalyticsFilter: Codable, Equatable, Hashable, Sendable {
     public init(
         mode: UsageAnalyticsFilterMode = .all,
         selectedModelID: String? = nil,
-        range: UsageAnalyticsRange = .all
+        range: UsageAnalyticsRange = .last30Days
     ) {
         self.mode = mode
         self.selectedModelID = selectedModelID

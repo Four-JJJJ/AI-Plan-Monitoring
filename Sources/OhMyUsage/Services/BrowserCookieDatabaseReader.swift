@@ -2,19 +2,76 @@ import CommonCrypto
 import Foundation
 
 final class BrowserCookieDatabaseReader {
+    private struct CookiePathCacheKey: Hashable {
+        let browser: KimiBrowserKind
+        let includeSafariBinaryCookies: Bool
+    }
+
+    private struct ExpiringPathCacheEntry {
+        let paths: [String]
+        let expiresAt: Date
+    }
+
     private let fileManager: FileManager
     private let sqliteTimeout: TimeInterval?
+    private let cookiePathCacheTTL: TimeInterval
+    private let now: () -> Date
+    private let cookiePathEnumerator: ((KimiBrowserKind, Bool) -> [String])?
+    private let cookiePathCacheLock = NSLock()
+    private var cookiePathCache: [CookiePathCacheKey: ExpiringPathCacheEntry] = [:]
     private var safeStorageCache: [KimiBrowserKind: String] = [:]
 
-    init(fileManager: FileManager = .default, sqliteTimeout: TimeInterval? = 5) {
+    init(
+        fileManager: FileManager = .default,
+        sqliteTimeout: TimeInterval? = 5,
+        cookiePathCacheTTL: TimeInterval = 5,
+        now: @escaping () -> Date = Date.init,
+        cookiePathEnumerator: ((KimiBrowserKind, Bool) -> [String])? = nil
+    ) {
         self.fileManager = fileManager
         self.sqliteTimeout = sqliteTimeout
+        self.cookiePathCacheTTL = max(0, cookiePathCacheTTL)
+        self.now = now
+        self.cookiePathEnumerator = cookiePathEnumerator
     }
 
     func candidateCookiePaths(
         for browser: KimiBrowserKind,
-        includeSafariBinaryCookies: Bool = false
+        includeSafariBinaryCookies: Bool = false,
+        bypassCache: Bool = false
     ) -> [String] {
+        guard cookiePathCacheTTL > 0 else {
+            return enumerateCandidateCookiePaths(
+                for: browser,
+                includeSafariBinaryCookies: includeSafariBinaryCookies
+            )
+        }
+
+        let key = CookiePathCacheKey(
+            browser: browser,
+            includeSafariBinaryCookies: includeSafariBinaryCookies
+        )
+        let currentDate = now()
+        if !bypassCache, let cached = cachedCookiePaths(for: key, now: currentDate) {
+            return cached
+        }
+
+        let paths = enumerateCandidateCookiePaths(
+            for: browser,
+            includeSafariBinaryCookies: includeSafariBinaryCookies
+        )
+        cacheCookiePaths(paths, for: key, now: currentDate)
+        return paths
+    }
+
+    private func enumerateCandidateCookiePaths(
+        for browser: KimiBrowserKind,
+        includeSafariBinaryCookies: Bool
+    ) -> [String] {
+        if let cookiePathEnumerator {
+            return Array(Set(cookiePathEnumerator(browser, includeSafariBinaryCookies))).sorted()
+        }
+
         let home = NSHomeDirectory()
         switch browser {
         case .arc:
@@ -44,6 +101,29 @@ final class BrowserCookieDatabaseReader {
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/com.operasoftware.OperaGX")
         case .vivaldi:
             return chromiumCookiePaths(base: "\(home)/Library/Application Support/Vivaldi")
+        }
+    }
+
+    private func cachedCookiePaths(for key: CookiePathCacheKey, now: Date) -> [String]? {
+        cookiePathCacheLock.lock()
+        defer { cookiePathCacheLock.unlock() }
+        purgeExpiredCookiePathCacheLocked(now: now)
+        return cookiePathCache[key]?.paths
+    }
+
+    private func cacheCookiePaths(_ paths: [String], for key: CookiePathCacheKey, now: Date) {
+        cookiePathCacheLock.lock()
+        cookiePathCache[key] = ExpiringPathCacheEntry(
+            paths: paths,
+            expiresAt: now.addingTimeInterval(cookiePathCacheTTL)
+        )
+        purgeExpiredCookiePathCacheLocked(now: now)
+        cookiePathCacheLock.unlock()
+    }
+
+    private func purgeExpiredCookiePathCacheLocked(now: Date) {
+        cookiePathCache = cookiePathCache.filter { _, entry in
+            entry.expiresAt > now
         }
     }
 

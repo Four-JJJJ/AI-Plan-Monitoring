@@ -189,7 +189,7 @@
   - [PresentationSmokeTests.swift](../Tests/OhMyUsageTests/PresentationSmokeTests.swift)
 - 已补设置页生命周期相关单测：
   - [SettingsWindowAppearanceControllerTests.swift](../Tests/OhMyUsageTests/SettingsWindowAppearanceControllerTests.swift)
-  - [SettingsClockControllerTests.swift](../Tests/OhMyUsageTests/SettingsClockControllerTests.swift)
+  - [VisibleClockControllerTests.swift](../Tests/OhMyUsageTests/VisibleClockControllerTests.swift)
 - smoke 覆盖目标是“代表性展示组合不崩、不重复调度、关键文案和输入模型可生成”，不是硬 wall-clock 性能阈值。
 
 ## 建议优先级

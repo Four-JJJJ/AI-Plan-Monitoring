@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct ProviderDefinition: Equatable {
     var id: String

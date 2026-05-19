@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct AppRelayProviderSettingsCoordinator {
     func updateOpenProviderSettings(

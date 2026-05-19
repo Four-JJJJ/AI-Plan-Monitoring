@@ -1,4 +1,5 @@
 import Foundation
+import OhMyUsageDomain
 
 struct RelaySettingsDraftSeed: Equatable {
     var providerID: String

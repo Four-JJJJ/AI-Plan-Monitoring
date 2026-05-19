@@ -7,22 +7,45 @@ final class BrowserStorageCredentialReader {
         let score: Int
     }
 
-    private let fileManager: FileManager
-    private let browserOrderDefault: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
+    private struct ExpiringPathCacheEntry {
+        let paths: [String]
+        let expiresAt: Date
+    }
 
-    init(fileManager: FileManager = .default) {
+    private static let defaultBrowserOrder: [KimiBrowserKind] = [.arc, .chrome, .safari, .edge, .brave, .firefox, .opera, .operaGX, .vivaldi, .chromium]
+
+    private let fileManager: FileManager
+    private let browserOrder: [KimiBrowserKind]
+    private let storagePathCacheTTL: TimeInterval
+    private let now: () -> Date
+    private let storagePathEnumerator: ((KimiBrowserKind) -> [String])?
+    private let storagePathCacheLock = NSLock()
+    private var bearerStoragePathCache: [KimiBrowserKind: ExpiringPathCacheEntry] = [:]
+
+    init(
+        fileManager: FileManager = .default,
+        browserOrder: [KimiBrowserKind] = BrowserStorageCredentialReader.defaultBrowserOrder,
+        storagePathCacheTTL: TimeInterval = 5,
+        now: @escaping () -> Date = Date.init,
+        storagePathEnumerator: ((KimiBrowserKind) -> [String])? = nil
+    ) {
         self.fileManager = fileManager
+        self.browserOrder = browserOrder
+        self.storagePathCacheTTL = max(0, storagePathCacheTTL)
+        self.now = now
+        self.storagePathEnumerator = storagePathEnumerator
     }
 
     func bearerTokenCandidates(
         host: String,
-        order: [KimiBrowserKind]? = nil
+        order: [KimiBrowserKind]? = nil,
+        refreshPaths: Bool = false
     ) -> [BrowserDetectedCredential] {
-        let actualOrder = order ?? browserOrderDefault
+        let actualOrder = order ?? browserOrder
         var candidates: [(token: String, source: String, exp: TimeInterval?, score: Int)] = []
         for browser in actualOrder {
             let source = "\(browserLabel(browser)):localStorage"
-            for path in candidateBearerStoragePaths(for: browser) {
+            for path in candidateBearerStoragePaths(for: browser, bypassCache: refreshPaths) {
                 let perPath = bearerTokenCandidatesFromStorage(path: path, host: host)
                 for candidate in perPath {
                     candidates.append((
@@ -40,10 +63,11 @@ final class BrowserStorageCredentialReader {
     func bearerTokenCandidates(
         for browser: KimiBrowserKind,
         hostCandidates: [String],
-        source: String
+        source: String,
+        refreshPaths: Bool = false
     ) -> [BrowserDetectedCredential] {
         var candidates: [(token: String, source: String, exp: TimeInterval?, score: Int)] = []
-        let paths = candidateBearerStoragePaths(for: browser)
+        let paths = candidateBearerStoragePaths(for: browser, bypassCache: refreshPaths)
         for path in paths {
             for host in hostCandidates {
                 let perPath = bearerTokenCandidatesFromStorage(path: path, host: host)
@@ -126,11 +150,53 @@ final class BrowserStorageCredentialReader {
         return Array(Set(result)).sorted()
     }
 
-    private func candidateBearerStoragePaths(for browser: KimiBrowserKind) -> [String] {
+    private func candidateBearerStoragePaths(for browser: KimiBrowserKind, bypassCache: Bool = false) -> [String] {
+        guard storagePathCacheTTL > 0 else {
+            return enumerateCandidateBearerStoragePaths(for: browser)
+        }
+
+        let currentDate = now()
+        if !bypassCache, let cached = cachedBearerStoragePaths(for: browser, now: currentDate) {
+            return cached
+        }
+
+        let paths = enumerateCandidateBearerStoragePaths(for: browser)
+        cacheBearerStoragePaths(paths, for: browser, now: currentDate)
+        return paths
+    }
+
+    private func enumerateCandidateBearerStoragePaths(for browser: KimiBrowserKind) -> [String] {
+        if let storagePathEnumerator {
+            return Array(Set(storagePathEnumerator(browser))).sorted()
+        }
+
         let merged = candidateLocalStoragePaths(for: browser)
             + candidateSessionStoragePaths(for: browser)
             + candidateIndexedDBPaths(for: browser)
         return Array(Set(merged)).sorted()
+    }
+
+    private func cachedBearerStoragePaths(for browser: KimiBrowserKind, now: Date) -> [String]? {
+        storagePathCacheLock.lock()
+        defer { storagePathCacheLock.unlock() }
+        purgeExpiredStoragePathCacheLocked(now: now)
+        return bearerStoragePathCache[browser]?.paths
+    }
+
+    private func cacheBearerStoragePaths(_ paths: [String], for browser: KimiBrowserKind, now: Date) {
+        storagePathCacheLock.lock()
+        bearerStoragePathCache[browser] = ExpiringPathCacheEntry(
+            paths: paths,
+            expiresAt: now.addingTimeInterval(storagePathCacheTTL)
+        )
+        purgeExpiredStoragePathCacheLocked(now: now)
+        storagePathCacheLock.unlock()
+    }
+
+    private func purgeExpiredStoragePathCacheLocked(now: Date) {
+        bearerStoragePathCache = bearerStoragePathCache.filter { _, entry in
+            entry.expiresAt > now
+        }
     }
 
     private func browserUserDataPath(for browser: KimiBrowserKind) -> String? {

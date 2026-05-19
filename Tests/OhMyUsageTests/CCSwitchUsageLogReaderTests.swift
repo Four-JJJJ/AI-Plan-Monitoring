@@ -135,6 +135,153 @@ final class CCSwitchUsageLogReaderTests: XCTestCase {
         XCTAssertEqual(requestIDs, ["req-ms", "req-ns", "req-sec", "req-us"])
     }
 
+    func testReaderStreamsSQLiteRowsAsTheyAreMapped() throws {
+        let databaseURL = temporaryDirectory.appendingPathComponent("cc-switch-streaming.db")
+        try createCCSwitchSchema(at: databaseURL.path)
+
+        let firstEventAt = try fixedDate("2026-05-16T10:00:00Z")
+        let secondEventAt = try fixedDate("2026-05-16T10:05:00Z")
+        try runSQLite(
+            databasePath: databaseURL.path,
+            sql: """
+            INSERT INTO proxy_request_logs (
+                request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
+            ) VALUES
+                ('stream-1', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int(firstEventAt.timeIntervalSince1970)), NULL),
+                ('stream-2', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 20, 7, 0, 0, 200, \(Int(secondEventAt.timeIntervalSince1970)), NULL);
+            INSERT INTO usage_daily_rollups (
+                date, app_type, provider_id, model, request_count, success_count, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens
+            ) VALUES (
+                '2026-05-16', 'claude', 'relay-a', 'claude-sonnet-4-6', 2, 2, 30, 12, 0, 0
+            );
+            """
+        )
+
+        var events: [CCSwitchUsageLogReaderStreamEvent] = []
+        let reader = CCSwitchUsageLogReader(databasePath: databaseURL.path) { event in
+            events.append(event)
+        }
+        let result = reader.readUsageLogs(
+            since: try fixedDate("2026-05-16T00:00:00Z"),
+            until: try fixedDate("2026-05-17T00:00:00Z")
+        )
+
+        XCTAssertEqual(result.records.count, 3)
+        XCTAssertEqual(
+            events,
+            [
+                CCSwitchUsageLogReaderStreamEvent(source: .proxyRequestLogs, phase: .rowRead, ordinal: 1),
+                CCSwitchUsageLogReaderStreamEvent(source: .proxyRequestLogs, phase: .recordMapped, ordinal: 1),
+                CCSwitchUsageLogReaderStreamEvent(source: .proxyRequestLogs, phase: .rowRead, ordinal: 2),
+                CCSwitchUsageLogReaderStreamEvent(source: .proxyRequestLogs, phase: .recordMapped, ordinal: 2),
+                CCSwitchUsageLogReaderStreamEvent(source: .dailyRollups, phase: .rowRead, ordinal: 1),
+                CCSwitchUsageLogReaderStreamEvent(source: .dailyRollups, phase: .recordMapped, ordinal: 1)
+            ],
+            "Rows should be mapped immediately after each SQLite step, not after collecting an intermediate batch."
+        )
+    }
+
+    func testSourceFingerprintIncludesSQLiteWALSidecars() throws {
+        let databaseURL = temporaryDirectory.appendingPathComponent("cc-switch-wal.db")
+        try Data("main".utf8).write(to: databaseURL)
+        try Data("wal-version-1".utf8).write(to: URL(fileURLWithPath: "\(databaseURL.path)-wal"))
+        try Data("shm-version-1".utf8).write(to: URL(fileURLWithPath: "\(databaseURL.path)-shm"))
+
+        let reader = CCSwitchUsageLogReader(databasePath: databaseURL.path)
+        let fingerprint = reader.sourceFingerprint()
+
+        XCTAssertEqual(
+            fingerprint.roots,
+            [
+                databaseURL.path,
+                "\(databaseURL.path)-shm",
+                "\(databaseURL.path)-wal"
+            ].sorted()
+        )
+        XCTAssertEqual(fingerprint.fileCount, 3)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try Data("wal-version-2-with-more-bytes".utf8).write(to: URL(fileURLWithPath: "\(databaseURL.path)-wal"))
+        let changedFingerprint = reader.sourceFingerprint()
+
+        XCTAssertNotEqual(changedFingerprint, fingerprint)
+        XCTAssertEqual(changedFingerprint.fileCount, 3)
+    }
+
+    func testReadUsageLogsHandlesLargeProxyAndRollupBatchWithinDateRange() throws {
+        let databaseURL = temporaryDirectory.appendingPathComponent("cc-switch-large.db")
+        try createCCSwitchSchema(at: databaseURL.path)
+
+        let since = try fixedDate("2026-05-16T00:00:00Z")
+        let until = try fixedDate("2026-05-17T00:00:00Z")
+        let proxyCount = 1_500
+        var expectedInputTokens = 0
+        var expectedOutputTokens = 0
+        var expectedSuccessCount = 0
+        var proxyRows: [String] = []
+
+        for index in 0..<proxyCount {
+            let eventAt = Int64(since.addingTimeInterval(Double(index % 3_600)).timeIntervalSince1970)
+            let rawInput = 100 + (index % 17)
+            let output = 20 + (index % 11)
+            let cacheRead = index % 5
+            let cacheWrite = index % 3
+            let statusCode = index % 10 == 0 ? 500 : 200
+            expectedInputTokens += rawInput - cacheRead
+            expectedOutputTokens += output
+            expectedSuccessCount += statusCode == 200 ? 1 : 0
+            proxyRows.append("""
+                ('bulk-\(index)', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', \(rawInput), \(output), \(cacheRead), \(cacheWrite), \(statusCode), \(eventAt), NULL)
+            """)
+        }
+
+        let before = Int64(since.addingTimeInterval(-1).timeIntervalSince1970)
+        let atEnd = Int64(until.timeIntervalSince1970)
+        let sql = """
+        BEGIN TRANSACTION;
+        INSERT INTO providers (id, app_type, name) VALUES ('relay-a', 'codex', 'FourJ Relay');
+        INSERT INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
+        ) VALUES
+            \(proxyRows.joined(separator: ",\n")),
+            ('bulk-before', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 9999, 9999, 0, 0, 200, \(before), NULL),
+            ('bulk-end', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 9999, 9999, 0, 0, 200, \(atEnd), NULL);
+        INSERT INTO usage_daily_rollups (
+            date, app_type, provider_id, model, request_count, success_count, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens
+        ) VALUES
+            ('2026-05-15', 'claude', 'relay-a', 'claude-sonnet-4-6', 99, 99, 9999, 9999, 0, 0),
+            ('2026-05-16', 'claude', 'relay-a', 'claude-sonnet-4-6', 7, 6, 120, 45, 3, 2),
+            ('2026-05-17', 'claude', 'relay-a', 'claude-sonnet-4-6', 88, 88, 8888, 8888, 0, 0);
+        COMMIT;
+        """
+        try runSQLiteScript(databasePath: databaseURL.path, sql: sql)
+
+        let reader = CCSwitchUsageLogReader(databasePath: databaseURL.path)
+        let result = reader.readUsageLogs(since: since, until: until)
+
+        XCTAssertTrue(result.diagnostics.isEmpty)
+        XCTAssertEqual(result.records.count, proxyCount + 1)
+        XCTAssertNil(result.records.first { $0.requestID == "bulk-before" })
+        XCTAssertNil(result.records.first { $0.requestID == "bulk-end" })
+
+        let proxyRecords = result.records.filter { $0.source == .proxy }
+        XCTAssertEqual(proxyRecords.count, proxyCount)
+        XCTAssertEqual(proxyRecords.reduce(0) { $0 + $1.requestCount }, proxyCount)
+        XCTAssertEqual(proxyRecords.reduce(0) { $0 + $1.successCount }, expectedSuccessCount)
+        XCTAssertEqual(proxyRecords.reduce(0) { $0 + $1.inputTokens }, expectedInputTokens)
+        XCTAssertEqual(proxyRecords.reduce(0) { $0 + $1.outputTokens }, expectedOutputTokens)
+
+        let rollup = try XCTUnwrap(result.records.first { $0.source == .dailyRollup })
+        XCTAssertEqual(rollup.requestCount, 7)
+        XCTAssertEqual(rollup.successCount, 6)
+        XCTAssertEqual(rollup.inputTokens, 120)
+        XCTAssertEqual(rollup.outputTokens, 45)
+    }
+
     private func createCCSwitchSchema(at path: String) throws {
         try runSQLite(
             databasePath: path,
@@ -186,6 +333,12 @@ final class CCSwitchUsageLogReaderTests: XCTestCase {
         if result.status != 0 {
             XCTFail("sqlite3 command failed: \(result.stderr)")
         }
+    }
+
+    private func runSQLiteScript(databasePath: String, sql: String) throws {
+        let scriptURL = temporaryDirectory.appendingPathComponent("script-\(UUID().uuidString).sql")
+        try sql.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try runSQLite(databasePath: databasePath, sql: ".read \(scriptURL.path)")
     }
 
     private func fixedDate(_ value: String) throws -> Date {
