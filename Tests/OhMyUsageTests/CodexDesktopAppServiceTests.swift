@@ -24,10 +24,7 @@ final class CodexDesktopAppServiceTests: XCTestCase {
             isRunning: state,
             gracefulTerminator: { _ in
                 gracefulCalls += 1
-                Task {
-                    try? await Task.sleep(nanoseconds: 40_000_000)
-                    state.setRunning(false)
-                }
+                state.setRunning(false)
                 return true
             },
             forceTerminator: { _ in
