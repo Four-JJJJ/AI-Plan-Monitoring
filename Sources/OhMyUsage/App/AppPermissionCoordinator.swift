@@ -181,13 +181,14 @@ final class AppPermissionCoordinator {
         fullDiskProbeGeneration += 1
         let generation = fullDiskProbeGeneration
         lastFullDiskProbeStartedAt = now
-        let task = Task.detached(priority: .utility) { [weak self] in
+        let completeProbe: @MainActor @Sendable (FullDiskProbeResult) -> Void = { [weak self] result in
+            guard let self, generation == self.fullDiskProbeGeneration else { return }
+            self.fullDiskProbeCache = FullDiskProbeCache(result: result, checkedAt: self.dateProvider())
+            self.fullDiskProbeInFlight = nil
+        }
+        let task = Task.detached(priority: .utility) {
             let result = fullDiskProbe()
-            await MainActor.run {
-                guard let self, generation == self.fullDiskProbeGeneration else { return }
-                self.fullDiskProbeCache = FullDiskProbeCache(result: result, checkedAt: self.dateProvider())
-                self.fullDiskProbeInFlight = nil
-            }
+            await completeProbe(result)
             return result
         }
         fullDiskProbeInFlight = task
