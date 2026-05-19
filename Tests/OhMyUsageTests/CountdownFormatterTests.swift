@@ -93,7 +93,7 @@ final class CountdownFormatterTests: XCTestCase {
 
     func testMenuCountdownTextUsesSharedFormatterForChinese() {
         let now = Date(timeIntervalSince1970: 30_000)
-        let offset: TimeInterval = (4 * 3_600) + (53 * 60) + 23
+        let offset = TimeInterval(17_603)
         let target = now.addingTimeInterval(offset)
         XCTAssertEqual(
             MenuContentView.countdownText(to: target, now: now, language: .zhHans),
@@ -104,7 +104,7 @@ final class CountdownFormatterTests: XCTestCase {
 
     func testMenuCountdownTextUsesSharedFormatterForEnglish() {
         let now = Date(timeIntervalSince1970: 30_000)
-        let offset: TimeInterval = (4 * 86_400) + (23 * 3_600) + (53 * 60) + 23
+        let offset = TimeInterval(431_603)
         let target = now.addingTimeInterval(offset)
         XCTAssertEqual(
             MenuContentView.countdownText(to: target, now: now, language: .en),
