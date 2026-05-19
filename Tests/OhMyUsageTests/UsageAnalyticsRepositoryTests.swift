@@ -68,6 +68,43 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         XCTAssertEqual(entry.sourceFingerprint, fingerprint)
     }
 
+    func testCacheStoreWritesCompactJSONPayload() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("usage-analytics-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = try fixedDate("2026-05-16T12:00:00Z")
+        let filter = UsageAnalyticsFilter(mode: .all, selectedModelID: nil, range: .last7Days)
+        let snapshot = UsageAnalyticsSnapshot.empty(filter: filter, generatedAt: now)
+        let store = UsageAnalyticsSnapshotCacheStore(baseDirectoryURL: root, nowProvider: { now })
+
+        store.save(snapshot: snapshot, sourceFingerprint: nil)
+
+        let payload = try String(contentsOf: usageAnalyticsCacheURL(root: root), encoding: .utf8)
+        XCTAssertFalse(payload.contains("\n"), "usage analytics cache should be compact JSON without pretty-print newlines")
+        XCTAssertFalse(payload.contains("  "), "usage analytics cache should avoid pretty-print indentation")
+    }
+
+    func testCacheStoreSkipsUnchangedPayloadWrite() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("usage-analytics-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = try fixedDate("2026-05-16T12:00:00Z")
+        let filter = UsageAnalyticsFilter(mode: .all, selectedModelID: nil, range: .last7Days)
+        let snapshot = UsageAnalyticsSnapshot.empty(filter: filter, generatedAt: now)
+        let store = UsageAnalyticsSnapshotCacheStore(baseDirectoryURL: root, nowProvider: { now })
+
+        store.save(snapshot: snapshot, sourceFingerprint: nil)
+        let cacheURL = usageAnalyticsCacheURL(root: root)
+        let firstModifiedAt = try modificationDate(at: cacheURL)
+        Thread.sleep(forTimeInterval: 1.1)
+        store.save(snapshot: snapshot, sourceFingerprint: nil)
+        let secondModifiedAt = try modificationDate(at: cacheURL)
+
+        XCTAssertEqual(firstModifiedAt, secondModifiedAt)
+    }
+
     func testCacheStoreSkipsFingerprintProbeWithinInterval() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("usage-analytics-cache-\(UUID().uuidString)", isDirectory: true)
@@ -274,6 +311,52 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         XCTAssertEqual(first.codex, second.codex)
         XCTAssertEqual(first.claude, second.claude)
         XCTAssertEqual(first.kimi, second.kimi)
+    }
+
+    func testSnapshotReadsOnlyRequestedRangeFromCCSwitch() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("usage-analytics-range-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let databaseURL = root.appendingPathComponent("cc-switch.db")
+        try createCCSwitchSchema(at: databaseURL.path)
+
+        let now = try fixedDate("2099-05-16T12:00:00Z")
+        let recent = try fixedDate("2099-05-16T10:30:00Z")
+        let tenDaysAgo = try fixedDate("2099-05-06T10:30:00Z")
+        try runSQLite(
+            databasePath: databaseURL.path,
+            sql: """
+            INSERT INTO proxy_request_logs (
+                request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
+            ) VALUES
+                ('recent', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 20, 10, 0, 0, 200, \(Int64(recent.timeIntervalSince1970)), NULL),
+                ('old', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 999, 999, 0, 0, 200, \(Int64(tenDaysAgo.timeIntervalSince1970)), NULL);
+            """
+        )
+
+        var rowReadCount = 0
+        let reader = CCSwitchUsageLogReader(databasePath: databaseURL.path) { event in
+            if event.source == .proxyRequestLogs, event.phase == .rowRead {
+                rowReadCount += 1
+            }
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let repository = UsageAnalyticsRepository(
+            ccSwitchReader: reader,
+            calendar: calendar,
+            nowProvider: { now },
+            localSourceFingerprintProvider: { _ in Self.localSourceFingerprint(seed: 1) }
+        )
+
+        let snapshot = repository.snapshot(
+            filter: UsageAnalyticsFilter(mode: .all, selectedModelID: nil, range: .last24Hours)
+        )
+
+        XCTAssertEqual(rowReadCount, 1)
+        XCTAssertEqual(snapshot.totals.totalTokens, 30)
     }
 
     func testSnapshotDeduplicatesBySourcePriorityAndBuildsProviderAndModelStats() throws {
@@ -587,6 +670,119 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.trendBuckets.map(\.totals.totalTokens).filter { $0 > 0 }, [100, 200])
     }
 
+    func testSnapshotEmptyDataKeepsFixedRangeBucketsWithoutStats() throws {
+        let now = try fixedDate("2026-05-16T12:00:00Z")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let snapshot = UsageAnalyticsAggregator.snapshot(
+            records: [],
+            filter: UsageAnalyticsFilter(mode: .all, selectedModelID: nil, range: .last7Days),
+            calendar: calendar,
+            now: now,
+            diagnostics: []
+        )
+
+        XCTAssertEqual(snapshot.totals, UsageMetricTotals())
+        XCTAssertEqual(snapshot.providerCategoryStats, [])
+        XCTAssertEqual(snapshot.providerStats, [])
+        XCTAssertEqual(snapshot.modelStats, [])
+        XCTAssertEqual(snapshot.availableModels, [])
+        XCTAssertEqual(snapshot.trendBuckets.count, 7)
+        XCTAssertTrue(snapshot.trendBuckets.allSatisfy { $0.totals == UsageMetricTotals() })
+    }
+
+    func testSnapshotAggregatesLargeFilteredDatasetWithBoundaryDatesAndStableModelTitles() throws {
+        let now = try fixedDate("2026-05-16T12:00:00Z")
+        let rangeStart = try fixedDate("2026-04-17T00:00:00Z")
+        let rangeEnd = try fixedDate("2026-05-17T00:00:00Z")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var records: [UsageAnalyticsRecord] = []
+        records.reserveCapacity(1_205)
+        var expectedAllTotalsByModel: [String: UsageMetricTotals] = [:]
+
+        let firstGPT55Totals = UsageMetricTotals(requestCount: 1, successCount: 1, inputTokens: 11, outputTokens: 6)
+        records.append(analyticsRecord(
+            source: .ccswitchProxy,
+            eventAt: rangeStart,
+            providerID: "relay-a",
+            providerName: "First Relay",
+            modelID: " GPT-5.5 ",
+            requestID: "title-source",
+            totals: firstGPT55Totals
+        ))
+        expectedAllTotalsByModel["gpt-5.5", default: UsageMetricTotals()].add(firstGPT55Totals)
+
+        for offset in 0..<1_200 {
+            let modelID = offset % 3 == 0 ? "gpt-5.4" : "gpt-5.5"
+            let modelKey = modelID.lowercased()
+            let totals = UsageMetricTotals(
+                requestCount: 1,
+                successCount: offset % 5 == 0 ? 0 : 1,
+                inputTokens: offset % 7,
+                outputTokens: 10 + (offset % 11),
+                cacheReadTokens: offset % 3,
+                cacheWriteTokens: offset % 2
+            )
+            records.append(analyticsRecord(
+                source: .ccswitchProxy,
+                eventAt: rangeStart.addingTimeInterval(TimeInterval((offset + 1) * 60)),
+                providerID: offset % 2 == 0 ? "relay-a" : "relay-b",
+                providerName: offset % 2 == 0 ? "FourJ Relay" : "Backup Relay",
+                modelID: modelID,
+                requestID: "bulk-\(offset)",
+                totals: totals
+            ))
+            expectedAllTotalsByModel[modelKey, default: UsageMetricTotals()].add(totals)
+        }
+
+        var lowerPriorityDuplicate = records[6]
+        lowerPriorityDuplicate.source = .ohMyUsageLocal
+        lowerPriorityDuplicate.providerID = "codex-local"
+        lowerPriorityDuplicate.providerName = "Codex Local Duplicate"
+        records.append(lowerPriorityDuplicate)
+
+        records.append(analyticsRecord(
+            source: .ccswitchProxy,
+            eventAt: rangeEnd,
+            modelID: "gpt-5.5",
+            requestID: "exclusive-end",
+            totals: UsageMetricTotals(requestCount: 1, successCount: 1, outputTokens: 999)
+        ))
+        records.append(analyticsRecord(
+            source: .ccswitchProxy,
+            eventAt: rangeStart.addingTimeInterval(-1),
+            modelID: "gpt-5.5",
+            requestID: "before-start",
+            totals: UsageMetricTotals(requestCount: 1, successCount: 1, outputTokens: 999)
+        ))
+
+        let snapshot = UsageAnalyticsAggregator.snapshot(
+            records: records,
+            filter: UsageAnalyticsFilter(mode: .byModel, selectedModelID: "gpt-5.5", range: .last30Days),
+            calendar: calendar,
+            now: now,
+            diagnostics: []
+        )
+        let expectedGPT55Totals = try XCTUnwrap(expectedAllTotalsByModel["gpt-5.5"])
+        let expectedGPT54Totals = try XCTUnwrap(expectedAllTotalsByModel["gpt-5.4"])
+
+        XCTAssertEqual(snapshot.totals, expectedGPT55Totals)
+        XCTAssertEqual(snapshot.modelStats.map(\.modelID), ["GPT-5.5"])
+        XCTAssertEqual(snapshot.providerCategoryStats.map(\.name), ["中转代理"])
+        XCTAssertFalse(snapshot.providerStats.contains { $0.providerName == "Codex Local Duplicate" })
+        XCTAssertEqual(snapshot.availableModels.first?.id, "gpt-5.5")
+        XCTAssertEqual(snapshot.availableModels.first?.title, "GPT-5.5")
+        XCTAssertEqual(snapshot.availableModels.first?.totalTokens, expectedGPT55Totals.totalTokens)
+        XCTAssertEqual(snapshot.availableModels.first(where: { $0.id == "gpt-5.4" })?.totalTokens, expectedGPT54Totals.totalTokens)
+        XCTAssertEqual(snapshot.trendBuckets.count, 30)
+        XCTAssertEqual(
+            snapshot.trendBuckets.reduce(into: UsageMetricTotals()) { $0.add($1.totals) },
+            expectedGPT55Totals
+        )
+    }
+
     func testUsageMetricTotalsComputesCacheAndSuccessRates() {
         let totals = UsageMetricTotals(
             requestCount: 4,
@@ -610,16 +806,93 @@ final class UsageAnalyticsRepositoryTests: XCTestCase {
         return date
     }
 
+    private func usageAnalyticsCacheURL(root: URL) -> URL {
+        root
+            .appendingPathComponent("OhMyUsage", isDirectory: true)
+            .appendingPathComponent("usage_analytics_cache.json")
+    }
+
+    private func modificationDate(at url: URL) throws -> Date {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(attributes[.modificationDate] as? Date)
+    }
+
+    private func createCCSwitchSchema(at path: String) throws {
+        try runSQLite(
+            databasePath: path,
+            sql: """
+            CREATE TABLE proxy_request_logs (
+                request_id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_model TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_creation_tokens INTEGER,
+                status_code INTEGER,
+                created_at INTEGER,
+                data_source TEXT
+            );
+            CREATE TABLE usage_daily_rollups (
+                date TEXT,
+                app_type TEXT,
+                provider_id TEXT,
+                model TEXT,
+                request_count INTEGER,
+                success_count INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_creation_tokens INTEGER
+            );
+            """
+        )
+    }
+
+    private func runSQLite(databasePath: String, sql: String) throws {
+        guard let result = ShellCommand.run(
+            executable: "/usr/bin/sqlite3",
+            arguments: [databasePath, sql],
+            timeout: 10
+        ) else {
+            XCTFail("sqlite3 command failed to start")
+            return
+        }
+        if result.status != 0 {
+            XCTFail("sqlite3 command failed: \(result.stderr)")
+        }
+    }
+
     private func analyticsRecord(eventAt: Date, totalTokens: Int) -> UsageAnalyticsRecord {
-        UsageAnalyticsRecord(
+        analyticsRecord(
             source: .ccswitchProxy,
             eventAt: eventAt,
-            appType: "codex",
-            providerID: "relay-a",
-            providerName: "FourJ Relay",
-            modelID: "gpt-5.5",
             requestID: UUID().uuidString,
             totals: UsageMetricTotals(requestCount: 1, successCount: 1, outputTokens: totalTokens)
+        )
+    }
+
+    private func analyticsRecord(
+        source: UsageAnalyticsRecordSource,
+        eventAt: Date,
+        appType: String = "codex",
+        providerID: String = "relay-a",
+        providerName: String = "FourJ Relay",
+        modelID: String = "gpt-5.5",
+        requestID: String,
+        totals: UsageMetricTotals
+    ) -> UsageAnalyticsRecord {
+        UsageAnalyticsRecord(
+            source: source,
+            eventAt: eventAt,
+            appType: appType,
+            providerID: providerID,
+            providerName: providerName,
+            modelID: modelID,
+            requestID: requestID,
+            totals: totals
         )
     }
 

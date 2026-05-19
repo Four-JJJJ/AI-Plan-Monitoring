@@ -12,27 +12,41 @@ final class BrowserCookieDatabaseReader {
         let expiresAt: Date
     }
 
+    private struct ExpiringSafeStoragePasswordCacheEntry {
+        let password: String?
+        let expiresAt: Date
+    }
+
     private let fileManager: FileManager
     private let sqliteTimeout: TimeInterval?
     private let cookiePathCacheTTL: TimeInterval
+    private let safeStoragePasswordCacheTTL: TimeInterval
     private let now: () -> Date
     private let cookiePathEnumerator: ((KimiBrowserKind, Bool) -> [String])?
+    private let safeStoragePasswordReader: (String, String) -> String?
     private let cookiePathCacheLock = NSLock()
+    private let safeStorageCacheLock = NSLock()
     private var cookiePathCache: [CookiePathCacheKey: ExpiringPathCacheEntry] = [:]
-    private var safeStorageCache: [KimiBrowserKind: String] = [:]
+    private var safeStorageCache: [KimiBrowserKind: ExpiringSafeStoragePasswordCacheEntry] = [:]
 
     init(
         fileManager: FileManager = .default,
         sqliteTimeout: TimeInterval? = 5,
-        cookiePathCacheTTL: TimeInterval = 5,
+        cookiePathCacheTTL: TimeInterval = 60,
+        safeStoragePasswordCacheTTL: TimeInterval = 60,
         now: @escaping () -> Date = Date.init,
-        cookiePathEnumerator: ((KimiBrowserKind, Bool) -> [String])? = nil
+        cookiePathEnumerator: ((KimiBrowserKind, Bool) -> [String])? = nil,
+        safeStoragePasswordReader: @escaping (String, String) -> String? = { service, account in
+            SecurityCredentialReader.readGenericPassword(service: service, account: account)
+        }
     ) {
         self.fileManager = fileManager
         self.sqliteTimeout = sqliteTimeout
         self.cookiePathCacheTTL = max(0, cookiePathCacheTTL)
+        self.safeStoragePasswordCacheTTL = max(0, safeStoragePasswordCacheTTL)
         self.now = now
         self.cookiePathEnumerator = cookiePathEnumerator
+        self.safeStoragePasswordReader = safeStoragePasswordReader
     }
 
     func candidateCookiePaths(
@@ -341,20 +355,50 @@ final class BrowserCookieDatabaseReader {
     }
 
     private func safeStoragePassword(for browser: KimiBrowserKind) -> String? {
-        if let cached = safeStorageCache[browser] {
+        let currentDate = now()
+        if safeStoragePasswordCacheTTL > 0,
+           let cached = cachedSafeStoragePassword(for: browser, now: currentDate) {
             return cached
         }
 
         let labels = safeStorageLabels(for: browser)
         for label in labels {
-            if let password = SecurityCredentialReader.readGenericPassword(service: label.service, account: label.account),
+            if let password = safeStoragePasswordReader(label.service, label.account),
                !password.isEmpty {
-                safeStorageCache[browser] = password
+                cacheSafeStoragePassword(password, for: browser, now: currentDate)
                 return password
             }
         }
 
+        cacheSafeStoragePassword(nil, for: browser, now: currentDate)
         return nil
+    }
+
+    private func cachedSafeStoragePassword(for browser: KimiBrowserKind, now: Date) -> String?? {
+        safeStorageCacheLock.lock()
+        defer { safeStorageCacheLock.unlock() }
+        purgeExpiredSafeStorageCacheLocked(now: now)
+        guard let entry = safeStorageCache[browser] else {
+            return nil
+        }
+        return entry.password
+    }
+
+    private func cacheSafeStoragePassword(_ password: String?, for browser: KimiBrowserKind, now: Date) {
+        guard safeStoragePasswordCacheTTL > 0 else { return }
+        safeStorageCacheLock.lock()
+        safeStorageCache[browser] = ExpiringSafeStoragePasswordCacheEntry(
+            password: password,
+            expiresAt: now.addingTimeInterval(safeStoragePasswordCacheTTL)
+        )
+        purgeExpiredSafeStorageCacheLocked(now: now)
+        safeStorageCacheLock.unlock()
+    }
+
+    private func purgeExpiredSafeStorageCacheLocked(now: Date) {
+        safeStorageCache = safeStorageCache.filter { _, entry in
+            entry.expiresAt > now
+        }
     }
 
     private func safeStorageLabels(for browser: KimiBrowserKind) -> [(service: String, account: String)] {

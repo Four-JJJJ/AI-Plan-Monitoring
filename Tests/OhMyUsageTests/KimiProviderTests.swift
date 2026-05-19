@@ -157,6 +157,7 @@ final class KimiProviderTests: XCTestCase {
         let service = "OhMyUsageTests-\(UUID().uuidString)"
         let manualToken = jwt(exp: Int(Date().timeIntervalSince1970) + 3600)
         let autoToken = jwt(exp: Int(Date().timeIntervalSince1970) + 7200)
+        var browserLookupCount = 0
         let keychainURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("OhMyUsageTests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -207,11 +208,117 @@ final class KimiProviderTests: XCTestCase {
             descriptor: descriptor,
             session: session,
             keychain: keychain,
-            browserCookieService: KimiBrowserCookieService()
+            browserCookieService: KimiBrowserCookieService(),
+            browserTokenResolverOverride: { _, _ in
+                browserLookupCount += 1
+                return KimiDetectedToken(token: autoToken, source: "auto:test")
+            }
         )
 
         let snapshot = try await provider.fetch()
         XCTAssertEqual(snapshot.rawMeta["kimi.authSource"], "manual")
+        XCTAssertEqual(browserLookupCount, 0)
+    }
+
+    func testBackgroundFetchDoesNotScanBrowserWhenNoSavedToken() async throws {
+        let service = "OhMyUsageTests-\(UUID().uuidString)"
+        let keychainURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OhMyUsageTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("keychain.json")
+        defer { try? FileManager.default.removeItem(at: keychainURL.deletingLastPathComponent()) }
+
+        var descriptor = makeDescriptor()
+        descriptor.auth.keychainService = service
+        descriptor.kimiConfig?.authMode = .auto
+        descriptor.kimiConfig?.autoCookieEnabled = true
+
+        var browserLookupCount = 0
+        let provider = KimiProvider(
+            descriptor: descriptor,
+            session: URLSession(configuration: .ephemeral),
+            keychain: KeychainService(storageURL: keychainURL),
+            browserCookieService: KimiBrowserCookieService(),
+            browserTokenResolverOverride: { _, _ in
+                browserLookupCount += 1
+                return KimiDetectedToken(
+                    token: self.jwt(exp: Int(Date().timeIntervalSince1970) + 3600),
+                    source: "auto:test"
+                )
+            }
+        )
+
+        await XCTAssertThrowsProviderError {
+            _ = try await provider.fetch(forceRefresh: false)
+        }
+        XCTAssertEqual(browserLookupCount, 0)
+    }
+
+    func testForceRefreshCanUseBrowserFallbackWhenSavedAutoTokenMissing() async throws {
+        let service = "OhMyUsageTests-\(UUID().uuidString)"
+        let browserToken = jwt(exp: Int(Date().timeIntervalSince1970) + 3600)
+        let keychainURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OhMyUsageTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("keychain.json")
+        defer { try? FileManager.default.removeItem(at: keychainURL.deletingLastPathComponent()) }
+
+        let json = """
+        {
+          "usages": [
+            {
+              "scope": "FEATURE_CODING",
+              "detail": { "limit": 100, "used": 25, "remaining": 75 },
+              "limits": [
+                {
+                  "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+                  "detail": { "limit": 10, "remaining": 8 }
+                }
+              ]
+            }
+          ]
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(browserToken)")
+            let response = HTTPURLResponse(
+                url: URL(string: "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages")!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(json.utf8))
+        }
+        defer { MockURLProtocol.requestHandler = nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        var descriptor = makeDescriptor()
+        descriptor.auth.keychainService = service
+        descriptor.kimiConfig?.authMode = .auto
+        descriptor.kimiConfig?.autoCookieEnabled = true
+
+        var browserLookupCount = 0
+        var refreshPathsValues: [Bool] = []
+        let provider = KimiProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: KeychainService(storageURL: keychainURL),
+            browserCookieService: KimiBrowserCookieService(),
+            browserTokenResolverOverride: { _, refreshPaths in
+                browserLookupCount += 1
+                refreshPathsValues.append(refreshPaths)
+                return KimiDetectedToken(token: browserToken, source: "auto:test")
+            }
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: true)
+        XCTAssertEqual(snapshot.rawMeta["kimi.authSource"], "auto:test")
+        XCTAssertEqual(browserLookupCount, 1)
+        XCTAssertEqual(refreshPathsValues, [true])
     }
 
     func testJWTExpiryValidation() throws {
@@ -255,6 +362,21 @@ final class KimiProviderTests: XCTestCase {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+private func XCTAssertThrowsProviderError(
+    _ operation: () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await operation()
+        XCTFail("Expected ProviderError", file: file, line: line)
+    } catch is ProviderError {
+        return
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
     }
 }
 

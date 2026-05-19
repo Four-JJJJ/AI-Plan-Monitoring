@@ -77,8 +77,7 @@ final class UsageAnalyticsRepository: @unchecked Sendable {
         claudeAllConfigDirs: [String] = []
     ) -> UsageAnalyticsSnapshot {
         let now = nowProvider()
-        let readRange: UsageAnalyticsRange = filter.range == .all ? .all : .last30Days
-        let interval = UsageAnalyticsAggregator.rangeInterval(readRange, calendar: calendar, now: now)
+        let interval = UsageAnalyticsAggregator.rangeInterval(filter.range, calendar: calendar, now: now)
         var diagnostics: [String] = []
         var records: [UsageAnalyticsRecord] = []
 

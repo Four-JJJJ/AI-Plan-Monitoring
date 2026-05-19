@@ -124,6 +124,12 @@ final class CCSwitchUsageLogReaderTests: XCTestCase {
                 ('req-us', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(late.timeIntervalSince1970 * 1_000_000)), NULL),
                 ('req-ns', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(nearEnd.timeIntervalSince1970 * 1_000_000_000)), NULL),
                 ('req-before', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(before.timeIntervalSince1970)), NULL),
+                ('req-ms-before', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(since.timeIntervalSince1970 * 1_000) - 1), NULL),
+                ('req-ms-end', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(until.timeIntervalSince1970 * 1_000)), NULL),
+                ('req-us-before', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(since.timeIntervalSince1970 * 1_000_000) - 1), NULL),
+                ('req-us-end', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(until.timeIntervalSince1970 * 1_000_000)), NULL),
+                ('req-ns-before', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(since.timeIntervalSince1970 * 1_000_000_000) - 1), NULL),
+                ('req-ns-end', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(until.timeIntervalSince1970 * 1_000_000_000)), NULL),
                 ('req-end', 'relay-a', 'codex', 'gpt-5.5', 'gpt-5.5', 10, 5, 0, 0, 200, \(Int64(until.timeIntervalSince1970)), NULL);
             """
         )
@@ -133,6 +139,37 @@ final class CCSwitchUsageLogReaderTests: XCTestCase {
         let requestIDs = result.records.map(\.requestID).sorted()
 
         XCTAssertEqual(requestIDs, ["req-ms", "req-ns", "req-sec", "req-us"])
+    }
+
+    func testProxyLogRangePredicateKeepsCreatedAtRawForIndexLookup() throws {
+        let predicate = CCSwitchUsageLogReader.createdAtRawEpochRangePredicate("l.created_at")
+
+        XCTAssertFalse(predicate.localizedCaseInsensitiveContains("CASE"))
+        XCTAssertFalse(predicate.localizedCaseInsensitiveContains("CAST"))
+        XCTAssertEqual(predicate.components(separatedBy: " OR ").count, 4)
+        XCTAssertEqual(predicate.components(separatedBy: "l.created_at").count - 1, 8)
+    }
+
+    func testProxyLogRangePredicateUsesCreatedAtIndexInSQLitePlan() throws {
+        let databaseURL = temporaryDirectory.appendingPathComponent("cc-switch-index-plan.db")
+        try createCCSwitchSchema(at: databaseURL.path)
+        try runSQLite(
+            databasePath: databaseURL.path,
+            sql: "CREATE INDEX idx_proxy_request_logs_created_at ON proxy_request_logs(created_at);"
+        )
+
+        let predicate = CCSwitchUsageLogReader.createdAtRawEpochRangePredicate("l.created_at")
+        let plan = try runSQLiteOutput(
+            databasePath: databaseURL.path,
+            sql: """
+            EXPLAIN QUERY PLAN
+            SELECT request_id FROM proxy_request_logs l
+            WHERE \(predicate);
+            """
+        )
+
+        XCTAssertFalse(plan.contains("SCAN l"), plan)
+        XCTAssertTrue(plan.contains("idx_proxy_request_logs_created_at"), plan)
     }
 
     func testReaderStreamsSQLiteRowsAsTheyAreMapped() throws {
@@ -322,17 +359,33 @@ final class CCSwitchUsageLogReaderTests: XCTestCase {
     }
 
     private func runSQLite(databasePath: String, sql: String) throws {
+        let result = try runSQLiteCommand(databasePath: databasePath, sql: sql)
+        if result.status != 0 {
+            XCTFail("sqlite3 command failed: \(result.stderr)")
+        }
+    }
+
+    private func runSQLiteOutput(databasePath: String, sql: String) throws -> String {
+        let result = try runSQLiteCommand(databasePath: databasePath, sql: sql)
+        if result.status != 0 {
+            XCTFail("sqlite3 command failed: \(result.stderr)")
+        }
+        return result.stdout
+    }
+
+    private func runSQLiteCommand(
+        databasePath: String,
+        sql: String
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
         guard let result = ShellCommand.run(
             executable: "/usr/bin/sqlite3",
             arguments: [databasePath, sql],
             timeout: 10
         ) else {
             XCTFail("sqlite3 command failed to start")
-            return
+            throw NSError(domain: "CCSwitchUsageLogReaderTests", code: 2)
         }
-        if result.status != 0 {
-            XCTFail("sqlite3 command failed: \(result.stderr)")
-        }
+        return result
     }
 
     private func runSQLiteScript(databasePath: String, sql: String) throws {

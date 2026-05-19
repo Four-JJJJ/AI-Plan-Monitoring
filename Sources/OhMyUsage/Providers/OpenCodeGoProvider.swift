@@ -147,6 +147,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
                 remoteConfig = try resolveRemoteConfig(
                     official: official,
                     workspaceID: workspaceID,
+                    storedCookie: storedCookie,
                     forceRefresh: forceRefresh
                 )
             } catch {
@@ -195,13 +196,18 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
     private func resolveRemoteConfig(
         official: OfficialProviderConfig,
         workspaceID: String?,
+        storedCookie: String?,
         forceRefresh: Bool
     ) throws -> RemoteConfig {
         guard let workspaceID = Self.normalizedText(workspaceID) else {
             throw ProviderError.missingCredential(descriptor.auth.keychainAccount ?? "official/opencode-go/workspace-id")
         }
 
-        let cookieHeader = try resolveAuthCookieHeader(official: official, forceRefresh: forceRefresh)
+        let cookieHeader = try resolveAuthCookieHeader(
+            official: official,
+            storedCookie: storedCookie,
+            forceRefresh: forceRefresh
+        )
         return RemoteConfig(
             workspaceID: workspaceID,
             endpointID: resolveEndpointID(),
@@ -324,11 +330,10 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
 
     private func resolveAuthCookieHeader(
         official: OfficialProviderConfig,
+        storedCookie: String?,
         forceRefresh: Bool
     ) throws -> String {
-        let browserAccessIntent: BrowserCredentialAccessIntent = forceRefresh ? .interactiveImport : .background
-
-        if let rawManual = readStoredManualCookie(official: official),
+        if let rawManual = storedCookie,
            let manualHeader = Self.normalizedAuthCookieHeader(rawManual) {
             return manualHeader
         }
@@ -343,11 +348,15 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
             break
         }
 
+        guard forceRefresh else {
+            throw ProviderError.missingCredential("opencode.ai auth cookie")
+        }
+
         if let named = browserCookieService.detectNamedCookie(
             name: "auth",
             hostContains: "opencode.ai",
             order: nil,
-            accessIntent: browserAccessIntent
+            accessIntent: .interactiveImport
         ),
            let header = Self.normalizedAuthCookieHeader(named.header) {
             if let account = official.manualCookieAccount {
@@ -359,7 +368,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
         if let detected = browserCookieService.detectCookieHeader(
             hostContains: "opencode.ai",
             order: nil,
-            accessIntent: browserAccessIntent
+            accessIntent: .interactiveImport
         ),
            let header = Self.normalizedAuthCookieHeader(detected.header) {
             if let account = official.manualCookieAccount {
@@ -373,7 +382,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
 
     private func loadLocalRows() -> [LocalUsageRow] {
         if let localRowsProvider {
-            return (localRowsProvider() ?? []).sorted { $0.createdMs < $1.createdMs }
+            return localRowsProvider() ?? []
         }
         guard FileManager.default.fileExists(atPath: localDatabasePath) else {
             return []
@@ -389,7 +398,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
             guard let cost = Double(raw[1]), cost >= 0 else { continue }
             rows.append(LocalUsageRow(createdMs: createdMs, cost: cost))
         }
-        return rows.sorted { $0.createdMs < $1.createdMs }
+        return rows
     }
 
     internal static func isDetected(workspaceID: String?, cookieHeader: String?, hasLocalHistory: Bool) -> Bool {
@@ -495,18 +504,29 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
         let weeklyStartMs = weeklyStart.timeIntervalSince1970 * 1000
         let weeklyEndMs = weeklyEnd.timeIntervalSince1970 * 1000
 
-        let earliestMs = rows.map(\.createdMs).min()
-        let monthBounds = anchoredMonthBounds(now: now, anchorMs: earliestMs, calendar: utc)
+        var aggregation = LocalWindowAggregation()
+        for row in rows {
+            aggregation.record(
+                row: row,
+                sessionStartMs: sessionStartMs,
+                nowMs: nowMs,
+                weeklyStartMs: weeklyStartMs,
+                weeklyEndMs: weeklyEndMs
+            )
+        }
+
+        let monthBounds = anchoredMonthBounds(now: now, anchorMs: aggregation.earliestMs, calendar: utc)
         let monthStartMs = monthBounds.start.timeIntervalSince1970 * 1000
         let monthEndMs = monthBounds.end.timeIntervalSince1970 * 1000
+        var monthlyCost = 0.0
+        for row in rows where row.createdMs >= monthStartMs && row.createdMs < monthEndMs {
+            monthlyCost += row.cost
+        }
 
-        let sessionCost = sumCost(rows: rows, startMs: sessionStartMs, endMs: nowMs)
-        let weeklyCost = sumCost(rows: rows, startMs: weeklyStartMs, endMs: weeklyEndMs)
-        let monthlyCost = sumCost(rows: rows, startMs: monthStartMs, endMs: monthEndMs)
-
-        let sessionUsedPercent = percent(used: sessionCost, limit: sessionLimitUSD)
-        let weeklyUsedPercent = percent(used: weeklyCost, limit: weeklyLimitUSD)
+        let sessionUsedPercent = percent(used: aggregation.sessionCost, limit: sessionLimitUSD)
+        let weeklyUsedPercent = percent(used: aggregation.weeklyCost, limit: weeklyLimitUSD)
         let monthlyUsedPercent = percent(used: monthlyCost, limit: monthlyLimitUSD)
+        let sessionResetMs = (aggregation.oldestRollingMs ?? nowMs) + sessionWindowSec * 1000
 
         return [
             UsageQuotaWindow(
@@ -514,7 +534,7 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
                 title: "Session",
                 remainingPercent: max(0, min(100, 100 - sessionUsedPercent)),
                 usedPercent: sessionUsedPercent,
-                resetAt: nextRollingReset(rows: rows, nowMs: nowMs),
+                resetAt: Date(timeIntervalSince1970: sessionResetMs / 1000),
                 kind: .session
             ),
             UsageQuotaWindow(
@@ -534,6 +554,32 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
                 kind: .custom
             )
         ]
+    }
+
+    private struct LocalWindowAggregation {
+        var earliestMs: Double?
+        var oldestRollingMs: Double?
+        var sessionCost = 0.0
+        var weeklyCost = 0.0
+
+        mutating func record(
+            row: LocalUsageRow,
+            sessionStartMs: Double,
+            nowMs: Double,
+            weeklyStartMs: Double,
+            weeklyEndMs: Double
+        ) {
+            earliestMs = min(earliestMs ?? row.createdMs, row.createdMs)
+
+            if row.createdMs >= sessionStartMs && row.createdMs < nowMs {
+                sessionCost += row.cost
+                oldestRollingMs = min(oldestRollingMs ?? row.createdMs, row.createdMs)
+            }
+
+            if row.createdMs >= weeklyStartMs && row.createdMs < weeklyEndMs {
+                weeklyCost += row.cost
+            }
+        }
     }
 
     private static func parseRemoteUsageMetrics(_ body: String) -> [RemoteWindowKey: RemoteUsageMetric] {
@@ -622,24 +668,6 @@ final class OpenCodeGoProvider: UsageProvider, @unchecked Sendable {
     private static func percent(used: Double, limit: Double) -> Double {
         guard limit > 0 else { return 0 }
         return clampPercent((max(0, used) / limit) * 100)
-    }
-
-    private static func sumCost(rows: [LocalUsageRow], startMs: Double, endMs: Double) -> Double {
-        var total = 0.0
-        for row in rows where row.createdMs >= startMs && row.createdMs < endMs {
-            total += row.cost
-        }
-        return total
-    }
-
-    private static func nextRollingReset(rows: [LocalUsageRow], nowMs: Double) -> Date {
-        let rangeStart = nowMs - sessionWindowSec * 1000
-        var oldest: Double?
-        for row in rows where row.createdMs >= rangeStart && row.createdMs < nowMs {
-            oldest = min(oldest ?? row.createdMs, row.createdMs)
-        }
-        let resetMs = (oldest ?? nowMs) + sessionWindowSec * 1000
-        return Date(timeIntervalSince1970: resetMs / 1000)
     }
 
     private struct MonthBounds {

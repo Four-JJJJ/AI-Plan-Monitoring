@@ -3,6 +3,31 @@ import UserNotifications
 
 @MainActor
 final class AppPermissionCoordinator {
+    typealias FullDiskProbeResult = (isGranted: Bool, isRelevant: Bool)
+
+    private struct FullDiskProbeCache {
+        var result: FullDiskProbeResult
+        var checkedAt: Date
+    }
+
+    private let fullDiskProbeCacheDuration: TimeInterval
+    private let fullDiskProbeThrottleInterval: TimeInterval
+    private let dateProvider: () -> Date
+    private var fullDiskProbeCache: FullDiskProbeCache?
+    private var fullDiskProbeInFlight: Task<FullDiskProbeResult, Never>?
+    private var fullDiskProbeGeneration = 0
+    private var lastFullDiskProbeStartedAt = Date.distantPast
+
+    init(
+        fullDiskProbeCacheDuration: TimeInterval = 30,
+        fullDiskProbeThrottleInterval: TimeInterval = 5,
+        dateProvider: @escaping () -> Date = { Date() }
+    ) {
+        self.fullDiskProbeCacheDuration = fullDiskProbeCacheDuration
+        self.fullDiskProbeThrottleInterval = fullDiskProbeThrottleInterval
+        self.dateProvider = dateProvider
+    }
+
     static func shouldShowPermissionGuide(
         hasEnabledProviders: Bool,
         hasPersistedOfficialMonitoringState: Bool,
@@ -49,12 +74,16 @@ final class AppPermissionCoordinator {
         previousSecureStorageReady: Bool,
         updateSecureStorageReady: @escaping @MainActor (Bool) -> Void,
         onSecureStorageBecameReady: @escaping @MainActor () -> Void,
-        fullDiskProbe: () -> (isGranted: Bool, isRelevant: Bool) = { AppPermissionCoordinator.probeFullDiskAccess() },
+        fullDiskProbe: @escaping @Sendable () -> FullDiskProbeResult = { AppPermissionCoordinator.probeFullDiskAccess() },
         applyFullDiskProbe: @escaping @MainActor (_ isGranted: Bool, _ isRelevant: Bool) -> Void,
-        updateNotificationAuthorizationStatus: @escaping @MainActor (UNAuthorizationStatus) -> Void
+        updateNotificationAuthorizationStatus: @escaping @MainActor (UNAuthorizationStatus) -> Void,
+        forceFullDiskProbe: Bool = false
     ) -> Task<Void, Never> {
-        let fullDisk = fullDiskProbe()
-        applyFullDiskProbe(fullDisk.isGranted, fullDisk.isRelevant)
+        let fullDiskTask = fullDiskProbeTask(
+            force: forceFullDiskProbe,
+            fullDiskProbe: fullDiskProbe,
+            applyCachedResult: applyFullDiskProbe
+        )
 
         return Task { @MainActor in
             let ready = await checkSecureStorageReady()
@@ -67,13 +96,19 @@ final class AppPermissionCoordinator {
 
             let status = await fetchNotificationAuthorizationStatus()
             updateNotificationAuthorizationStatus(status)
+
+            if let fullDiskTask {
+                let fullDisk = await fullDiskTask.value
+                guard !Task.isCancelled else { return }
+                applyFullDiskProbe(fullDisk.isGranted, fullDisk.isRelevant)
+            }
         }
     }
 
-    static func probeFullDiskAccess(
+    nonisolated static func probeFullDiskAccess(
         fileManager: FileManager = .default,
         homeDirectory: String = NSHomeDirectory()
-    ) -> (isGranted: Bool, isRelevant: Bool) {
+    ) -> FullDiskProbeResult {
         let fileCandidates = [
             "\(homeDirectory)/Library/Application Support/com.apple.TCC/TCC.db",
             "\(homeDirectory)/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.sqlite",
@@ -119,5 +154,44 @@ final class AppPermissionCoordinator {
             }
         }
         return (false, true)
+    }
+
+    private func fullDiskProbeTask(
+        force: Bool,
+        fullDiskProbe: @escaping @Sendable () -> FullDiskProbeResult,
+        applyCachedResult: @escaping @MainActor (_ isGranted: Bool, _ isRelevant: Bool) -> Void
+    ) -> Task<FullDiskProbeResult, Never>? {
+        let now = dateProvider()
+
+        if !force, let cached = fullDiskProbeCache {
+            applyCachedResult(cached.result.isGranted, cached.result.isRelevant)
+            if now.timeIntervalSince(cached.checkedAt) < fullDiskProbeCacheDuration {
+                return nil
+            }
+        }
+
+        if let inFlight = fullDiskProbeInFlight {
+            return inFlight
+        }
+
+        guard force || now.timeIntervalSince(lastFullDiskProbeStartedAt) >= fullDiskProbeThrottleInterval else {
+            return nil
+        }
+
+        fullDiskProbeGeneration += 1
+        let generation = fullDiskProbeGeneration
+        lastFullDiskProbeStartedAt = now
+        let task = Task.detached(priority: .utility) { [weak self] in
+            let result = fullDiskProbe()
+            await MainActor.run {
+                guard let self, generation == self.fullDiskProbeGeneration else { return }
+                self.fullDiskProbeCache = FullDiskProbeCache(result: result, checkedAt: self.dateProvider())
+                self.fullDiskProbeInFlight = nil
+            }
+            return result
+        }
+        fullDiskProbeInFlight = task
+
+        return task
     }
 }

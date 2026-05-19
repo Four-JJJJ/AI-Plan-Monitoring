@@ -89,6 +89,128 @@ final class OpenCodeGoProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.extras["fallbackReason"], "parse")
     }
 
+    func testBackgroundFetchUsesLocalHistoryWithoutBrowserFallbackWhenCookieMissing() async throws {
+        let now = try makeDate("2026-04-23T12:00:00Z")
+        let localRows = [
+            OpenCodeGoProvider.LocalUsageRow(createdMs: now.addingTimeInterval(-1200).timeIntervalSince1970 * 1000, cost: 1.5)
+        ]
+        let workspaceAccount = "official/opencode-go/workspace-id-\(UUID().uuidString)"
+        let cookieAccount = "official/opencode-go/auth-cookie-\(UUID().uuidString)"
+        let keychain = makeTestKeychain()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "wrk_test_workspace",
+                service: KeychainService.defaultServiceName,
+                account: workspaceAccount
+            )
+        )
+
+        var descriptor = ProviderDescriptor.defaultOfficialOpenCodeGo()
+        descriptor.auth = AuthConfig(
+            kind: .none,
+            keychainService: KeychainService.defaultServiceName,
+            keychainAccount: workspaceAccount
+        )
+        descriptor.officialConfig?.sourceMode = .web
+        descriptor.officialConfig?.webMode = .autoImport
+        descriptor.officialConfig?.manualCookieAccount = cookieAccount
+
+        let browserSpy = OpenCodeGoSpyBrowserCookieDetector()
+        browserSpy.namedCookieResult = BrowserCookieHeader(header: "auth=browser_cookie", source: "Auto:Test")
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OpenCodeGoMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        OpenCodeGoMockURLProtocol.requestHandler = { request in
+            XCTFail("Background local fallback should not make remote request: \(request.url?.absoluteString ?? "nil")")
+            let response = HTTPURLResponse(
+                url: request.url ?? URL(string: "https://opencode.ai")!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+        defer { OpenCodeGoMockURLProtocol.requestHandler = nil }
+
+        let provider = OpenCodeGoProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCookieService: browserSpy,
+            nowProvider: { now },
+            localRowsProvider: { localRows }
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: false)
+        XCTAssertEqual(snapshot.sourceLabel, "Local")
+        XCTAssertEqual(snapshot.extras["truthSource"], "local")
+        XCTAssertEqual(browserSpy.detectNamedCookieCallCount, 0)
+        XCTAssertEqual(browserSpy.detectCookieHeaderCallCount, 0)
+    }
+
+    func testForceRefreshCanImportOpenCodeBrowserCookie() async throws {
+        let now = try makeDate("2026-04-23T12:00:00Z")
+        let workspaceAccount = "official/opencode-go/workspace-id-\(UUID().uuidString)"
+        let cookieAccount = "official/opencode-go/auth-cookie-\(UUID().uuidString)"
+        let keychain = makeTestKeychain()
+        XCTAssertTrue(
+            keychain.saveToken(
+                "wrk_test_workspace",
+                service: KeychainService.defaultServiceName,
+                account: workspaceAccount
+            )
+        )
+
+        var descriptor = ProviderDescriptor.defaultOfficialOpenCodeGo()
+        descriptor.auth = AuthConfig(
+            kind: .none,
+            keychainService: KeychainService.defaultServiceName,
+            keychainAccount: workspaceAccount
+        )
+        descriptor.officialConfig?.sourceMode = .web
+        descriptor.officialConfig?.webMode = .autoImport
+        descriptor.officialConfig?.manualCookieAccount = cookieAccount
+
+        let browserSpy = OpenCodeGoSpyBrowserCookieDetector()
+        browserSpy.namedCookieResult = BrowserCookieHeader(header: "auth=browser_cookie", source: "Auto:Test")
+
+        let body = #"""
+        ;0x00000128;((self.$R=self.$R||{})["server-fn:11"]=[],($R=>$R[0]={mine:!0,useBalance:!1,rollingUsage:$R[1]={status:"ok",resetInSec:600,usagePercent:12},weeklyUsage:$R[2]={status:"ok",resetInSec:3600,usagePercent:40},monthlyUsage:$R[3]={status:"ok",resetInSec:7200,usagePercent:65}})($R["server-fn:11"]))
+        """#
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [OpenCodeGoMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        OpenCodeGoMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "auth=browser_cookie")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { OpenCodeGoMockURLProtocol.requestHandler = nil }
+
+        let provider = OpenCodeGoProvider(
+            descriptor: descriptor,
+            session: session,
+            keychain: keychain,
+            browserCookieService: browserSpy,
+            nowProvider: { now },
+            localRowsProvider: { [] }
+        )
+
+        let snapshot = try await provider.fetch(forceRefresh: true)
+        XCTAssertEqual(snapshot.sourceLabel, "Remote")
+        XCTAssertEqual(browserSpy.detectNamedCookieCallCount, 1)
+        XCTAssertEqual(browserSpy.detectCookieHeaderCallCount, 0)
+        XCTAssertEqual(
+            keychain.readToken(service: KeychainService.defaultServiceName, account: cookieAccount),
+            "auth=browser_cookie"
+        )
+    }
+
     func testBuildLocalWindowsRespectsFiveHourUtcWeekAndAnchoredMonth() throws {
         let now = try makeDate("2026-04-23T12:00:00Z")
         let rows = [
@@ -116,6 +238,39 @@ final class OpenCodeGoProviderTests: XCTestCase {
         let monthly = try XCTUnwrap(windows.first(where: { $0.title == "Monthly" }))
         XCTAssertEqual(monthly.usedPercent, 21.6667, accuracy: 0.001)
         XCTAssertEqual(monthly.resetAt, try makeDate("2026-05-15T08:00:00Z"))
+    }
+
+    func testBuildLocalWindowsIsInsensitiveToLocalRowOrder() throws {
+        let now = try makeDate("2026-04-23T12:00:00Z")
+        let sortedRows = [
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-03-15T08:00:00Z"), cost: 2),
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-04-14T10:00:00Z"), cost: 7),
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-04-16T09:00:00Z"), cost: 4),
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-04-20T10:00:00Z"), cost: 3),
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-04-23T07:30:00Z"), cost: 1),
+            OpenCodeGoProvider.LocalUsageRow(createdMs: try makeMillis("2026-04-23T10:00:00Z"), cost: 6)
+        ]
+        let unorderedRows = [
+            sortedRows[4],
+            sortedRows[2],
+            sortedRows[5],
+            sortedRows[0],
+            sortedRows[3],
+            sortedRows[1]
+        ]
+
+        let sortedWindows = OpenCodeGoProvider.buildLocalWindows(
+            rows: sortedRows,
+            descriptorID: "opencode-go-official",
+            now: now
+        )
+        let unorderedWindows = OpenCodeGoProvider.buildLocalWindows(
+            rows: unorderedRows,
+            descriptorID: "opencode-go-official",
+            now: now
+        )
+
+        XCTAssertEqual(unorderedWindows, sortedWindows)
     }
 
     func testDetectionRequiresAtLeastOneSignal() {
@@ -240,4 +395,30 @@ private final class OpenCodeGoMockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private final class OpenCodeGoSpyBrowserCookieDetector: BrowserCookieDetecting {
+    var detectCookieHeaderCallCount = 0
+    var detectNamedCookieCallCount = 0
+    var cookieHeaderResult: BrowserCookieHeader?
+    var namedCookieResult: BrowserCookieHeader?
+
+    func detectCookieHeader(
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        detectCookieHeaderCallCount += 1
+        return cookieHeaderResult
+    }
+
+    func detectNamedCookie(
+        name: String,
+        hostContains: String,
+        order: [KimiBrowserKind]?,
+        accessIntent: BrowserCredentialAccessIntent
+    ) -> BrowserCookieHeader? {
+        detectNamedCookieCallCount += 1
+        return namedCookieResult
+    }
 }

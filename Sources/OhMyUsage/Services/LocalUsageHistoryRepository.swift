@@ -290,10 +290,14 @@ final class LocalUsageParsedFileCache<Value>: @unchecked Sendable {
 
     private let lock = NSLock()
     private let maxEntries: Int
+    private let maxCachedValues: Int
     private var entries: [CacheKey: Entry] = [:]
+    private var accessOrder: [CacheKey] = []
+    private var cachedValueCount = 0
 
-    init(maxEntries: Int = 512) {
+    init(maxEntries: Int = 512, maxCachedValues: Int? = nil) {
         self.maxEntries = max(1, maxEntries)
+        self.maxCachedValues = max(1, maxCachedValues ?? max(1, maxEntries) * 256)
     }
 
     func values(
@@ -306,26 +310,42 @@ final class LocalUsageParsedFileCache<Value>: @unchecked Sendable {
         lock.lock()
         if let entry = entries[key], entry.snapshot == snapshot {
             let values = entry.values
+            markAccessedLocked(key)
             lock.unlock()
             return values
         }
+        removeEntryLocked(for: key)
         lock.unlock()
 
         let parsed = parse()
 
         lock.lock()
         entries[key] = Entry(snapshot: snapshot, values: parsed)
+        cachedValueCount += parsed.count
+        markAccessedLocked(key)
         pruneIfNeeded()
         lock.unlock()
 
         return parsed
     }
 
+    private func markAccessedLocked(_ key: CacheKey) {
+        accessOrder.removeAll { $0 == key }
+        accessOrder.append(key)
+    }
+
+    private func removeEntryLocked(for key: CacheKey) {
+        if let removed = entries.removeValue(forKey: key) {
+            cachedValueCount = max(0, cachedValueCount - removed.values.count)
+        }
+        accessOrder.removeAll { $0 == key }
+    }
+
     private func pruneIfNeeded() {
-        guard entries.count > maxEntries else { return }
-        let overflow = entries.count - maxEntries
-        for key in entries.keys.prefix(overflow) {
-            entries.removeValue(forKey: key)
+        accessOrder.removeAll { entries[$0] == nil }
+        while entries.count > maxEntries || (cachedValueCount > maxCachedValues && entries.count > 1) {
+            guard let key = accessOrder.first else { return }
+            removeEntryLocked(for: key)
         }
     }
 }
@@ -394,7 +414,7 @@ enum LocalUsageSourceFingerprintBuilder {
         let normalizedRoots = roots
             .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL.path }
             .sorted()
-        var files: [URL] = []
+        var accumulator = FingerprintAccumulator()
 
         for root in normalizedRoots {
             let rootURL = URL(fileURLWithPath: root)
@@ -405,7 +425,7 @@ enum LocalUsageSourceFingerprintBuilder {
 
             if !isDirectory.boolValue {
                 if includeFile(rootURL) {
-                    files.append(rootURL)
+                    accumulator.add(rootURL)
                 }
                 continue
             }
@@ -419,20 +439,31 @@ enum LocalUsageSourceFingerprintBuilder {
             }
 
             for case let fileURL as URL in enumerator where includeFile(fileURL) {
-                guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else {
-                    continue
-                }
-                files.append(fileURL)
+                accumulator.add(fileURL)
             }
         }
 
+        return LocalUsageSourceFingerprint(
+            roots: normalizedRoots,
+            fileCount: accumulator.fileCount,
+            totalSize: accumulator.totalSize,
+            latestModificationTime: accumulator.latestModificationTime
+        )
+    }
+
+    private struct FingerprintAccumulator {
+        var fileCount = 0
         var totalSize: UInt64 = 0
         var latestModificationTime: Date?
-        for fileURL in files {
-            guard let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
-                continue
+
+        mutating func add(_ fileURL: URL) {
+            guard let values = try? fileURL.resourceValues(
+                forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+            ), values.isRegularFile == true else {
+                return
             }
+
+            fileCount += 1
             if let fileSize = values.fileSize, fileSize > 0 {
                 totalSize += UInt64(fileSize)
             }
@@ -441,13 +472,6 @@ enum LocalUsageSourceFingerprintBuilder {
                 latestModificationTime = modifiedAt
             }
         }
-
-        return LocalUsageSourceFingerprint(
-            roots: normalizedRoots,
-            fileCount: files.count,
-            totalSize: totalSize,
-            latestModificationTime: latestModificationTime
-        )
     }
 
     private static func projectsRoot(fromConfigDir configDir: String) -> String {
@@ -487,6 +511,8 @@ final class LocalUsageHistoryRepository {
     private let nowProvider: () -> Date
     private var entries: [LocalUsageHistoryQuery: LocalUsageHistoryEntry] = [:]
     private var loadingTasks: [LocalUsageHistoryQuery: Task<Void, Never>] = [:]
+    private var lastPersistedCacheData: Data?
+    private var lastPersistedEntries: [LocalUsageHistoryEntry]?
 
     init(
         fileManager: FileManager = .default,
@@ -623,21 +649,29 @@ final class LocalUsageHistoryRepository {
         }
         entries = Dictionary(uniqueKeysWithValues: payload.entries.map { ($0.query, $0) })
         prune(now: nowProvider())
+        let persistedEntries = sortedEntries()
+        lastPersistedEntries = persistedEntries
+        lastPersistedCacheData = try? encoder.encode(CachePayload(entries: persistedEntries))
     }
 
     func persist() {
         do {
-            try ensureDirectoryExists()
-            let payload = CachePayload(
-                entries: entries.values.sorted { lhs, rhs in
-                    if lhs.refreshedAt != rhs.refreshedAt {
-                        return lhs.refreshedAt > rhs.refreshedAt
-                    }
-                    return lhs.query.providerID < rhs.query.providerID
-                }
-            )
+            let persistedEntries = sortedEntries()
+            if persistedEntries == lastPersistedEntries,
+               fileManager.fileExists(atPath: fileURL.path) {
+                return
+            }
+            let payload = CachePayload(entries: persistedEntries)
             let data = try encoder.encode(payload)
+            if data == lastPersistedCacheData,
+               fileManager.fileExists(atPath: fileURL.path) {
+                lastPersistedEntries = persistedEntries
+                return
+            }
+            try ensureDirectoryExists()
             try data.write(to: fileURL, options: .atomic)
+            lastPersistedEntries = persistedEntries
+            lastPersistedCacheData = data
         } catch {
             return
         }
@@ -667,6 +701,15 @@ final class LocalUsageHistoryRepository {
         entries = entries.filter { keepQueries.contains($0.key) }
     }
 
+    private func sortedEntries() -> [LocalUsageHistoryEntry] {
+        entries.values.sorted { lhs, rhs in
+            if lhs.refreshedAt != rhs.refreshedAt {
+                return lhs.refreshedAt > rhs.refreshedAt
+            }
+            return lhs.query.providerID < rhs.query.providerID
+        }
+    }
+
     private func shouldProbeFingerprint(
         entry: LocalUsageHistoryEntry,
         now: Date,
@@ -691,7 +734,6 @@ final class LocalUsageHistoryRepository {
     private var encoder: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }
 

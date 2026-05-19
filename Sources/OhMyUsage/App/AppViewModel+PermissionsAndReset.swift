@@ -53,7 +53,7 @@ extension AppViewModel {
 
     func refreshPermissionStatusesIfNeeded(referenceDate: Date = Date()) {
         guard referenceDate.timeIntervalSince(lastPermissionStatusRefreshAt) >= 5 else { return }
-        refreshPermissionStatuses(force: true)
+        refreshPermissionStatuses(force: false)
     }
 
     func refreshPermissionStatusesNow() {
@@ -154,7 +154,8 @@ extension AppViewModel {
                 self.fullDiskAccessGranted = granted
                 self.fullDiskAccessRelevant = relevant
             },
-            updateNotificationAuthorizationStatus: { self.notificationAuthorizationStatus = $0 }
+            updateNotificationAuthorizationStatus: { self.notificationAuthorizationStatus = $0 },
+            forceFullDiskProbe: force
         )
     }
 }

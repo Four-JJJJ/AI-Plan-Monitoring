@@ -148,15 +148,14 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
         let hasProviders = tableExists("providers", database: database)
         let providerNameExpression = hasProviders ? "p.name" : "NULL"
         let joinExpression = hasProviders ? "LEFT JOIN providers p ON p.id = l.provider_id" : ""
-        let createdAtEpochSecondsExpression = Self.createdAtEpochSecondsExpression("l.created_at")
+        let createdAtRangePredicate = Self.createdAtRawEpochRangePredicate("l.created_at")
         let query = """
         SELECT l.request_id, l.provider_id, l.app_type, l.model, l.input_tokens, l.output_tokens,
                l.cache_read_tokens, l.cache_creation_tokens, l.status_code, l.created_at,
                l.data_source, \(providerNameExpression)
         FROM proxy_request_logs l
         \(joinExpression)
-        WHERE \(createdAtEpochSecondsExpression) >= ?
-          AND \(createdAtEpochSecondsExpression) < ?
+        WHERE \(createdAtRangePredicate)
         """
 
         var output: [CCSwitchUsageRecord] = []
@@ -165,8 +164,7 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
             query: query,
             source: .proxyRequestLogs,
             bind: { statement in
-                sqlite3_bind_double(statement, 1, since.timeIntervalSince1970)
-                sqlite3_bind_double(statement, 2, until.timeIntervalSince1970)
+                Self.bindCreatedAtRawEpochRanges(statement, since: since, until: until)
             },
             body: { row, rowOrdinal in
                 guard let eventAt = Self.dateFromEpoch(row.int64(9)),
@@ -322,15 +320,45 @@ final class CCSwitchUsageLogReader: @unchecked Sendable {
         )
     }
 
-    private static func createdAtEpochSecondsExpression(_ column: String) -> String {
-        """
-        CASE
-            WHEN \(column) > 1000000000000000000 THEN CAST(\(column) AS REAL) / 1000000000.0
-            WHEN \(column) > 1000000000000000 THEN CAST(\(column) AS REAL) / 1000000.0
-            WHEN \(column) > 1000000000000 THEN CAST(\(column) AS REAL) / 1000.0
-            ELSE CAST(\(column) AS REAL)
-        END
-        """
+    static func createdAtRawEpochRangePredicate(_ column: String) -> String {
+        createdAtEpochScales
+            .map { _ in "(\(column) >= ? AND \(column) < ?)" }
+            .joined(separator: " OR ")
+    }
+
+    private static func bindCreatedAtRawEpochRanges(
+        _ statement: OpaquePointer?,
+        since: Date,
+        until: Date,
+        startingAt firstIndex: Int32 = 1
+    ) {
+        var bindIndex = firstIndex
+        for scale in createdAtEpochScales {
+            sqlite3_bind_int64(statement, bindIndex, epochBoundary(since, scale: scale))
+            sqlite3_bind_int64(statement, bindIndex + 1, epochBoundary(until, scale: scale))
+            bindIndex += 2
+        }
+    }
+
+    private static let createdAtEpochScales: [Double] = [
+        1,
+        1_000,
+        1_000_000,
+        1_000_000_000
+    ]
+
+    private static func epochBoundary(_ date: Date, scale: Double) -> Int64 {
+        let value = (date.timeIntervalSince1970 * scale).rounded(.up)
+        guard value.isFinite else {
+            return value.sign == .minus ? Int64.min : Int64.max
+        }
+        if value <= Double(Int64.min) {
+            return Int64.min
+        }
+        if value >= Double(Int64.max) {
+            return Int64.max
+        }
+        return Int64(value)
     }
 
     private static func freshInputTokens(appType: String, rawInputTokens: Int, cacheReadTokens: Int) -> Int {

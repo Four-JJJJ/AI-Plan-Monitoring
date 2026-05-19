@@ -14,6 +14,7 @@ package enum RuntimeDiagnosticsLimits {
     package static let localSessionSignalActiveSleepSeconds: TimeInterval = 15
     package static let localSessionSignalIdleSleepSeconds: TimeInterval = 60
     package static let menuClockIntervalSeconds: TimeInterval = 5
+    package static let statusBarVisibleRefreshIntervalSeconds: TimeInterval = 60
     package static let settingsClockIntervalSeconds: TimeInterval = 15
     package static let claudePrefetchMaxConcurrent = 2
     package static let claudeSignalMaxTrackedFiles = 200

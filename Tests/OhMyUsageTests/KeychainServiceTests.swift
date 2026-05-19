@@ -1,7 +1,31 @@
 import XCTest
+import Security
 @testable import OhMyUsage
 
 final class KeychainServiceTests: XCTestCase {
+    func testEnumeratedKeychainRowsReuseReturnedData() {
+        let rows: [[String: Any]] = [
+            [
+                kSecAttrAccount as String: "account-a",
+                kSecValueData as String: Data("token-a".utf8)
+            ],
+            [
+                kSecAttrAccount as String: "account-b",
+                kSecValueData as String: Data("token-b".utf8)
+            ],
+            [
+                kSecAttrAccount as String: "missing-data"
+            ]
+        ]
+
+        let result = KeychainService.tokensFromEnumeratedKeychainRows(rows as CFTypeRef)
+
+        XCTAssertEqual(result, [
+            "account-a": "token-a",
+            "account-b": "token-b"
+        ])
+    }
+
     func testLegacyServiceNameIsNormalizedToOhMyUsage() {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -254,6 +278,55 @@ final class KeychainServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(store.isSecureStoreReady())
+        XCTAssertEqual(recorder.counts.readData, 0)
+        XCTAssertEqual(recorder.counts.readAll, 0)
+    }
+
+    func testCachedCredentialLengthMemoizesDefaultsSnapshotUntilLocalWrite() {
+        let defaults = makeDefaults()
+        let recorder = KeychainReadRecorder()
+        let adapter = KeychainService.SecureStoreAdapter(
+            readData: { service, account, _ in
+                recorder.recordReadData(service: service, account: account)
+                return nil
+            },
+            readAll: { service, _ in
+                recorder.recordReadAll(service: service)
+                return nil
+            },
+            saveData: { data, service, account, interactive in
+                recorder.recordSaveData(data: data, service: service, account: account, interactive: interactive)
+                return true
+            },
+            deleteItem: { _, _ in },
+            deleteAll: { _ in }
+        )
+        let account = "display-account"
+        let key = "\(KeychainService.defaultServiceName)::\(account)"
+        defaults.set([key: 12], forKey: "OhMyUsage.Keychain.CredentialLengths")
+
+        let store = KeychainService(
+            defaults: defaults,
+            forceSecureStore: true,
+            secureStore: adapter
+        )
+
+        XCTAssertEqual(
+            store.cachedCredentialLength(service: KeychainService.defaultServiceName, account: account),
+            12
+        )
+
+        defaults.set([key: 99], forKey: "OhMyUsage.Keychain.CredentialLengths")
+
+        XCTAssertEqual(
+            store.cachedCredentialLength(service: KeychainService.defaultServiceName, account: account),
+            12
+        )
+        XCTAssertTrue(store.saveToken("updated-secret", service: KeychainService.defaultServiceName, account: account))
+        XCTAssertEqual(
+            store.cachedCredentialLength(service: KeychainService.defaultServiceName, account: account),
+            "updated-secret".count
+        )
         XCTAssertEqual(recorder.counts.readData, 0)
         XCTAssertEqual(recorder.counts.readAll, 0)
     }

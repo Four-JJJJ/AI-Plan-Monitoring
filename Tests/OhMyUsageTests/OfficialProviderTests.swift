@@ -609,6 +609,107 @@ final class OfficialProviderTests: XCTestCase {
         XCTAssertEqual(spy.detectCookieHeaderCallCount, 2)
     }
 
+    func testWebOverlayReusesDetectedCookieForBackgroundRefreshUntilForced() async throws {
+        let providerKey = "test-overlay-cache-\(UUID().uuidString)"
+        let host = "\(providerKey).example.com"
+        let spy = SpyBrowserCookieDetector()
+        spy.cookieHeaderResult = BrowserCookieHeader(header: "session=first", source: "Auto:Test")
+        let strategy = OfficialBrowserCookieImportStrategy(
+            providerKey: providerKey,
+            hostContains: host,
+            namedCookie: nil,
+            autoImportMissingCredential: "missing auto cookie",
+            manualCredentialFallback: "manual cookie",
+            normalizeManualHeader: { $0 },
+            normalizeDetectedHeader: { $0 }
+        )
+
+        let first = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+            official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+            descriptorID: "\(providerKey)-descriptor",
+            keychain: makeTestKeychain(),
+            browserCookieService: spy,
+            forceRefresh: true,
+            strategy: strategy
+        )
+        XCTAssertEqual(first.header, "session=first")
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        spy.cookieHeaderResult = BrowserCookieHeader(header: "session=second", source: "Auto:Test")
+        let cached = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+            official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+            descriptorID: "\(providerKey)-descriptor",
+            keychain: makeTestKeychain(),
+            browserCookieService: spy,
+            forceRefresh: false,
+            strategy: strategy
+        )
+        XCTAssertEqual(cached.header, "session=first")
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        let refreshed = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+            official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+            descriptorID: "\(providerKey)-descriptor",
+            keychain: makeTestKeychain(),
+            browserCookieService: spy,
+            forceRefresh: true,
+            strategy: strategy
+        )
+        XCTAssertEqual(refreshed.header, "session=second")
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 2)
+    }
+
+    func testWebOverlayCachesMissingCookieUntilForced() async throws {
+        let providerKey = "test-overlay-missing-cache-\(UUID().uuidString)"
+        let host = "\(providerKey).example.com"
+        let spy = SpyBrowserCookieDetector()
+        let strategy = OfficialBrowserCookieImportStrategy(
+            providerKey: providerKey,
+            hostContains: host,
+            namedCookie: nil,
+            autoImportMissingCredential: "missing auto cookie",
+            manualCredentialFallback: "manual cookie",
+            normalizeManualHeader: { $0 },
+            normalizeDetectedHeader: { $0 }
+        )
+
+        await XCTAssertThrowsProviderError {
+            _ = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+                official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+                descriptorID: "\(providerKey)-descriptor",
+                keychain: makeTestKeychain(),
+                browserCookieService: spy,
+                forceRefresh: false,
+                strategy: strategy
+            )
+        }
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        await XCTAssertThrowsProviderError {
+            _ = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+                official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+                descriptorID: "\(providerKey)-descriptor",
+                keychain: makeTestKeychain(),
+                browserCookieService: spy,
+                forceRefresh: false,
+                strategy: strategy
+            )
+        }
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 1)
+
+        spy.cookieHeaderResult = BrowserCookieHeader(header: "session=forced", source: "Auto:Test")
+        let refreshed = try await OfficialProviderWebOverlayRuntime.resolveCookieHeader(
+            official: OfficialProviderConfig(sourceMode: .web, webMode: .autoImport),
+            descriptorID: "\(providerKey)-descriptor",
+            keychain: makeTestKeychain(),
+            browserCookieService: spy,
+            forceRefresh: true,
+            strategy: strategy
+        )
+        XCTAssertEqual(refreshed.header, "session=forced")
+        XCTAssertEqual(spy.detectCookieHeaderCallCount, 2)
+    }
+
     func testClaudeWebBackoffSkipsRepeatedBrowserRead() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [OfficialMockURLProtocol.self]

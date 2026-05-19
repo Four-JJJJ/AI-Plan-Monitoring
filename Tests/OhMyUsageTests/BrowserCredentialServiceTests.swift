@@ -127,6 +127,75 @@ final class BrowserCredentialServiceTests: XCTestCase {
         XCTAssertEqual(enumerationKeys, ["safari:false", "safari:true"])
     }
 
+    func testDefaultCookiePathCacheSurvivesThirtySeconds() {
+        var now = Date(timeIntervalSince1970: 2_000)
+        var enumerationCount = 0
+        let reader = BrowserCookieDatabaseReader(
+            now: { now },
+            cookiePathEnumerator: { _, _ in
+                enumerationCount += 1
+                return ["/tmp/chrome/Profile \(enumerationCount)/Network/Cookies"]
+            }
+        )
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 1/Network/Cookies"]
+        )
+
+        now = now.addingTimeInterval(30)
+
+        XCTAssertEqual(
+            reader.candidateCookiePaths(for: .chrome),
+            ["/tmp/chrome/Profile 1/Network/Cookies"]
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
+    func testMissingChromiumSafeStoragePasswordIsCachedWithinTTL() throws {
+        let databasePath = try makeCookieDatabase(
+            sql: """
+            CREATE TABLE cookies (name TEXT, value TEXT, encrypted_value BLOB, host_key TEXT);
+            INSERT INTO cookies VALUES ('sessionKey', '', X'76313001020304', '.secure.example.com');
+            """
+        )
+        defer { try? FileManager.default.removeItem(atPath: databasePath) }
+
+        var now = Date(timeIntervalSince1970: 2_000)
+        var passwordReadCount = 0
+        let reader = BrowserCookieDatabaseReader(
+            now: { now },
+            safeStoragePasswordReader: { service, account in
+                XCTAssertEqual(service, "Chrome Safe Storage")
+                XCTAssertEqual(account, "Chrome")
+                passwordReadCount += 1
+                return nil
+            }
+        )
+
+        XCTAssertNil(
+            reader.namedCookieValue(
+                fromDatabaseAt: databasePath,
+                browser: .chrome,
+                cookieName: "sessionKey",
+                hostContains: "secure.example.com"
+            )
+        )
+        XCTAssertEqual(passwordReadCount, 1)
+
+        now = now.addingTimeInterval(30)
+
+        XCTAssertNil(
+            reader.namedCookieValue(
+                fromDatabaseAt: databasePath,
+                browser: .chrome,
+                cookieName: "sessionKey",
+                hostContains: "secure.example.com"
+            )
+        )
+        XCTAssertEqual(passwordReadCount, 1)
+    }
+
     func testBearerCandidatesUsesShortLivedCacheForSameHost() {
         var lookupCount = 0
         let service = BrowserCredentialService(
@@ -177,6 +246,86 @@ final class BrowserCredentialServiceTests: XCTestCase {
         XCTAssertGreaterThan(firstPassCount, 0)
 
         XCTAssertNil(service.detectNamedCookie(name: "sessionKey", host: "claude.ai"))
+        XCTAssertEqual(lookupCount, firstPassCount)
+    }
+
+    func testExpiredCredentialCacheEntriesAreInvalidatedByKeyBeforeDeferredSweep() {
+        var now = Date(timeIntervalSince1970: 4_000)
+        var bearerLookupCount = 0
+        var cookieLookupCount = 0
+        let service = BrowserCredentialService(
+            bearerCandidatesOverride: { _ in
+                bearerLookupCount += 1
+                return [
+                    BrowserDetectedCredential(
+                        value: "bearer-\(bearerLookupCount)",
+                        source: "browser"
+                    )
+                ]
+            },
+            cookieHeaderOverride: { _ in
+                cookieLookupCount += 1
+                return BrowserDetectedCredential(
+                    value: "session=\(cookieLookupCount)",
+                    source: "browser"
+                )
+            },
+            cacheTTL: 10,
+            now: { now }
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "stale.example.com").map(\.value),
+            ["bearer-1"]
+        )
+        XCTAssertEqual(cacheEntryCount(named: "bearerCache", in: service), 1)
+
+        now = now.addingTimeInterval(11)
+
+        XCTAssertEqual(
+            service.detectCookieHeader(host: "fresh.example.com")?.value,
+            "session=1"
+        )
+        XCTAssertEqual(
+            cacheEntryCount(named: "bearerCache", in: service),
+            1,
+            "Unrelated cache access should not rebuild and sweep every credential cache."
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "stale.example.com").map(\.value),
+            ["bearer-2"]
+        )
+        XCTAssertEqual(bearerLookupCount, 2)
+        XCTAssertEqual(cacheEntryCount(named: "bearerCache", in: service), 1)
+
+        now = now.addingTimeInterval(61)
+
+        XCTAssertEqual(
+            service.detectCookieHeader(host: "another.example.com")?.value,
+            "session=2"
+        )
+        XCTAssertEqual(cacheEntryCount(named: "bearerCache", in: service), 0)
+    }
+
+    func testDefaultBrowserCredentialCacheSurvivesThirtySecondsForNegativeLookups() {
+        var now = Date(timeIntervalSince1970: 2_000)
+        var lookupCount = 0
+        let service = BrowserCredentialService(
+            cookieHeaderOverride: { _ in
+                lookupCount += 1
+                return nil
+            },
+            now: { now }
+        )
+
+        XCTAssertNil(service.detectCookieHeader(host: "relay.example.com"))
+        let firstPassCount = lookupCount
+        XCTAssertGreaterThan(firstPassCount, 0)
+
+        now = now.addingTimeInterval(30)
+
+        XCTAssertNil(service.detectCookieHeader(host: "relay.example.com"))
         XCTAssertEqual(lookupCount, firstPassCount)
     }
 
@@ -260,6 +409,47 @@ final class BrowserCredentialServiceTests: XCTestCase {
                 accessIntent: .authRecovery
             ),
             [BrowserDetectedCredential(value: "sk-\(String(repeating: "b", count: 32))", source: "auto:Chrome:localStorage")]
+        )
+        XCTAssertEqual(enumerationCount, 1)
+    }
+
+    func testDefaultBearerStoragePathCacheSurvivesThirtySeconds() throws {
+        let firstDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "g", count: 32))"
+        )
+        let secondDirectory = try makeBearerStorageDirectory(
+            host: "hongmacc.com",
+            token: "sk-\(String(repeating: "h", count: 32))"
+        )
+        defer { try? FileManager.default.removeItem(at: firstDirectory.deletingLastPathComponent()) }
+        defer { try? FileManager.default.removeItem(at: secondDirectory.deletingLastPathComponent()) }
+
+        var now = Date(timeIntervalSince1970: 1_000)
+        var enumerationCount = 0
+        let storageReader = BrowserStorageCredentialReader(
+            browserOrder: [.chrome],
+            now: { now },
+            storagePathEnumerator: { _ in
+                enumerationCount += 1
+                return enumerationCount == 1 ? [firstDirectory.path] : [secondDirectory.path]
+            }
+        )
+        let service = BrowserCredentialService(
+            storageReader: storageReader,
+            cacheTTL: 0
+        )
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "hongmacc.com").map(\.value),
+            ["sk-\(String(repeating: "g", count: 32))"]
+        )
+
+        now = now.addingTimeInterval(30)
+
+        XCTAssertEqual(
+            service.detectBearerTokenCandidates(host: "hongmacc.com").map(\.value),
+            ["sk-\(String(repeating: "g", count: 32))"]
         )
         XCTAssertEqual(enumerationCount, 1)
     }
@@ -539,6 +729,15 @@ final class BrowserCredentialServiceTests: XCTestCase {
             encoding: .isoLatin1
         )
         return directory
+    }
+
+    private func cacheEntryCount(named cacheName: String, in service: BrowserCredentialService) -> Int {
+        let serviceMirror = Mirror(reflecting: service)
+        guard let child = serviceMirror.children.first(where: { $0.label == cacheName }) else {
+            XCTFail("Missing cache storage named \(cacheName)")
+            return 0
+        }
+        return Mirror(reflecting: child.value).children.count
     }
 
     private func makeCookieDatabase(sql: String) throws -> String {

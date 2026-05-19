@@ -57,6 +57,29 @@ final class VisibleClockControllerTests: XCTestCase {
         XCTAssertEqual(tickCount, 0)
     }
 
+    func testRestartClockIfNeededKeepsActiveVisibleTaskWithoutExtraImmediateTick() {
+        let controller = VisibleClockController()
+        let existingTask = Task<Void, Never> {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        var task: Task<Void, Never>? = existingTask
+        var tickCount = 0
+
+        controller.restartClockIfNeeded(
+            isVisible: true,
+            existingTask: &task,
+            intervalSeconds: 60
+        ) { _ in tickCount += 1 }
+
+        XCTAssertNotNil(task)
+        XCTAssertFalse(existingTask.isCancelled)
+        XCTAssertEqual(tickCount, 0)
+
+        controller.stopClock(existingTask: &task)
+    }
+
     func testStopClockCancelsAndClearsTask() {
         let controller = VisibleClockController()
         let existingTask = Task<Void, Never> {

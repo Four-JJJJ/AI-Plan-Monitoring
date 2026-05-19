@@ -18,10 +18,13 @@ final class BrowserCredentialService {
     private let cookieHeaderOverride: ((String) -> BrowserDetectedCredential?)?
     private let namedCookieOverride: ((String, String) -> BrowserDetectedCredential?)?
     private let cacheTTL: TimeInterval
+    private let now: () -> Date
+    private let fullCachePurgeInterval: TimeInterval = 60
     private let lock = NSLock()
     private var bearerCache: [String: ExpiringCacheEntry<[BrowserDetectedCredential]>] = [:]
     private var cookieHeaderCache: [String: ExpiringCacheEntry<BrowserDetectedCredential?>] = [:]
     private var namedCookieCache: [String: ExpiringCacheEntry<BrowserDetectedCredential?>] = [:]
+    private var nextFullCachePurgeAt: Date?
 
     init(
         bearerService: KimiBrowserCookieService? = nil,
@@ -31,7 +34,8 @@ final class BrowserCredentialService {
         bearerCandidatesOverride: ((String) -> [BrowserDetectedCredential])? = nil,
         cookieHeaderOverride: ((String) -> BrowserDetectedCredential?)? = nil,
         namedCookieOverride: ((String, String) -> BrowserDetectedCredential?)? = nil,
-        cacheTTL: TimeInterval = 5
+        cacheTTL: TimeInterval = 60,
+        now: @escaping () -> Date = Date.init
     ) {
         self.storageReader = storageReader
         self.kimiCookieService = kimiCookieService ?? bearerService ?? KimiBrowserCookieService()
@@ -40,6 +44,7 @@ final class BrowserCredentialService {
         self.cookieHeaderOverride = cookieHeaderOverride
         self.namedCookieOverride = namedCookieOverride
         self.cacheTTL = max(0, cacheTTL)
+        self.now = now
     }
 
     func detectBearerTokenCandidates(
@@ -49,7 +54,7 @@ final class BrowserCredentialService {
         let normalizedHost = normalizedHost(host)
         guard !normalizedHost.isEmpty else { return [] }
 
-        let now = Date()
+        let now = now()
         if let cached = cachedBearerCandidates(for: normalizedHost, now: now) {
             return cached
         }
@@ -78,7 +83,7 @@ final class BrowserCredentialService {
         let normalizedHost = normalizedHost(host)
         guard !normalizedHost.isEmpty else { return nil }
 
-        let now = Date()
+        let now = now()
         if let cached = cachedCookieHeader(for: normalizedHost, now: now) {
             return cached
         }
@@ -133,7 +138,7 @@ final class BrowserCredentialService {
         guard !normalizedHost.isEmpty, !normalizedName.isEmpty else { return nil }
 
         let cacheKey = "\(normalizedName.lowercased())|\(normalizedHost)"
-        let now = Date()
+        let now = now()
         if let cached = cachedNamedCookie(for: cacheKey, now: now) {
             return cached
         }
@@ -248,25 +253,41 @@ final class BrowserCredentialService {
     private func cachedBearerCandidates(for host: String, now: Date) -> [BrowserDetectedCredential]? {
         lock.lock()
         defer { lock.unlock() }
-        purgeExpiredCacheLocked(now: now)
-        return bearerCache[host]?.value
+        purgeExpiredCacheLockedIfNeeded(now: now)
+        guard let entry = bearerCache[host] else {
+            return nil
+        }
+        guard entry.expiresAt > now else {
+            bearerCache.removeValue(forKey: host)
+            return nil
+        }
+        return entry.value
     }
 
     private func cacheBearerCandidates(_ candidates: [BrowserDetectedCredential], for host: String, now: Date) {
         lock.lock()
+        defer { lock.unlock() }
+        guard cacheTTL > 0 else {
+            bearerCache.removeValue(forKey: host)
+            purgeExpiredCacheLockedIfNeeded(now: now)
+            return
+        }
         bearerCache[host] = ExpiringCacheEntry(
             value: candidates,
             expiresAt: now.addingTimeInterval(cacheTTL)
         )
-        purgeExpiredCacheLocked(now: now)
-        lock.unlock()
+        purgeExpiredCacheLockedIfNeeded(now: now)
     }
 
     private func cachedCookieHeader(for host: String, now: Date) -> BrowserDetectedCredential?? {
         lock.lock()
         defer { lock.unlock() }
-        purgeExpiredCacheLocked(now: now)
+        purgeExpiredCacheLockedIfNeeded(now: now)
         guard let entry = cookieHeaderCache[host] else {
+            return nil
+        }
+        guard entry.expiresAt > now else {
+            cookieHeaderCache.removeValue(forKey: host)
             return nil
         }
         return entry.value
@@ -274,19 +295,28 @@ final class BrowserCredentialService {
 
     private func cacheCookieHeader(_ credential: BrowserDetectedCredential?, for host: String, now: Date) {
         lock.lock()
+        defer { lock.unlock() }
+        guard cacheTTL > 0 else {
+            cookieHeaderCache.removeValue(forKey: host)
+            purgeExpiredCacheLockedIfNeeded(now: now)
+            return
+        }
         cookieHeaderCache[host] = ExpiringCacheEntry(
             value: credential,
             expiresAt: now.addingTimeInterval(cacheTTL)
         )
-        purgeExpiredCacheLocked(now: now)
-        lock.unlock()
+        purgeExpiredCacheLockedIfNeeded(now: now)
     }
 
     private func cachedNamedCookie(for key: String, now: Date) -> BrowserDetectedCredential?? {
         lock.lock()
         defer { lock.unlock() }
-        purgeExpiredCacheLocked(now: now)
+        purgeExpiredCacheLockedIfNeeded(now: now)
         guard let entry = namedCookieCache[key] else {
+            return nil
+        }
+        guard entry.expiresAt > now else {
+            namedCookieCache.removeValue(forKey: key)
             return nil
         }
         return entry.value
@@ -294,12 +324,25 @@ final class BrowserCredentialService {
 
     private func cacheNamedCookie(_ credential: BrowserDetectedCredential?, for key: String, now: Date) {
         lock.lock()
+        defer { lock.unlock() }
+        guard cacheTTL > 0 else {
+            namedCookieCache.removeValue(forKey: key)
+            purgeExpiredCacheLockedIfNeeded(now: now)
+            return
+        }
         namedCookieCache[key] = ExpiringCacheEntry(
             value: credential,
             expiresAt: now.addingTimeInterval(cacheTTL)
         )
+        purgeExpiredCacheLockedIfNeeded(now: now)
+    }
+
+    private func purgeExpiredCacheLockedIfNeeded(now: Date) {
+        if let nextFullCachePurgeAt, now < nextFullCachePurgeAt {
+            return
+        }
         purgeExpiredCacheLocked(now: now)
-        lock.unlock()
+        nextFullCachePurgeAt = now.addingTimeInterval(fullCachePurgeInterval)
     }
 
     private func purgeExpiredCacheLocked(now: Date) {

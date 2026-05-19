@@ -10,13 +10,22 @@ package final class VisibleClockController {
         intervalSeconds: TimeInterval = RuntimeDiagnosticsLimits.settingsClockIntervalSeconds,
         tick: @escaping @MainActor (Date) -> Void
     ) {
+        guard isVisible else {
+            stopClock(existingTask: &existingTask)
+            return
+        }
+
+        if let task = existingTask, !task.isCancelled {
+            return
+        }
+
         stopClock(existingTask: &existingTask)
-        guard isVisible else { return }
 
         tick(Date())
         existingTask = Task { @MainActor in
+            let interval = max(1, intervalSeconds)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(intervalSeconds))
+                try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
                 tick(Date())
             }

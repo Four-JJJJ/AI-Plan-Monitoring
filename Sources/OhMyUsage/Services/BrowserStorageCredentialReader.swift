@@ -25,7 +25,7 @@ final class BrowserStorageCredentialReader {
     init(
         fileManager: FileManager = .default,
         browserOrder: [KimiBrowserKind] = BrowserStorageCredentialReader.defaultBrowserOrder,
-        storagePathCacheTTL: TimeInterval = 5,
+        storagePathCacheTTL: TimeInterval = 60,
         now: @escaping () -> Date = Date.init,
         storagePathEnumerator: ((KimiBrowserKind) -> [String])? = nil
     ) {

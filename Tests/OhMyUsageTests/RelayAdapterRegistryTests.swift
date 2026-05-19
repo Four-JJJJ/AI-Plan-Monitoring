@@ -15,4 +15,32 @@ final class RelayAdapterRegistryTests: XCTestCase {
 
         XCTAssertEqual(ids.count, Set(ids).count)
     }
+
+    func testAvailableManifestsReusesLocalDirectoryScanWithinCacheTTL() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("relay-adapter-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var enumerationCount = 0
+        let registry = RelayAdapterRegistry(
+            builtInManifests: [RelayAdapterRegistry.genericManifest],
+            localManifestDirectoryURL: root,
+            localManifestCacheTTL: 60,
+            now: { Date(timeIntervalSince1970: 100) },
+            localManifestEnumerator: { directory in
+                enumerationCount += 1
+                return FileManager.default.enumerator(
+                    at: directory,
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                )
+            }
+        )
+
+        _ = registry.availableManifests()
+        _ = registry.availableManifests()
+
+        XCTAssertEqual(enumerationCount, 1)
+    }
 }

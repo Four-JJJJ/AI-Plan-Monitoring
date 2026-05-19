@@ -33,15 +33,18 @@ package struct ProviderRefreshSchedulerConfig: Equatable, Sendable {
     package var backgroundProviderPollIntervalSeconds: Int
     package var localSessionSignalActiveSleepSeconds: TimeInterval
     package var localSessionSignalIdleSleepSeconds: TimeInterval
+    package var inFlightProviderSleepSeconds: TimeInterval
 
     package init(
         backgroundProviderPollIntervalSeconds: Int,
         localSessionSignalActiveSleepSeconds: TimeInterval,
-        localSessionSignalIdleSleepSeconds: TimeInterval
+        localSessionSignalIdleSleepSeconds: TimeInterval,
+        inFlightProviderSleepSeconds: TimeInterval = 5
     ) {
         self.backgroundProviderPollIntervalSeconds = backgroundProviderPollIntervalSeconds
         self.localSessionSignalActiveSleepSeconds = localSessionSignalActiveSleepSeconds
         self.localSessionSignalIdleSleepSeconds = localSessionSignalIdleSleepSeconds
+        self.inFlightProviderSleepSeconds = max(1, inFlightProviderSleepSeconds)
     }
 }
 
@@ -278,7 +281,7 @@ package final class ProviderRefreshScheduler {
 
             if dueProviderIDs.isEmpty {
                 do {
-                    try await sleepAction(1)
+                    try await sleepAction(config.inFlightProviderSleepSeconds)
                 } catch {
                     return
                 }
@@ -334,7 +337,7 @@ package final class ProviderRefreshScheduler {
     private func restartLocalSessionSignalMonitor(providers: [ProviderRefreshScheduleDescriptor]) {
         localSessionMonitorTask?.cancel()
         localSessionMonitorTask = nil
-        guard providers.contains(where: { $0.isEnabled && $0.localSessionWatchKind != nil }) else {
+        guard !localSessionWatchTargets(from: providers).isEmpty else {
             return
         }
         localSessionMonitorTask = Task { @MainActor [weak self] in
@@ -345,7 +348,7 @@ package final class ProviderRefreshScheduler {
     private func localSessionSignalLoop() async {
         var idleCycles = 0
         while !Task.isCancelled {
-            let watchTargets = providersProvider().filter { $0.isEnabled && $0.localSessionWatchKind != nil }
+            let watchTargets = localSessionWatchTargets(from: providersProvider())
             if watchTargets.isEmpty {
                 return
             }
@@ -368,6 +371,17 @@ package final class ProviderRefreshScheduler {
             } catch {
                 return
             }
+        }
+    }
+
+    private func localSessionWatchTargets(
+        from providers: [ProviderRefreshScheduleDescriptor]
+    ) -> [ProviderRefreshScheduleDescriptor] {
+        let activeProviderIDs = activeProviderIDsProvider()
+        return providers.filter {
+            $0.isEnabled
+                && $0.localSessionWatchKind != nil
+                && activeProviderIDs.contains($0.id)
         }
     }
 

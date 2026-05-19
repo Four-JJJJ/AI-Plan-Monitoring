@@ -211,6 +211,47 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         await refreshGate.releaseAll()
     }
 
+    func testLongRunningInFlightRefreshUsesConfiguredSleepInsteadOfOneSecondPolling() async throws {
+        let provider = makeProvider(id: "slow", enabled: true, pollIntervalSec: 2)
+        let refreshGate = BlockingRefreshGate()
+        let sleepGate = BlockingSleepGate()
+        let scheduler = makeScheduler(
+            providers: [provider],
+            config: ProviderRefreshSchedulerConfig(
+                backgroundProviderPollIntervalSeconds: 180,
+                localSessionSignalActiveSleepSeconds: 15,
+                localSessionSignalIdleSleepSeconds: 60,
+                inFlightProviderSleepSeconds: 7
+            ),
+            startupJitterProvider: { 0 },
+            refreshAction: { providerID, forceRefresh in
+                await refreshGate.refresh(providerID: providerID, forceRefresh: forceRefresh)
+            },
+            sleepAction: { seconds in
+                try await sleepGate.sleep(seconds)
+            }
+        )
+
+        scheduler.restart(providers: [provider])
+
+        try await waitUntil {
+            let events = await refreshGate.snapshot()
+            let sleeps = await sleepGate.snapshot()
+            return events == ["slow:false"]
+                && self.timeIntervals(sleeps, approximatelyEqualTo: [2])
+        }
+        await sleepGate.releaseAll()
+
+        try await waitUntil {
+            let sleeps = await sleepGate.snapshot()
+            return self.timeIntervals(sleeps, approximatelyEqualTo: [2, 7])
+        }
+
+        scheduler.stop()
+        await sleepGate.releaseAll()
+        await refreshGate.releaseAll()
+    }
+
     func testLocalSessionSignalTriggersRefresh() async throws {
         let provider = makeProvider(
             id: "codex-official",
@@ -227,6 +268,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         )
         let scheduler = makeScheduler(
             providers: [provider],
+            activeProviderIDs: ["codex-official"],
             refreshRecorder: recorder,
             localSessionRefreshCoordinator: coordinator,
             startupJitterProvider: { 999 },
@@ -244,13 +286,63 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
         scheduler.stop()
     }
 
+    func testLocalSessionSignalSkipsInactiveProviderUntilActive() async throws {
+        let provider = makeProvider(
+            id: "codex-official",
+            enabled: true,
+            pollIntervalSec: 60,
+            localSessionWatchKind: .codex
+        )
+        let activeProviderIDsBox = ActiveProviderIDsBox()
+        let recorder = RefreshRecorder()
+        let sleepRecorder = SleepRecorder()
+        let signalSource = FakeLocalSessionSignalSource(codexCompletionAt: Date(timeIntervalSince1970: 100))
+        let coordinator = LocalSessionRefreshCoordinator(
+            signalSource: signalSource,
+            minimumEventRefreshGap: 1
+        )
+        let scheduler = makeScheduler(
+            providers: [provider],
+            activeProviderIDsProvider: {
+                activeProviderIDsBox.ids
+            },
+            refreshRecorder: recorder,
+            localSessionRefreshCoordinator: coordinator,
+            startupJitterProvider: { 999 },
+            sleepAction: { seconds in
+                await sleepRecorder.record(seconds)
+                throw CancellationError()
+            }
+        )
+
+        scheduler.restart(providers: [provider])
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let inactiveRefreshEvents = await recorder.snapshot()
+        XCTAssertEqual(inactiveRefreshEvents, [])
+
+        activeProviderIDsBox.ids = ["codex-official"]
+        scheduler.restart(providers: [provider])
+
+        try await waitUntil {
+            await recorder.snapshot() == ["codex-official:false"]
+        }
+        scheduler.stop()
+    }
+
     private func makeScheduler(
         providers: [ProviderRefreshScheduleDescriptor],
         activeProviderIDs: Set<String> = [],
+        activeProviderIDsProvider customActiveProviderIDsProvider: ProviderRefreshScheduler.ActiveProviderIDsProvider? = nil,
         failureCounts: [String: Int] = [:],
         refreshRecorder: RefreshRecorder = RefreshRecorder(),
         localSessionRefreshCoordinator: LocalSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
             signalSource: FakeLocalSessionSignalSource()
+        ),
+        config: ProviderRefreshSchedulerConfig = ProviderRefreshSchedulerConfig(
+            backgroundProviderPollIntervalSeconds: 180,
+            localSessionSignalActiveSleepSeconds: 15,
+            localSessionSignalIdleSleepSeconds: 60
         ),
         startupJitterProvider: @escaping @Sendable () -> TimeInterval = { 999 },
         refreshAction customRefreshAction: ProviderRefreshScheduler.RefreshAction? = nil,
@@ -264,7 +356,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
             providersProvider: {
                 currentProviders
             },
-            activeProviderIDsProvider: {
+            activeProviderIDsProvider: customActiveProviderIDsProvider ?? {
                 activeProviderIDs
             },
             failureCountProvider: { providerID in
@@ -274,11 +366,7 @@ final class ProviderRefreshSchedulerTests: XCTestCase {
                 await refreshRecorder.record(providerID: providerID, forceRefresh: forceRefresh)
             },
             localSessionRefreshCoordinator: localSessionRefreshCoordinator,
-            config: ProviderRefreshSchedulerConfig(
-                backgroundProviderPollIntervalSeconds: 180,
-                localSessionSignalActiveSleepSeconds: 15,
-                localSessionSignalIdleSleepSeconds: 60
-            ),
+            config: config,
             startupJitterProvider: startupJitterProvider,
             sleepAction: sleepAction
         )
@@ -332,6 +420,11 @@ private actor RefreshRecorder {
     func snapshot() -> [String] {
         events
     }
+}
+
+@MainActor
+private final class ActiveProviderIDsBox {
+    var ids = Set<String>()
 }
 
 private actor SleepRecorder {

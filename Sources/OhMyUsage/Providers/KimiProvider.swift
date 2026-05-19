@@ -6,6 +6,7 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
     private let keychain: KeychainService
     private let browserCookieService: KimiBrowserCookieService
     private let tokenResolverOverride: (() throws -> (token: String, source: String))?
+    private let browserTokenResolverOverride: (([KimiBrowserKind], Bool) -> KimiDetectedToken?)?
 
     let descriptor: ProviderDescriptor
 
@@ -14,18 +15,24 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         session: URLSession = .shared,
         keychain: KeychainService,
         browserCookieService: KimiBrowserCookieService = KimiBrowserCookieService(),
-        tokenResolverOverride: (() throws -> (token: String, source: String))? = nil
+        tokenResolverOverride: (() throws -> (token: String, source: String))? = nil,
+        browserTokenResolverOverride: (([KimiBrowserKind], Bool) -> KimiDetectedToken?)? = nil
     ) {
         self.descriptor = descriptor
         self.session = session
         self.keychain = keychain
         self.browserCookieService = browserCookieService
         self.tokenResolverOverride = tokenResolverOverride
+        self.browserTokenResolverOverride = browserTokenResolverOverride
     }
 
     func fetch() async throws -> UsageSnapshot {
+        try await fetch(forceRefresh: false)
+    }
+
+    func fetch(forceRefresh: Bool) async throws -> UsageSnapshot {
         let baseURL = URL(string: descriptor.baseURL ?? "https://www.kimi.com")!
-        let resolved = try (tokenResolverOverride?() ?? resolveToken())
+        let resolved = try (tokenResolverOverride?() ?? resolveToken(forceRefresh: forceRefresh))
         let authToken = Self.normalizeToken(resolved.token)
         let sessionInfo = Self.decodeSessionInfo(from: authToken)
 
@@ -403,7 +410,7 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         return nil
     }
 
-    private func resolveToken() throws -> (token: String, source: String) {
+    private func resolveToken(forceRefresh: Bool) throws -> (token: String, source: String) {
         guard let kimiConfig = descriptor.kimiConfig else {
             throw ProviderError.invalidResponse("missing kimi config")
         }
@@ -429,22 +436,40 @@ final class KimiProvider: UsageProvider, @unchecked Sendable {
         }
 
         let autoAccount = "kimi.com/kimi-auth-auto"
-        if let cached = keychain.readToken(service: service, account: autoAccount),
-           !cached.isEmpty {
-            let normalized = Self.normalizeToken(cached)
-            if !normalized.isEmpty, !KimiJWT.isExpired(normalized) {
-                return (normalized, "auto:cache")
-            }
+        let cachedAuto = cachedAutoToken(service: service, account: autoAccount)
+        if !forceRefresh, let cachedAuto {
+            return cachedAuto
         }
 
-        if let detected = browserCookieService.detectKimiAuthToken(order: kimiConfig.browserOrder),
+        guard forceRefresh else {
+            throw ProviderError.missingCredential(autoAccount)
+        }
+
+        let detected = browserTokenResolverOverride?(kimiConfig.browserOrder, true)
+            ?? browserCookieService.detectKimiAuthToken(order: kimiConfig.browserOrder, refreshPaths: true)
+        if let detected,
            !KimiJWT.isExpired(Self.normalizeToken(detected.token)) {
             let normalized = Self.normalizeToken(detected.token)
             _ = keychain.saveToken(normalized, service: service, account: autoAccount)
             return (normalized, detected.source)
         }
 
+        if let cachedAuto {
+            return cachedAuto
+        }
+
         throw ProviderError.missingCredential(autoAccount)
+    }
+
+    private func cachedAutoToken(service: String, account: String) -> (token: String, source: String)? {
+        if let cached = keychain.readToken(service: service, account: account),
+           !cached.isEmpty {
+            let normalized = Self.normalizeToken(cached)
+            if !normalized.isEmpty, !KimiJWT.isExpired(normalized) {
+                return (normalized, "auto:cache")
+            }
+        }
+        return nil
     }
 
     private static func ratioPercent(remaining: Double, limit: Double) -> Double {

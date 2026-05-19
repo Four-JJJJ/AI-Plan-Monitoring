@@ -51,6 +51,7 @@ final class KeychainService: @unchecked Sendable {
     private let secureStore: SecureStoreAdapter
     private var tokenCache: [String: String] = [:]
     private var missingCache: Set<String> = []
+    private var credentialLengthCache: [String: Int]?
     private var secureVaultLoaded = false
 
     init(
@@ -351,6 +352,7 @@ final class KeychainService: @unchecked Sendable {
             lock.lock()
             tokenCache.removeAll()
             missingCache.removeAll()
+            credentialLengthCache = nil
             secureVaultLoaded = false
             lock.unlock()
             defaults.removeObject(forKey: Self.credentialLengthDefaultsKey)
@@ -374,6 +376,7 @@ final class KeychainService: @unchecked Sendable {
         lock.lock()
         tokenCache.removeAll()
         missingCache.removeAll()
+        credentialLengthCache = nil
         secureVaultLoaded = false
         lock.unlock()
     }
@@ -491,14 +494,30 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func credentialLengthSnapshot() -> [String: Int] {
+        lock.lock()
+        if let credentialLengthCache {
+            lock.unlock()
+            return credentialLengthCache
+        }
+        lock.unlock()
+
         let raw = defaults.dictionary(forKey: Self.credentialLengthDefaultsKey) ?? [:]
-        return raw.reduce(into: [String: Int]()) { partialResult, entry in
+        let snapshot = raw.reduce(into: [String: Int]()) { partialResult, entry in
             if let length = entry.value as? Int {
                 partialResult[entry.key] = length
             } else if let number = entry.value as? NSNumber {
                 partialResult[entry.key] = number.intValue
             }
         }
+
+        lock.lock()
+        if let credentialLengthCache {
+            lock.unlock()
+            return credentialLengthCache
+        }
+        credentialLengthCache = snapshot
+        lock.unlock()
+        return snapshot
     }
 
     private func recordCredentialLengths(_ lengths: [String: Int]) {
@@ -507,12 +526,18 @@ final class KeychainService: @unchecked Sendable {
         for (key, length) in lengths where length > 0 {
             snapshot[key] = length
         }
+        lock.lock()
+        credentialLengthCache = snapshot
+        lock.unlock()
         defaults.set(snapshot, forKey: Self.credentialLengthDefaultsKey)
     }
 
     private func removeCredentialLength(for key: String) {
         var snapshot = credentialLengthSnapshot()
         snapshot.removeValue(forKey: key)
+        lock.lock()
+        credentialLengthCache = snapshot
+        lock.unlock()
         defaults.set(snapshot, forKey: Self.credentialLengthDefaultsKey)
     }
 
@@ -627,6 +652,7 @@ final class KeychainService: @unchecked Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecUseAuthenticationContext as String: context
         ]
@@ -637,6 +663,10 @@ final class KeychainService: @unchecked Sendable {
             return nil
         }
 
+        return tokensFromEnumeratedKeychainRows(item)
+    }
+
+    static func tokensFromEnumeratedKeychainRows(_ item: CFTypeRef?) -> [String: String]? {
         let rows: [[String: Any]]
         if let array = item as? [[String: Any]] {
             rows = array
@@ -649,12 +679,7 @@ final class KeychainService: @unchecked Sendable {
         var result: [String: String] = [:]
         for row in rows {
             guard let account = row[kSecAttrAccount as String] as? String,
-                  let data = liveReadData(
-                      service: service,
-                      account: account,
-                      interactive: interactive,
-                      context: context
-                  ),
+                  let data = row[kSecValueData as String] as? Data,
                   let token = String(data: data, encoding: .utf8),
                   !token.isEmpty else {
                 continue
@@ -718,31 +743,6 @@ final class KeychainService: @unchecked Sendable {
         let context = LAContext()
         context.interactionNotAllowed = !interactive
         return context
-    }
-
-    private static func liveReadData(
-        service: String,
-        account: String,
-        interactive: Bool,
-        context: LAContext
-    ) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context
-        ]
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
-              !data.isEmpty else {
-            return nil
-        }
-        return data
     }
 }
 

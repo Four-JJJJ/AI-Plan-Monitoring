@@ -3,6 +3,7 @@ import OhMyUsageDomain
 
 final class RelayAdapterRegistry: @unchecked Sendable {
     static let shared = RelayAdapterRegistry()
+    typealias LocalManifestEnumerator = (_ directory: URL) -> FileManager.DirectoryEnumerator?
 
     private struct LocalManifestDirectoryFingerprint: Equatable {
         var paths: [String]
@@ -14,19 +15,38 @@ final class RelayAdapterRegistry: @unchecked Sendable {
     private struct LocalManifestCache {
         var fingerprint: LocalManifestDirectoryFingerprint
         var manifests: [RelayAdapterManifest]
+        var expiresAt: Date
     }
 
     private let fileManager: FileManager
     private let bundledManifests: [RelayAdapterManifest]
+    private let localManifestDirectoryURL: URL?
+    private let localManifestCacheTTL: TimeInterval
+    private let now: () -> Date
+    private let localManifestEnumerator: LocalManifestEnumerator
     private let cacheLock = NSLock()
     private var localManifestCache: LocalManifestCache?
 
     init(
         fileManager: FileManager = .default,
-        builtInManifests: [RelayAdapterManifest]? = nil
+        builtInManifests: [RelayAdapterManifest]? = nil,
+        localManifestDirectoryURL: URL? = nil,
+        localManifestCacheTTL: TimeInterval = 60,
+        now: @escaping () -> Date = Date.init,
+        localManifestEnumerator: LocalManifestEnumerator? = nil
     ) {
         self.fileManager = fileManager
         self.bundledManifests = builtInManifests ?? Self.loadBundledManifests()
+        self.localManifestDirectoryURL = localManifestDirectoryURL
+        self.localManifestCacheTTL = max(0, localManifestCacheTTL)
+        self.now = now
+        self.localManifestEnumerator = localManifestEnumerator ?? { [fileManager] directory in
+            fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
+        }
     }
 
     func manifest(for baseURL: String, preferredID: String? = nil) -> RelayAdapterManifest {
@@ -136,16 +156,24 @@ final class RelayAdapterRegistry: @unchecked Sendable {
     }
 
     private func loadLocalManifests() -> [RelayAdapterManifest] {
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        let currentDate = now()
+        if let cached = cachedLocalManifests(validAt: currentDate) {
+            return cached
+        }
+
+        guard let directory = localManifestDirectory() else {
+            storeLocalManifests(
+                [],
+                fingerprint: emptyLocalManifestFingerprint(),
+                now: currentDate
+            )
             return []
         }
-        let directory = appSupport
-            .appendingPathComponent("OhMyUsage", isDirectory: true)
-            .appendingPathComponent("relay-adapters", isDirectory: true)
 
         let manifestFiles = localManifestFiles(in: directory)
         let fingerprint = localManifestFingerprint(for: manifestFiles)
         if let cached = cachedLocalManifests(matching: fingerprint) {
+            storeLocalManifests(cached, fingerprint: fingerprint, now: currentDate)
             return cached
         }
 
@@ -159,16 +187,33 @@ final class RelayAdapterRegistry: @unchecked Sendable {
             manifests.append(manifest)
         }
         manifests.sort { $0.id < $1.id }
-        storeLocalManifests(manifests, fingerprint: fingerprint)
+        storeLocalManifests(manifests, fingerprint: fingerprint, now: currentDate)
         return manifests
     }
 
+    private func localManifestDirectory() -> URL? {
+        if let localManifestDirectoryURL {
+            return localManifestDirectoryURL
+        }
+        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return appSupport
+            .appendingPathComponent("OhMyUsage", isDirectory: true)
+            .appendingPathComponent("relay-adapters", isDirectory: true)
+    }
+
+    private func emptyLocalManifestFingerprint() -> LocalManifestDirectoryFingerprint {
+        LocalManifestDirectoryFingerprint(
+            paths: [],
+            fileCount: 0,
+            totalSize: 0,
+            latestModificationTime: nil
+        )
+    }
+
     private func localManifestFiles(in directory: URL) -> [URL] {
-        guard let enumerator = fileManager.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
+        guard let enumerator = localManifestEnumerator(directory) else {
             return []
         }
 
@@ -208,6 +253,17 @@ final class RelayAdapterRegistry: @unchecked Sendable {
         )
     }
 
+    private func cachedLocalManifests(validAt now: Date) -> [RelayAdapterManifest]? {
+        guard localManifestCacheTTL > 0 else { return nil }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let localManifestCache,
+              localManifestCache.expiresAt > now else {
+            return nil
+        }
+        return localManifestCache.manifests
+    }
+
     private func cachedLocalManifests(
         matching fingerprint: LocalManifestDirectoryFingerprint
     ) -> [RelayAdapterManifest]? {
@@ -222,12 +278,14 @@ final class RelayAdapterRegistry: @unchecked Sendable {
 
     private func storeLocalManifests(
         _ manifests: [RelayAdapterManifest],
-        fingerprint: LocalManifestDirectoryFingerprint
+        fingerprint: LocalManifestDirectoryFingerprint,
+        now: Date
     ) {
         cacheLock.lock()
         localManifestCache = LocalManifestCache(
             fingerprint: fingerprint,
-            manifests: manifests
+            manifests: manifests,
+            expiresAt: now.addingTimeInterval(localManifestCacheTTL)
         )
         cacheLock.unlock()
     }

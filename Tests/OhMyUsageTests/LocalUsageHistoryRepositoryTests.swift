@@ -48,6 +48,82 @@ final class LocalUsageHistoryRepositoryTests: XCTestCase {
         XCTAssertFalse(state.isStaleFallback)
     }
 
+    func testPersistWritesCompactJSONPayload() async throws {
+        let root = try makeTemporaryRoot()
+        let now = LockedDate(Date(timeIntervalSince1970: 5_100))
+        let query = makeQuery(identityKey: "compact")
+        let fingerprint = LocalUsageSourceFingerprint(
+            roots: ["/tmp/source"],
+            fileCount: 1,
+            totalSize: 12,
+            latestModificationTime: Date(timeIntervalSince1970: 100)
+        )
+        let repository = LocalUsageHistoryRepository(
+            baseDirectoryURL: root,
+            nowProvider: { now.value }
+        )
+
+        repository.refreshIfNeeded(
+            query: query,
+            force: true,
+            fingerprintProvider: { fingerprint },
+            loader: { _ in
+                LocalUsageHistoryLoadResult(
+                    summary: Self.sampleSummary(seed: 11, generatedAt: now.value),
+                    sourceFingerprint: fingerprint
+                )
+            },
+            onStateChange: {}
+        )
+        try await waitUntil(repository: repository, query: query) {
+            $0.summary?.today.totalTokens == 111 && !$0.isLoading
+        }
+
+        let payload = try String(contentsOf: localUsageCacheURL(root: root), encoding: .utf8)
+        XCTAssertFalse(payload.contains("\n"), "local usage cache should be compact JSON without pretty-print newlines")
+        XCTAssertFalse(payload.contains("  "), "local usage cache should avoid pretty-print indentation")
+    }
+
+    func testPersistSkipsUnchangedPayloadWrite() async throws {
+        let root = try makeTemporaryRoot()
+        let now = LockedDate(Date(timeIntervalSince1970: 5_200))
+        let query = makeQuery(identityKey: "unchanged-persist")
+        let fingerprint = LocalUsageSourceFingerprint(
+            roots: ["/tmp/source"],
+            fileCount: 1,
+            totalSize: 12,
+            latestModificationTime: Date(timeIntervalSince1970: 100)
+        )
+        let repository = LocalUsageHistoryRepository(
+            baseDirectoryURL: root,
+            nowProvider: { now.value }
+        )
+
+        repository.refreshIfNeeded(
+            query: query,
+            force: true,
+            fingerprintProvider: { fingerprint },
+            loader: { _ in
+                LocalUsageHistoryLoadResult(
+                    summary: Self.sampleSummary(seed: 12, generatedAt: now.value),
+                    sourceFingerprint: fingerprint
+                )
+            },
+            onStateChange: {}
+        )
+        try await waitUntil(repository: repository, query: query) {
+            $0.summary?.today.totalTokens == 112 && !$0.isLoading
+        }
+
+        let cacheURL = localUsageCacheURL(root: root)
+        let firstModifiedAt = try modificationDate(at: cacheURL)
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        repository.persist()
+        let secondModifiedAt = try modificationDate(at: cacheURL)
+
+        XCTAssertEqual(firstModifiedAt, secondModifiedAt)
+    }
+
     func testUnchangedFingerprintReusesCacheWithoutCallingLoader() async throws {
         let root = try makeTemporaryRoot()
         let now = LockedDate(Date(timeIntervalSince1970: 1_000))
@@ -407,12 +483,59 @@ final class LocalUsageHistoryRepositoryTests: XCTestCase {
             includeFile: { $0.pathExtension == "jsonl" }
         )
 
+        try FileManager.default.removeItem(at: secondFileURL)
+        let fourth = LocalUsageSourceFingerprintBuilder.fingerprint(
+            roots: [root.path],
+            includeFile: { $0.pathExtension == "jsonl" }
+        )
+
         XCTAssertEqual(first.fileCount, 1)
         XCTAssertNotEqual(first.latestModificationTime, mtimeOnlyChange.latestModificationTime)
         XCTAssertNotEqual(first, mtimeOnlyChange)
         XCTAssertNotEqual(first.totalSize, second.totalSize)
         XCTAssertEqual(third.fileCount, 2)
         XCTAssertGreaterThan(third.totalSize, second.totalSize)
+        XCTAssertEqual(fourth.fileCount, 1)
+        XCTAssertNotEqual(third, fourth)
+    }
+
+    func testParsedFileCachePrunesLeastRecentlyUsedEntry() {
+        let cache = LocalUsageParsedFileCache<Int>(maxEntries: 2)
+        let first = LocalUsageFileSnapshot(path: "/tmp/first.jsonl", fileSize: 1, modifiedAtRef: 1)
+        let second = LocalUsageFileSnapshot(path: "/tmp/second.jsonl", fileSize: 1, modifiedAtRef: 1)
+        let third = LocalUsageFileSnapshot(path: "/tmp/third.jsonl", fileSize: 1, modifiedAtRef: 1)
+        var firstParseCount = 0
+        var secondParseCount = 0
+        var thirdParseCount = 0
+
+        XCTAssertEqual(cache.values(for: first) {
+            firstParseCount += 1
+            return [1]
+        }, [1])
+        XCTAssertEqual(cache.values(for: second) {
+            secondParseCount += 1
+            return [2]
+        }, [2])
+        XCTAssertEqual(cache.values(for: first) {
+            firstParseCount += 1
+            return [10]
+        }, [1])
+        XCTAssertEqual(cache.values(for: third) {
+            thirdParseCount += 1
+            return [3]
+        }, [3])
+
+        XCTAssertEqual(cache.values(for: first) {
+            firstParseCount += 1
+            return [10]
+        }, [1])
+        XCTAssertEqual(cache.values(for: second) {
+            secondParseCount += 1
+            return [20]
+        }, [20])
+        XCTAssertEqual(firstParseCount, 1)
+        XCTAssertEqual(secondParseCount, 2)
+        XCTAssertEqual(thirdParseCount, 1)
     }
 
     private func makeTemporaryRoot() throws -> URL {
@@ -420,6 +543,17 @@ final class LocalUsageHistoryRepositoryTests: XCTestCase {
             .appendingPathComponent("OhMyUsageTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
+    }
+
+    private func localUsageCacheURL(root: URL) -> URL {
+        root
+            .appendingPathComponent("OhMyUsage", isDirectory: true)
+            .appendingPathComponent("local_usage_history_cache.json")
+    }
+
+    private func modificationDate(at url: URL) throws -> Date {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(attributes[.modificationDate] as? Date)
     }
 
     private func makeQuery(identityKey: String) -> LocalUsageHistoryQuery {

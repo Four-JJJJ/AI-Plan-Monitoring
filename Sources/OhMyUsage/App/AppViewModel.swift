@@ -262,8 +262,9 @@ final class AppViewModel {
         self.codexDesktopAuthService = codexDesktopAuthService
         self.codexDesktopAppService = codexDesktopAppService
         self.notifications = notificationService
+        let resolvedProviderFactory = providerFactory ?? ProviderFactory(keychain: keychain)
         self.providerRefreshCoordinator = AppProviderRefreshCoordinator(
-            providerFactory: providerFactory ?? ProviderFactory(keychain: keychain),
+            providerFactory: resolvedProviderFactory,
             notifications: notificationService
         )
         self.updateCoordinator = AppUpdateCoordinator(
@@ -285,7 +286,7 @@ final class AppViewModel {
             shouldPersistConfigDuringBootstrap = false
         }
         self.config = loadedConfig
-        self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
+        self.providerFactory = resolvedProviderFactory
         self.localUsageHistoryRepository = localUsageHistoryRepository
         self.usageAnalyticsRefreshCoordinator = usageAnalyticsRefreshCoordinator
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
@@ -346,8 +347,9 @@ final class AppViewModel {
         self.codexDesktopAuthService = codexDesktopAuthService
         self.codexDesktopAppService = codexDesktopAppService
         self.notifications = notificationService
+        let resolvedProviderFactory = providerFactory ?? ProviderFactory(keychain: keychain)
         self.providerRefreshCoordinator = AppProviderRefreshCoordinator(
-            providerFactory: providerFactory ?? ProviderFactory(keychain: keychain),
+            providerFactory: resolvedProviderFactory,
             notifications: notificationService
         )
         self.updateCoordinator = AppUpdateCoordinator(
@@ -360,7 +362,7 @@ final class AppViewModel {
             clearDelaySeconds: settingsPersistenceStatusClearDelaySeconds
         )
         self.config = testingConfig.migratedWithSiteDefaults()
-        self.providerFactory = providerFactory ?? ProviderFactory(keychain: keychain)
+        self.providerFactory = resolvedProviderFactory
         self.localUsageHistoryRepository = localUsageHistoryRepository
         self.usageAnalyticsRefreshCoordinator = usageAnalyticsRefreshCoordinator
         self.localSessionRefreshCoordinator = LocalSessionRefreshCoordinator(
@@ -863,25 +865,29 @@ extension ResourceMode {
             return ProviderRefreshSchedulerConfig(
                 backgroundProviderPollIntervalSeconds: intervalSeconds,
                 localSessionSignalActiveSleepSeconds: 10,
-                localSessionSignalIdleSleepSeconds: 30
+                localSessionSignalIdleSleepSeconds: 30,
+                inFlightProviderSleepSeconds: 5
             )
         case .background5Minutes:
             return ProviderRefreshSchedulerConfig(
                 backgroundProviderPollIntervalSeconds: intervalSeconds,
                 localSessionSignalActiveSleepSeconds: RuntimeDiagnosticsLimits.localSessionSignalActiveSleepSeconds,
-                localSessionSignalIdleSleepSeconds: RuntimeDiagnosticsLimits.localSessionSignalIdleSleepSeconds
+                localSessionSignalIdleSleepSeconds: RuntimeDiagnosticsLimits.localSessionSignalIdleSleepSeconds,
+                inFlightProviderSleepSeconds: 5
             )
         case .background10Minutes:
             return ProviderRefreshSchedulerConfig(
                 backgroundProviderPollIntervalSeconds: intervalSeconds,
                 localSessionSignalActiveSleepSeconds: 20,
-                localSessionSignalIdleSleepSeconds: 90
+                localSessionSignalIdleSleepSeconds: 90,
+                inFlightProviderSleepSeconds: 10
             )
         case .background15Minutes:
             return ProviderRefreshSchedulerConfig(
                 backgroundProviderPollIntervalSeconds: intervalSeconds,
                 localSessionSignalActiveSleepSeconds: 30,
-                localSessionSignalIdleSleepSeconds: 120
+                localSessionSignalIdleSleepSeconds: 120,
+                inFlightProviderSleepSeconds: 15
             )
         }
     }

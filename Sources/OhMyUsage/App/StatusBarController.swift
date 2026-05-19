@@ -1,5 +1,6 @@
 import OhMyUsageDomain
 import AppKit
+import OhMyUsageApplication
 import SwiftUI
 
 @MainActor
@@ -8,7 +9,8 @@ final class StatusBarController: NSObject {
     private let statusItemController: StatusItemController
     private let menuPanelController: MenuPanelController
     private let statusBarAppearanceController: StatusBarAppearanceController
-    private var refreshTimer: Timer?
+    private let visibleRefreshClockController = VisibleClockController()
+    private var visibleRefreshTask: Task<Void, Never>?
     private let statusIconSize: CGFloat = 16
     private var providerStatusImageCache: [String: NSImage] = [:]
     private lazy var appStatusImage: NSImage? = {
@@ -31,8 +33,11 @@ final class StatusBarController: NSObject {
         ) { [weak self] in
             self?.refreshStatusDisplay()
         }
-        startRefreshTimer()
         showInitialPopoverIfNeeded()
+    }
+
+    deinit {
+        visibleRefreshTask?.cancel()
     }
 
     private func configureStatusItem() {
@@ -84,6 +89,7 @@ final class StatusBarController: NSObject {
         menuPanelController.close { [weak self] in
             guard let self else { return }
             self.viewModel.setMenuPanelVisible(false)
+            self.restartVisibleRefreshClock()
             self.refreshStatusDisplay()
         }
     }
@@ -93,6 +99,7 @@ final class StatusBarController: NSObject {
             menuPanelController.close { [weak self] in
                 guard let self else { return }
                 self.viewModel.setMenuPanelVisible(false)
+                self.restartVisibleRefreshClock()
                 self.refreshStatusDisplay()
                 self.showSettingsWindow()
             }
@@ -112,25 +119,27 @@ final class StatusBarController: NSObject {
         menuPanelController.show(
             attachedTo: button,
             onDidShow: { [weak self] in
-                self?.viewModel.setMenuPanelVisible(true)
+                guard let self else { return }
+                self.viewModel.setMenuPanelVisible(true)
+                self.restartVisibleRefreshClock()
             },
             onDidClose: { [weak self] in
                 guard let self else { return }
                 self.viewModel.setMenuPanelVisible(false)
+                self.restartVisibleRefreshClock()
                 self.refreshStatusDisplay()
             }
         )
     }
 
-    private func startRefreshTimer() {
-        refreshTimer?.invalidate()
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshStatusDisplay()
-            }
+    private func restartVisibleRefreshClock() {
+        visibleRefreshClockController.restartClockIfNeeded(
+            isVisible: menuPanelController.isShown,
+            existingTask: &visibleRefreshTask,
+            intervalSeconds: RuntimeDiagnosticsLimits.statusBarVisibleRefreshIntervalSeconds
+        ) { [weak self] _ in
+            self?.refreshStatusDisplay()
         }
-        RunLoop.main.add(timer, forMode: .common)
-        refreshTimer = timer
     }
 
     private func startAppearanceObservation() {

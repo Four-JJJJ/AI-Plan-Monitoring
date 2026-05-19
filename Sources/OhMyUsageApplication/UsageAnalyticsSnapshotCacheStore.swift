@@ -73,6 +73,8 @@ public final class UsageAnalyticsSnapshotCacheStore: @unchecked Sendable {
     private let maxEntries: Int
     private let lock = NSLock()
     private var entries: [UsageAnalyticsFilter: UsageAnalyticsCacheEntry] = [:]
+    private var lastPersistedCacheData: Data?
+    private var lastPersistedEntries: [UsageAnalyticsCacheEntry]?
 
     public init(
         baseDirectoryURL: URL? = nil,
@@ -173,18 +175,33 @@ public final class UsageAnalyticsSnapshotCacheStore: @unchecked Sendable {
         lock.lock()
         entries = Dictionary(uniqueKeysWithValues: payload.entries.map { ($0.filter, $0) })
         pruneLocked()
+        let persistedEntries = sortedEntriesLocked()
+        lastPersistedEntries = persistedEntries
+        lastPersistedCacheData = try? encoder.encode(CachePayload(entries: persistedEntries))
         lock.unlock()
     }
 
     private func persistLocked() {
         do {
+            let persistedEntries = sortedEntriesLocked()
+            if persistedEntries == lastPersistedEntries,
+               fileManager.fileExists(atPath: fileURL.path) {
+                return
+            }
+            let payload = CachePayload(entries: persistedEntries)
+            let data = try encoder.encode(payload)
+            if data == lastPersistedCacheData,
+               fileManager.fileExists(atPath: fileURL.path) {
+                lastPersistedEntries = persistedEntries
+                return
+            }
             try fileManager.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let payload = CachePayload(entries: sortedEntriesLocked())
-            let data = try encoder.encode(payload)
             try data.write(to: fileURL, options: .atomic)
+            lastPersistedEntries = persistedEntries
+            lastPersistedCacheData = data
         } catch {
             return
         }

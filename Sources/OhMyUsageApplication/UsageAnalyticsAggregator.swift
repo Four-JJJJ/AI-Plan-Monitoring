@@ -14,6 +14,127 @@ public enum UsageAnalyticsAggregator {
         var granularity: TrendBucketGranularity
     }
 
+    private struct ProviderKey: Hashable {
+        var providerID: String
+        var providerName: String
+        var categoryName: String
+    }
+
+    private struct ModelOptionAccumulator {
+        var title: String
+        var firstEventAt: Date
+        var firstRequestID: String
+        var totalTokens: Int
+
+        init(record: UsageAnalyticsRecord) {
+            title = displayValue(record.modelID)
+            firstEventAt = record.eventAt
+            firstRequestID = record.requestID
+            totalTokens = 0
+            add(record)
+        }
+
+        mutating func add(_ record: UsageAnalyticsRecord) {
+            totalTokens += record.totals.totalTokens
+            if record.eventAt < firstEventAt
+                || (record.eventAt == firstEventAt && record.requestID < firstRequestID) {
+                title = displayValue(record.modelID)
+                firstEventAt = record.eventAt
+                firstRequestID = record.requestID
+            }
+        }
+    }
+
+    private struct ModelGroup {
+        var modelID: String
+        var firstEventAt: Date
+        var firstRequestID: String
+        var appTypes: Set<String>
+        var providerNames: Set<String>
+        var totals: UsageMetricTotals
+
+        init(record: UsageAnalyticsRecord) {
+            modelID = displayValue(record.modelID)
+            firstEventAt = record.eventAt
+            firstRequestID = record.requestID
+            appTypes = []
+            providerNames = []
+            totals = UsageMetricTotals()
+            add(record)
+        }
+
+        mutating func add(_ record: UsageAnalyticsRecord) {
+            if record.eventAt < firstEventAt
+                || (record.eventAt == firstEventAt && record.requestID < firstRequestID) {
+                modelID = displayValue(record.modelID)
+                firstEventAt = record.eventAt
+                firstRequestID = record.requestID
+            }
+            appTypes.insert(displayValue(record.appType))
+            providerNames.insert(displayValue(record.providerName))
+            totals.add(record.totals)
+        }
+    }
+
+    private struct SnapshotAccumulator {
+        var totals = UsageMetricTotals()
+        var availableModelsByModel: [String: ModelOptionAccumulator] = [:]
+        var categoryTotals: [String: UsageMetricTotals] = [:]
+        var providerTotals: [ProviderKey: UsageMetricTotals] = [:]
+        var modelGroups: [String: ModelGroup] = [:]
+        var firstEventAt: Date?
+        var lastEventAt: Date?
+
+        mutating func addAvailableModel(_ record: UsageAnalyticsRecord) {
+            let key = modelKey(record.modelID)
+            if var item = availableModelsByModel[key] {
+                item.add(record)
+                availableModelsByModel[key] = item
+            } else {
+                availableModelsByModel[key] = ModelOptionAccumulator(record: record)
+            }
+        }
+
+        mutating func addFilteredRecord(_ record: UsageAnalyticsRecord) {
+            totals.add(record.totals)
+            let categoryName = providerCategory(for: record)
+            categoryTotals[categoryName, default: UsageMetricTotals()].add(record.totals)
+            let providerKey = ProviderKey(
+                providerID: record.providerID,
+                providerName: record.providerName,
+                categoryName: categoryName
+            )
+            providerTotals[providerKey, default: UsageMetricTotals()].add(record.totals)
+
+            let modelGroupKey = modelKey(record.modelID)
+            if var group = modelGroups[modelGroupKey] {
+                group.add(record)
+                modelGroups[modelGroupKey] = group
+            } else {
+                modelGroups[modelGroupKey] = ModelGroup(record: record)
+            }
+
+            if firstEventAt == nil || record.eventAt < firstEventAt! {
+                firstEventAt = record.eventAt
+            }
+            if lastEventAt == nil || record.eventAt > lastEventAt! {
+                lastEventAt = record.eventAt
+            }
+        }
+    }
+
+    private struct TrendBucketAccumulator {
+        var totals = UsageMetricTotals()
+        var providerTotals: [String: UsageMetricTotals] = [:]
+        var modelTotals: [String: UsageMetricTotals] = [:]
+
+        mutating func add(_ record: UsageAnalyticsRecord) {
+            totals.add(record.totals)
+            providerTotals[record.providerName, default: UsageMetricTotals()].add(record.totals)
+            modelTotals[modelKey(record.modelID), default: UsageMetricTotals()].add(record.totals)
+        }
+    }
+
     public static func snapshot(
         records: [UsageAnalyticsRecord],
         filter: UsageAnalyticsFilter,
@@ -22,25 +143,23 @@ public enum UsageAnalyticsAggregator {
         diagnostics: [String]
     ) -> UsageAnalyticsSnapshot {
         let interval = rangeInterval(filter.range, calendar: calendar, now: now)
-        let rangeRecords = records.filter { $0.eventAt >= interval.start && $0.eventAt < interval.end }
-        let dedupedRangeRecords = deduplicated(rangeRecords)
-        let filteredRecords = dedupedRangeRecords.filter { record in
-            guard filter.mode == .byModel, let selectedModelID = filter.selectedModelID else {
-                return true
+        let dedupedRecords = deduplicated(records, in: interval)
+        let selectedModelKey = selectedModelKey(for: filter)
+        var accumulator = SnapshotAccumulator()
+        for record in dedupedRecords.values {
+            accumulator.addAvailableModel(record)
+            if matchesModelFilter(record, selectedModelKey: selectedModelKey) {
+                accumulator.addFilteredRecord(record)
             }
-            return modelKey(record.modelID) == modelKey(selectedModelID)
         }
 
-        let totals = filteredRecords.reduce(into: UsageMetricTotals()) { partial, record in
-            partial.add(record.totals)
-        }
-        let availableModels = modelOptions(from: dedupedRangeRecords)
-        let providerCategories = categoryStats(from: filteredRecords, totalTokens: totals.totalTokens)
-        let providerStats = concreteProviderStats(from: filteredRecords, totalTokens: totals.totalTokens)
-        let modelStats = concreteModelStats(from: filteredRecords, totalTokens: totals.totalTokens)
+        let totals = accumulator.totals
         let buckets = trendBuckets(
-            from: filteredRecords,
+            from: dedupedRecords.values,
+            selectedModelKey: selectedModelKey,
             range: filter.range,
+            firstEventAt: accumulator.firstEventAt,
+            lastEventAt: accumulator.lastEventAt,
             calendar: calendar,
             now: now
         )
@@ -50,10 +169,10 @@ public enum UsageAnalyticsAggregator {
             filter: filter,
             totals: totals,
             trendBuckets: buckets,
-            providerCategoryStats: providerCategories,
-            providerStats: providerStats,
-            modelStats: modelStats,
-            availableModels: availableModels,
+            providerCategoryStats: categoryStats(from: accumulator.categoryTotals, totalTokens: totals.totalTokens),
+            providerStats: concreteProviderStats(from: accumulator.providerTotals, totalTokens: totals.totalTokens),
+            modelStats: concreteModelStats(from: accumulator.modelGroups, totalTokens: totals.totalTokens),
+            availableModels: modelOptions(from: accumulator.availableModelsByModel),
             diagnostics: diagnostics
         )
     }
@@ -98,9 +217,15 @@ public enum UsageAnalyticsAggregator {
         }
     }
 
-    private static func deduplicated(_ records: [UsageAnalyticsRecord]) -> [UsageAnalyticsRecord] {
+    private static func deduplicated(
+        _ records: [UsageAnalyticsRecord],
+        in interval: DateInterval
+    ) -> [String: UsageAnalyticsRecord] {
         var selected: [String: UsageAnalyticsRecord] = [:]
         for record in records {
+            guard record.eventAt >= interval.start && record.eventAt < interval.end else {
+                continue
+            }
             guard let existing = selected[record.dedupKey] else {
                 selected[record.dedupKey] = record
                 continue
@@ -109,23 +234,28 @@ public enum UsageAnalyticsAggregator {
                 selected[record.dedupKey] = record
             }
         }
-        return selected.values.sorted { lhs, rhs in
-            if lhs.eventAt == rhs.eventAt {
-                return lhs.requestID < rhs.requestID
-            }
-            return lhs.eventAt < rhs.eventAt
-        }
+        return selected
     }
 
-    private static func modelOptions(from records: [UsageAnalyticsRecord]) -> [UsageAnalyticsModelOption] {
-        var totalsByModel: [String: (title: String, totalTokens: Int)] = [:]
-        for record in records {
-            let key = modelKey(record.modelID)
-            var item = totalsByModel[key] ?? (title: displayValue(record.modelID), totalTokens: 0)
-            item.totalTokens += record.totals.totalTokens
-            totalsByModel[key] = item
+    private static func selectedModelKey(for filter: UsageAnalyticsFilter) -> String? {
+        guard filter.mode == .byModel, let selectedModelID = filter.selectedModelID else {
+            return nil
         }
-        return totalsByModel.map { key, item in
+        return modelKey(selectedModelID)
+    }
+
+    private static func matchesModelFilter(
+        _ record: UsageAnalyticsRecord,
+        selectedModelKey: String?
+    ) -> Bool {
+        guard let selectedModelKey else { return true }
+        return modelKey(record.modelID) == selectedModelKey
+    }
+
+    private static func modelOptions(
+        from totalsByModel: [String: ModelOptionAccumulator]
+    ) -> [UsageAnalyticsModelOption] {
+        totalsByModel.map { key, item in
             UsageAnalyticsModelOption(id: key, title: item.title, totalTokens: item.totalTokens)
         }
         .sorted { lhs, rhs in
@@ -137,14 +267,10 @@ public enum UsageAnalyticsAggregator {
     }
 
     private static func categoryStats(
-        from records: [UsageAnalyticsRecord],
+        from totalsByCategory: [String: UsageMetricTotals],
         totalTokens: Int
     ) -> [UsageProviderCategoryStats] {
-        var totalsByCategory: [String: UsageMetricTotals] = [:]
-        for record in records {
-            totalsByCategory[providerCategory(for: record), default: UsageMetricTotals()].add(record.totals)
-        }
-        return totalsByCategory.map { key, totals in
+        totalsByCategory.map { key, totals in
             UsageProviderCategoryStats(
                 name: key,
                 totals: totals,
@@ -155,26 +281,10 @@ public enum UsageAnalyticsAggregator {
     }
 
     private static func concreteProviderStats(
-        from records: [UsageAnalyticsRecord],
+        from totalsByProvider: [ProviderKey: UsageMetricTotals],
         totalTokens: Int
     ) -> [UsageProviderStats] {
-        struct Key: Hashable {
-            var providerID: String
-            var providerName: String
-            var categoryName: String
-        }
-
-        var totalsByProvider: [Key: UsageMetricTotals] = [:]
-        for record in records {
-            let key = Key(
-                providerID: record.providerID,
-                providerName: record.providerName,
-                categoryName: providerCategory(for: record)
-            )
-            totalsByProvider[key, default: UsageMetricTotals()].add(record.totals)
-        }
-
-        return totalsByProvider.map { key, totals in
+        totalsByProvider.map { key, totals in
             UsageProviderStats(
                 id: "\(key.categoryName)|\(key.providerID)|\(key.providerName)",
                 providerID: key.providerID,
@@ -188,32 +298,10 @@ public enum UsageAnalyticsAggregator {
     }
 
     private static func concreteModelStats(
-        from records: [UsageAnalyticsRecord],
+        from groupsByModel: [String: ModelGroup],
         totalTokens: Int
     ) -> [UsageModelStats] {
-        struct Group {
-            var modelID: String
-            var appTypes: Set<String>
-            var providerNames: Set<String>
-            var totals: UsageMetricTotals
-        }
-
-        var groupsByModel: [String: Group] = [:]
-        for record in records {
-            let key = modelKey(record.modelID)
-            var group = groupsByModel[key] ?? Group(
-                modelID: displayValue(record.modelID),
-                appTypes: [],
-                providerNames: [],
-                totals: UsageMetricTotals()
-            )
-            group.appTypes.insert(displayValue(record.appType))
-            group.providerNames.insert(displayValue(record.providerName))
-            group.totals.add(record.totals)
-            groupsByModel[key] = group
-        }
-
-        return groupsByModel.map { _, group in
+        groupsByModel.map { _, group in
             UsageModelStats(
                 modelID: group.modelID,
                 appType: summaryValue(group.appTypes, multipleLabel: "mixed"),
@@ -226,8 +314,11 @@ public enum UsageAnalyticsAggregator {
     }
 
     private static func trendBuckets(
-        from records: [UsageAnalyticsRecord],
+        from records: Dictionary<String, UsageAnalyticsRecord>.Values,
+        selectedModelKey: String?,
         range: UsageAnalyticsRange,
+        firstEventAt: Date?,
+        lastEventAt: Date?,
         calendar: Calendar,
         now: Date
     ) -> [UsageTrendBucket] {
@@ -252,18 +343,25 @@ public enum UsageAnalyticsAggregator {
                 granularity: .day
             )
         case .all:
-            plan = allRangeTrendPlan(from: records, calendar: calendar)
+            plan = allRangeTrendPlan(
+                firstEventAt: firstEventAt,
+                lastEventAt: lastEventAt,
+                calendar: calendar
+            )
         }
 
-        var recordsByStart: [Date: [UsageAnalyticsRecord]] = [:]
+        var bucketsByStart: [Date: TrendBucketAccumulator] = [:]
         for record in records {
+            guard matchesModelFilter(record, selectedModelKey: selectedModelKey) else {
+                continue
+            }
             let bucketStart = trendBucketStart(
                 for: record.eventAt,
                 plan: plan,
                 calendar: calendar
             )
             if let bucketStart {
-                recordsByStart[bucketStart, default: []].append(record)
+                bucketsByStart[bucketStart, default: TrendBucketAccumulator()].add(record)
             }
         }
 
@@ -273,31 +371,25 @@ public enum UsageAnalyticsAggregator {
                 granularity: plan.granularity,
                 calendar: calendar
             )
-            let bucketRecords = recordsByStart[start] ?? []
-            let totals = bucketRecords.reduce(into: UsageMetricTotals()) { partial, record in
-                partial.add(record.totals)
-            }
+            let accumulator = bucketsByStart[start] ?? TrendBucketAccumulator()
+            let totals = accumulator.totals
             return UsageTrendBucket(
                 id: "\(plan.granularity.rawValue)-\(Int(start.timeIntervalSince1970))",
                 startAt: start,
                 endAt: end,
                 totals: totals,
-                topProviders: breakdown(records: bucketRecords, totalTokens: totals.totalTokens) {
-                    $0.providerName
-                },
-                topModels: breakdown(records: bucketRecords, totalTokens: totals.totalTokens) {
-                    modelKey($0.modelID)
-                }
+                topProviders: breakdown(from: accumulator.providerTotals, totalTokens: totals.totalTokens),
+                topModels: breakdown(from: accumulator.modelTotals, totalTokens: totals.totalTokens)
             )
         }
     }
 
     private static func allRangeTrendPlan(
-        from records: [UsageAnalyticsRecord],
+        firstEventAt: Date?,
+        lastEventAt: Date?,
         calendar: Calendar
     ) -> TrendBucketPlan {
-        guard let firstEventAt = records.map(\.eventAt).min(),
-              let lastEventAt = records.map(\.eventAt).max() else {
+        guard let firstEventAt, let lastEventAt else {
             return TrendBucketPlan(starts: [], granularity: .day)
         }
 
@@ -419,15 +511,10 @@ public enum UsageAnalyticsAggregator {
     }
 
     private static func breakdown(
-        records: [UsageAnalyticsRecord],
-        totalTokens: Int,
-        key: (UsageAnalyticsRecord) -> String
+        from totalsByName: [String: UsageMetricTotals],
+        totalTokens: Int
     ) -> [UsageAnalyticsBreakdownItem] {
-        var totalsByName: [String: UsageMetricTotals] = [:]
-        for record in records {
-            totalsByName[key(record), default: UsageMetricTotals()].add(record.totals)
-        }
-        return totalsByName.map { name, totals in
+        totalsByName.map { name, totals in
             UsageAnalyticsBreakdownItem(
                 name: name,
                 totals: totals,
